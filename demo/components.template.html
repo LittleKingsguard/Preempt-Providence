@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Component-driven rendering (bonus)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <!-- Document skeleton only: the #root placeholder plus the framework data
+       script. Every other element on this page is rendered by the preempt
+       pipeline (component + placement resolution). -->
+  <main id="root"></main>
+  <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+  <script id="server-data" type="application/json">__SERVER_DATA__</script>
+  <script type="module" src="components.js"></script>
+</body>
+</html>

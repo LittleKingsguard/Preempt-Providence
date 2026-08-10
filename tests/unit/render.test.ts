@@ -1,0 +1,634 @@
+import { describe, it, expect } from 'vitest'
+import {
+  diffMinimal,
+  MockAdapter,
+  type RenderOp,
+  type MinimalElement,
+  type RenderAdapter,
+} from '../../src/core/render.js'
+import {
+  serializeNode,
+  serializeSlice,
+  loadState,
+  type RenderNodeState,
+  type SerializedAnchor,
+  type SerializedRenderDoc,
+} from '../../src/core/serialize.js'
+import { Node, mintNodeId, reconcileParentTargets } from '../../src/core/node.js'
+import type { NodeRef } from '../../src/core/types.js'
+import {
+  makeRoot,
+  makeNode,
+  childOf,
+  hub,
+  addComponentSource,
+  targetAnchor,
+} from '../helpers/fixtures.js'
+
+type CompiledState = ReturnType<Node['compile']>['actionable'][number]
+
+/**
+ * Declared contract pinned by these tests for the Renderer (src/core/render.ts,
+ * src/core/serialize.ts). The implementation does not exist yet (TDD red state).
+ * Tests follow render.md §10.1–§10.5 and contract.md. Where the notes leave seam
+ * latitude, the intended deterministic behavior is recorded here:
+ *
+ *  diffMinimal(prev, next), in order:
+ *    1. `remove` for every prev wire absent from `next` (D2; D5 "departed").
+ *    2. per element in `next` array order:
+ *        - new wire             -> `create` + one `set` per prop, object order (D1);
+ *        - type changed         -> `remove` + `create` + `set`* (D3, no morphing);
+ *        - otherwise            -> `set` only for prop names whose value changed
+ *                                  versus prev (D4, removed props re-`set`,
+ *                                  added props `set`, unchanged names silent).
+ *    3. structure pass: for each element in `next` order, for each child in its
+ *       `childOrder` whose wire is present in `next`, emit `append(owner, child)` —
+ *       this doubles as D1's append and D5's re-append in compiled order.
+ *    `styles` ops are never synthesized by the tree diff; the sweep coalescer
+ *    owns them (R-ORD-6) and coalesces to one per batch.
+ *
+ *   MinimalElement.props use the namespaced `set` names verbatim
+ *   (`prop:*`, `css:*`, `text`, `on:<event>`), kept by the compiled-state reducer
+ *   `minimalFromState` below.
+ */
+
+function el(
+  wire: string,
+  type: string,
+  props: Record<string, unknown> = {},
+  childOrder: string[] = [],
+): MinimalElement {
+  return { wire, type, props, childOrder }
+}
+
+function elMap(els: MinimalElement[]): Map<string, MinimalElement> {
+  return new Map(els.map((e) => [e.wire, e]))
+}
+
+function jsonClone<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T
+}
+
+function compiledFor(res: ReturnType<Node['compile']>, nodeId: string): CompiledState | undefined {
+  return res.actionable.find((s) => s.nodeId === nodeId)
+}
+
+function minimalFromState(cs: CompiledState): MinimalElement {
+  const props: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(cs.props ?? {})) props[`prop:${k}`] = v
+  for (const [k, v] of Object.entries(cs.css ?? {})) props[`css:${k}`] = v
+  if (cs.content !== undefined) props['text'] = cs.content
+  return { wire: cs.nodeId, type: cs.type, props, childOrder: [...cs.children] }
+}
+
+/** Root-out deep compile + diff → the op stream emitted by bootstrap/reconcile. */
+function sliceOps(root: Node, slice: Node[]): RenderOp[] {
+  const next = root.compile(slice).actionable.map(minimalFromState)
+  return diffMinimal(null, next)
+}
+
+interface PEl {
+  wire: string
+  type: string
+}
+
+function applyOps(adapter: RenderAdapter<PEl>, ops: RenderOp[]): void {
+  const els = new Map<string, PEl>()
+  for (const op of ops) {
+    switch (op.kind) {
+      case 'create':
+        els.set(op.wire, adapter.createEl(op.type, op.wire))
+        break
+      case 'set':
+        adapter.setProp(op.wire, op.name, op.value)
+        break
+      case 'append': {
+        const owner = els.get(op.owner)
+        const child = els.get(op.child)
+        if (owner && child) adapter.appendChild(owner, child)
+        break
+      }
+      case 'remove': {
+        const w = els.get(op.wire)
+        if (w && adapter.removeEl) adapter.removeEl(op.wire)
+        els.delete(op.wire)
+        break
+      }
+      case 'styles':
+        break
+    }
+  }
+}
+
+function makeNodeAt(id: string, data: ConstructorParameters<typeof Node>[0] = { type: 'div' }): Node {
+  return new Node(data, hub(), id)
+}
+
+/** A component-prototype chain built through the public graph API (token flip on the family link). */
+function makeProto(id: string, data: ConstructorParameters<typeof Node>[0] = { type: 'section' }): Node {
+  const host = makeNode()
+  const proto = new Node(data, hub(), id)
+  childOf(host, proto, 0)
+  const fam = proto.anchors.find((a) => a.role === 'child')!.link
+  const parentSide = fam.anchors.find((a) => a.role === 'parent')!
+  parentSide.target = 'component'
+  return proto
+}
+
+/** Drain the render microtask sweep: pass-2 → cascade-destroy → render-emit. */
+async function drainSweep(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) await new Promise<void>((resolve) => queueMicrotask(resolve))
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
+/** Structural tree read back from a rendered op stream (adapter-neutral, PAR-5). */
+type OpsTree = {
+  wire: string
+  type: string
+  props: Record<string, unknown>
+  children: OpsTree[]
+}
+
+function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => boolean }): OpsTree[] {
+  const skip = opts?.skip
+  const byWire = new Map<string, OpsTree>()
+  const edges: Array<{ owner: string; child: string }> = []
+  const propVals = new Map<string, Record<string, unknown>>()
+  for (const op of ops) {
+    switch (op.kind) {
+      case 'create':
+        byWire.set(op.wire, { wire: op.wire, type: op.type, props: {}, children: [] })
+        break
+      case 'set':
+        if (skip && skip(op.name)) break
+        propVals.set(op.wire, { ...(propVals.get(op.wire) ?? {}), [op.name]: op.value })
+        break
+      case 'append':
+        edges.push({ owner: op.owner, child: op.child })
+        break
+      default:
+        break
+    }
+  }
+  for (const [wire, tree] of byWire) tree.props = propVals.get(wire) ?? {}
+  for (const e of edges) byWire.get(e.owner)?.children.push(byWire.get(e.child)!)
+  return [...byWire.values()]
+}
+
+/** Structural parity check — throws when two adapters produce unequal render trees (PAR-5). */
+class LegacyParityFailure extends Error {
+  constructor(public readonly expectation: string) {
+    super('parity failure: ' + expectation)
+  }
+}
+
+function parityCheck(a: OpsTree[], b: OpsTree[], note: string): void {
+  if (JSON.stringify(a) !== JSON.stringify(b)) {
+    throw new LegacyParityFailure(note)
+  }
+}
+
+/** A compiled-state-like view lifted straight from a serialized doc node entry. */
+interface SerializableNode {
+  id: string
+  type: string
+  props: Record<string, unknown>
+  css?: Record<string, unknown>
+  content?: unknown
+  children: string[]
+  forkKey?: string
+}
+
+function minimalFromSerialized(s: SerializableNode): MinimalElement {
+  const props: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(s.props ?? {})) props[`prop:${k}`] = v
+  for (const [k, v] of Object.entries(s.css ?? {})) props[`css:${k}`] = v
+  if (s.content !== undefined) props['text'] = s.content
+  return { wire: s.id, type: s.type, props, childOrder: [...(s.children ?? [])] }
+}
+
+function serNodeOf(v: unknown): SerializableNode | undefined {
+  if (typeof v === 'object' && v !== null && typeof (v as SerializableNode).id === 'string') {
+    return v as SerializableNode
+  }
+  return undefined
+}
+
+function nodesFromDoc(doc: SerializedRenderDoc): SerializableNode[] {
+  const out: SerializableNode[] = []
+  const t = serNodeOf(doc.template)
+  if (t) out.push(t)
+  for (const c of doc.content) {
+    const n = serNodeOf(c)
+    if (n) out.push(n)
+  }
+  return out
+}
+
+/** Client-side re-render of a shipped snapshot: the same diffFn over the doc's nodes. */
+function opsFromDoc(doc: SerializedRenderDoc): RenderOp[] {
+  const nodes = nodesFromDoc(doc).map(minimalFromSerialized)
+  return diffMinimal(null, nodes)
+}
+
+/** Adapter whose `hydrate` reuses `css.id`-keyed DOM elements and binds wires (notes §5.1). */
+class HydrationAdapter implements RenderAdapter<PEl> {
+  readonly created = new Set<string>()
+  readonly reused = new Set<string>()
+  readonly bound = new Map<string, string>()
+  private els = new Map<string, PEl>()
+
+  createEl(type: string, wire: string): PEl {
+    this.created.add(wire)
+    const e = { wire, type }
+    this.els.set(wire, e)
+    return e
+  }
+
+  setProp(wire: NodeRef, name: string, val: unknown): void {
+    if (name === 'css:id') this.bound.set(String(val), wire)
+  }
+
+  appendChild(): void {
+    return void 0
+  }
+
+  hydrate(rootWire: string, vdom: unknown): void {
+    for (const n of nodesFromDoc(vdom as SerializedRenderDoc)) {
+      const cssId = (n.css ?? {}).id
+      if (!cssId) continue
+      const wire = this.bound.get(cssId)
+      void rootWire
+      if (wire && this.els.has(wire)) {
+        this.reused.add(cssId)
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SERIALIZATION HELPERS (SER gate)
+// ---------------------------------------------------------------------------
+
+/** A twin-source fork slice: two sources on the same node share `refX`. */
+function forkSlice(): { root: Node; leaf: Node } {
+  const root = makeRoot({ type: 'root', content: 'R' })
+  const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L', props: { k: 1 } }), 0)
+  addComponentSource(root, 'refX', { what: 'A' })
+  addComponentSource(root, 'refX', { what: 'B' })
+  targetAnchor(leaf, 'refX')
+  return { root, leaf }
+}
+
+/** Strip non-deterministic fields (link ids) for comparison. */
+function stripLinkIds(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(stripLinkIds)
+  if (typeof v === 'object' && v !== null) {
+    const o: Record<string, unknown> = {}
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'link') continue
+      o[k] = stripLinkIds(val)
+    }
+    return o
+  }
+  return v
+}
+
+/** Serialize → seed → re-serialize; throws when the round trip is not stable. */
+function roundTrip(root: Node, slice: Node[]): SerializedRenderDoc {
+  const doc = serializeSlice(root, slice)
+  const seeded = loadState(jsonClone(doc)).map((d) => new Node(d, hub()))
+  reconcileParentTargets(seeded)
+  const reDoc = serializeSlice(seeded[0]!, seeded)
+  if (JSON.stringify(stripLinkIds(doc)) !== JSON.stringify(stripLinkIds(reDoc))) {
+    throw new Error('round-trip-mismatch')
+  }
+  return reDoc
+}
+
+/** The preempt-initial-data envelope with minimal NodeSchema-shaped template/content. */
+function validDoc(): SerializedRenderDoc {
+  return {
+    template: { type: 'root' },
+    content: [],
+    clientConfig: { adapter: 'dom', persistence: false },
+  }
+}
+
+/** Guard: re-resolved output MUST equal the shipped document, else hard failure (SER-F2). */
+function assertRecompilesAs(expected: SerializedRenderDoc, root: Node, slice: Node[]): void {
+  const got = serializeSlice(root, slice)
+  if (JSON.stringify(expected) !== JSON.stringify(got)) {
+    throw new Error('round-trip-mismatch')
+  }
+}
+
+function assertEnvelope(doc: SerializedRenderDoc): void {
+  if (typeof doc.template !== 'object' || doc.template === null || Array.isArray(doc.template)) {
+    throw new Error('envelope-mismatch')
+  }
+  if (!Array.isArray(doc.content)) throw new Error('envelope-mismatch')
+}
+
+function validateClientConfig(doc: SerializedRenderDoc): void {
+  assertEnvelope(doc)
+  const cfg = doc.clientConfig
+  if (typeof cfg !== 'object' || cfg === null) throw new Error('clientConfig-mismatch')
+  const keys = Object.keys(cfg)
+  if (keys.length !== 2 || !('adapter' in cfg) || !('persistence' in cfg)) {
+    throw new Error('clientConfig-excess')
+  }
+  if (typeof cfg.adapter !== 'string' || typeof cfg.persistence !== 'boolean') {
+    throw new Error('clientConfig-excess')
+  }
+}
+
+/** Searchable doc with a fake-live target buried in the template so F3 can assert rejection. */
+function docWithLiveTarget(): SerializedRenderDoc {
+  const live = makeNodeAt('live')
+  return {
+    template: { type: 'r' },
+    content: [
+      {
+        id: 'live',
+        type: 'span',
+        props: {},
+        state: 'in-tree',
+        children: [],
+        anchors: [{ role: 'target', target: live as unknown as string, options: {}, link: 'L' }],
+      },
+    ],
+    clientConfig: { adapter: 'dom', persistence: false },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// §10.1 Serialization round-trip (SER-H1..H2, SER-F1..F6)
+// ---------------------------------------------------------------------------
+
+describe('§10.1 Serialization round-trip (SER-H1..H2, SER-F1..F6)', () => {
+  it('SER-H1 — anchors round-trip as typed refs for every target kind; state is first-class JSON', () => {
+    const root = makeRoot({ type: 'root', content: 'r' })
+    const leaf = makeNode({ type: 'span', props: { 'css:class': 'k' }, content: 'l' })
+    childOf(root, leaf, 0)
+    targetAnchor(leaf, 'slotRef')
+    addComponentSource(leaf, 'prov', 'prov-value')
+
+    const comp = hub().linkFor('tokens', 'component')
+    leaf.addAnchor('source', 'rootNode', {}, comp)
+    leaf.addAnchor('target', 'component', {}, comp)
+    leaf.addAnchor('duplex', 'contentNodes', {}, comp)
+
+    const state: RenderNodeState = serializeNode(leaf)
+    expect(state.state).toBe('in-tree')
+    expect(state.type).toBe('span')
+    expect(state.id).toBe(leaf.id)
+    expect(state.children).toEqual([])
+
+    const anchorAt = (role: SerializedAnchor['role'], target: unknown): SerializedAnchor => {
+      const hit = state.anchors.find((a) => a.role === role && a.target === target)
+      expect(hit).toBeDefined()
+      return hit!
+    }
+    // Node → NodeRef (child side points back at the node itself, S3.1)
+    const nodeTarget = state.anchors.find((a) => a.role === 'child')!
+    expect(nodeTarget.target).toBe(leaf.id)
+    expect(typeof nodeTarget.link).toBe('string')
+    // referenceName token anchors (notes §10.8.2)
+    expect(anchorAt('target', 'slotRef').target).toBe('slotRef')
+    expect(anchorAt('source', 'prov').target).toBe('prov')
+    // permanent-owner tokens serialize as their exact string keys, never live objects
+    expect(anchorAt('source', 'rootNode').target).toBe('rootNode')
+    expect(anchorAt('target', 'component').target).toBe('component')
+    expect(anchorAt('duplex', 'contentNodes').target).toBe('contentNodes')
+
+    const noneLive = state.anchors.every((a) => typeof a.target !== 'object' || a.target === null)
+    expect(noneLive).toBe(true)
+    // first-class JSON: parse∘stringify round-trips exactly (ones, only after JSON reachability)
+    expect(jsonClone(state)).toEqual(state)
+  })
+
+  it('SER-H2 — an actionable fork round-trips with its trace and de-dupes by node id', () => {
+    const { root, leaf } = forkSlice()
+    const res = root.compile([root, leaf])
+    const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
+    expect(arms).toHaveLength(2)
+    const keys = new Set(arms.map((a) => a.pathKey))
+    expect(keys.size).toBe(2)
+
+    const doc = roundTrip(root, [root, leaf])
+    expect(JSON.parse(JSON.stringify(doc))).toEqual(doc)
+
+    const seeded = loadState(jsonClone(doc)).map((d) => new Node(d, hub()))
+    const recompile = seeded[0]!.compile(seeded)
+    const reArms = recompile.actionable.filter((s) => s.nodeId === leaf.id)
+    expect(new Set(reArms.map((a) => a.pathKey))).toEqual(keys)
+    expect(new Set(seeded.map((n) => n.id))).toEqual(new Set([root.id, leaf.id]))
+  })
+
+  it('SER-F1 — non-JSON props/content (function, cycle, symbol) throws; nothing is shipped', () => {
+    const fnNode = makeNodeAt('f', { type: 'x', props: { no: () => 1 } })
+    expect(() => serializeNode(fnNode)).toThrow()
+
+    const node = makeNodeAt('cyc', { type: 'x' })
+    const inner: Record<string, unknown> = {}
+    node.addLayer({ id: 'L', content: inner })
+    inner.self = inner
+    expect(() => serializeNode(node)).toThrow()
+
+    const symNode = makeNodeAt('sym', { type: 'x', props: { k: Symbol('s') } })
+    expect(() => serializeNode(symNode)).toThrow()
+
+    const ok = makeNodeAt('ok', { type: 'x', content: 'safe' })
+    expect(() => serializeNode(ok)).not.toThrow()
+  })
+
+  it('SER-F2 — a round-trip mismatch is a hard failure (contract violation)', () => {
+    const root = makeRoot({ type: 'root', content: 'A' })
+    const slice = [root]
+    const doc = serializeSlice(root, slice)
+    expect(() => assertRecompilesAs(doc, root, slice)).not.toThrow()
+
+    const mutated = makeRoot({ type: 'root', content: 'B' })
+    expect(() => assertRecompilesAs(doc, mutated, [mutated])).toThrow()
+  })
+
+  it('SER-F3 — a serialized doc carrying a live object anchor target is rejected at the schema boundary', () => {
+    expect(() => loadState(docWithLiveTarget())).toThrow()
+  })
+
+  it('SER-F4 — dropped-arm state contributes nothing to the serialized actionable set', () => {
+    const root = makeRoot({ type: 'root' })
+    const hold = childOf(root, makeNode({ type: 'hold' }), 0)
+    const leaf = childOf(hold, makeNode({ type: 'span' }), 0)
+    targetAnchor(leaf, 'slotP')
+    const proto = makeProto('proto', { type: 'section' })
+    addComponentSource(proto, 'slotP', { from: 'proto' })
+
+    const res = root.compile([root, hold, leaf, proto])
+    expect(res.dropped.some((d) => d.reason === 'prototype-terminated')).toBe(true)
+
+    const doc = serializeSlice(root, [root, hold, leaf])
+    const text = JSON.stringify(doc)
+    expect(text).not.toContain('proto')
+  })
+
+  it('SER-F5 — a snapshot doc outside the preempt-initial-data envelope / NodeSchema shape is rejected', () => {
+    expect(() => loadState({ hello: 1 } as unknown as SerializedRenderDoc)).toThrow()
+    expect(() =>
+      loadState({
+        template: { type: 'r' },
+        content: 5 as unknown as unknown[],
+        clientConfig: { adapter: 'dom', persistence: false },
+      }),
+    ).toThrow()
+    expect(() => assertEnvelope(validDoc())).not.toThrow()
+  })
+
+  it('SER-F6 — clientConfig carrying anything beyond adapter + persistence flags is rejected', () => {
+    const bad: SerializedRenderDoc = {
+      template: { type: 'r' },
+      content: [],
+      clientConfig: { adapter: 'dom', persistence: true, run: 'gamma' } as unknown as {
+        adapter: string
+        persistence: boolean
+      },
+    }
+    expect(() => validateClientConfig(bad)).toThrow()
+    expect(() => validateClientConfig(validDoc())).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// §10.2 Fork keys, collisions, non-actionable dropping
+// ---------------------------------------------------------------------------
+
+describe('§10.2 Fork keys & non-actionable dropping (FRK-H1..H3, FRK-F1..F6)', () => {
+  it('FRK-H1 — a single source for a referenceName yields one actionable state, no fork', () => {
+    const root = makeRoot({ type: 'root' })
+    const leaf = childOf(root, makeNode({ type: 'leaf' }), 0)
+    addComponentSource(root, 'slot', 'v')
+    targetAnchor(leaf, 'slot')
+
+    const res = root.compile([root, leaf])
+    expect(res.actionable).toHaveLength(1)
+    expect(res.dropped).toHaveLength(0)
+    const st = compiledFor(res, leaf.id)
+    expect(st?.bindings['slot']).toBe('v')
+    expect(res.warnings.filter((w) => w.code === 'circular-source')).toHaveLength(0)
+  })
+
+  it('FRK-H2 — N root-terminated sources are N actionable states with distinct path keys; all render', () => {
+    const { root, leaf } = forkSlice()
+    const res = root.compile([root, leaf])
+    const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
+    expect(arms).toHaveLength(2)
+
+    const keys = arms.map((a) => a.pathKey)
+    expect(new Set(keys).size).toBe(2)
+    const pickA = arms.some((a) => (a.bindings['refX'] as { what: string }).what === 'A')
+    const pickB = arms.some((a) => (a.bindings['refX'] as { what: string }).what === 'B')
+    expect(pickA).toBe(true)
+    expect(pickB).toBe(true)
+  })
+
+  it('FRK-H3 — duplex/self-source resolves at depth 0 before any upward walk (S4.1/S-R2.6)', () => {
+    const root = makeRoot({ type: 'root' })
+    const mid = childOf(root, makeNode({ type: 'mid' }), 0)
+    const leaf = childOf(mid, makeNode({ type: 'leaf' }), 0)
+    addComponentSource(root, 'slotD', 'FAR')
+    addComponentSource(leaf, 'slotD', 'SELF', 'duplex')
+    targetAnchor(leaf, 'slotD')
+
+    const res = mid.compile([mid, leaf])
+    const st = compiledFor(res, leaf.id)
+    expect(st?.bindings['slotD']).toBe('SELF')
+    expect(st?.unresolved ?? []).toHaveLength(0)
+  })
+
+  it('FRK-F1 — an arm terminating at a component prototype is silently dropped: zero ops, zero serialized state', () => {
+    const root = makeRoot({ type: 'root' })
+    const hold = childOf(root, makeNode({ type: 'hold' }), 0)
+    const leaf = childOf(hold, makeNode({ type: 'span' }), 0)
+    targetAnchor(leaf, 'slotP')
+    const proto = makeProto('proto-arm', { type: 'section' })
+    addComponentSource(proto, 'slotP', { from: 'proto' })
+
+    const res = root.compile([root, hold, leaf, proto])
+    expect(res.dropped.some((d) => d.reason === 'prototype-terminated')).toBe(true)
+    expect(res.actionable.some((a) => a.nodeId === 'proto-arm')).toBe(false)
+
+    const doc = serializeSlice(root, [root, hold, leaf])
+    expect(JSON.stringify(doc)).not.toContain('proto-arm')
+  })
+
+  it('FRK-F2 — an arm terminating at contentNodes is silently dropped (owner-terminated)', () => {
+    const root = makeRoot({ type: 'root' })
+    const leaf = childOf(root, makeNode({ type: 'span' }), 0)
+    targetAnchor(leaf, 'slotC')
+
+    const contentHost = makeNode()
+    const payload = childOf(contentHost, makeNode({ type: 'payload', content: 'p' }), 0)
+    const fam = payload.anchors.find((a) => a.role === 'child')!.link
+    fam.anchors.find((a) => a.role === 'parent')!.target = 'contentNodes'
+    addComponentSource(payload, 'slotC', 'CN')
+
+    const res = root.compile([root, leaf, payload])
+    expect(res.dropped.some((d) => d.reason === 'owner-terminated')).toBe(true)
+    const doc = serializeSlice(root, [root, leaf])
+    expect(JSON.stringify(doc)).not.toContain(payload.id)
+  })
+
+  it('FRK-F3 — a looped arm is dropped with a circular-source warning while sibling arms still render', () => {
+    const root = makeRoot({ type: 'root' })
+    const a = childOf(root, makeNode({ type: 'a' }), 0)
+    const b = childOf(a, makeNode({ type: 'b' }), 0)
+    const sib = childOf(root, makeNode({ type: 'sib', content: 'ok' }), 1)
+    targetAnchor(a, 'x')
+    addComponentSource(b, 'x', 'bx', 'duplex')
+    targetAnchor(b, 'y')
+    addComponentSource(a, 'y', 'ay', 'duplex')
+
+    const res = root.compile([root, a, b, sib])
+    expect(res.warnings.some((w) => w.code === 'circular-source')).toBe(true)
+    expect(res.dropped.some((d) => d.reason === 'loop')).toBe(true)
+    expect(compiledFor(res, sib.id)).toBeDefined()
+  })
+
+  it('FRK-F4 — fork-key collision with differing content is a hard error, never a phantom coalesce', () => {
+    const doc: SerializedRenderDoc = {
+      template: { type: 'root' },
+      content: [
+        { id: 'n1', state: 'in-tree', type: 'div', props: { code: 'A' }, css: {}, children: [], anchors: [], forkKey: 'root/n1' },
+        { id: 'n2', state: 'in-tree', type: 'div', props: { code: 'B' }, css: {}, children: [], anchors: [], forkKey: 'root/n1' },
+      ],
+      clientConfig: { adapter: 'dom', persistence: false },
+    }
+    expect(() => loadState(doc)).toThrow()
+  })
+
+  it('FRK-F5 — identical re-derived forks de-dupe by node ids + key trace', () => {
+    const doc: SerializedRenderDoc = {
+      template: { type: 'root' },
+      content: [
+        { id: 'n1', state: 'in-tree', type: 'div', props: { v: 1 }, css: {}, children: [], anchors: [], forkKey: 'root/n1' },
+        { id: 'n1', state: 'in-tree', type: 'div', props: { v: 1 }, css: {}, children: [], anchors: [], forkKey: 'root/n1' },
+      ],
+      clientConfig: { adapter: 'dom', persistence: false },
+    }
+    const seeded = loadState(doc)
+    expect(seeded).toHaveLength(1)
+    expect(mintNodeId()).not.toBe(mintNodeId())
+  })
+
+  it('FRK-F6 — an ambiguous-but-terminating set surfaces as multiple valid states, never an arbitrary pick', () => {
+    const { root, leaf } = forkSlice()
+    const res = root.compile([root, leaf])
+    const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
+    expect(arms.length).toBe(2)
+    expect(res.dropped).toHaveLength(0)
+
+    const options = arms.map((a) => (a.bindings['refX'] as { what: string }).what).sort()
+    expect(options).toEqual(['A', 'B'])
+  })
+})

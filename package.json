@@ -1,0 +1,28 @@
+{
+  "name": "preempt-providence",
+  "version": "0.1.0",
+  "description": "Skeleton server for the Preempt-Providence rewrite (per docs/specs/*.md)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "demo:build": "tsc -p tsconfig.demo.json",
+    "demo": "npm run demo:build && node scripts/build-demo.mjs && node scripts/serve-demo.mjs",
+    "demo:smoke": "npm run demo:build && node scripts/build-demo.mjs && node scripts/demo-smoke.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

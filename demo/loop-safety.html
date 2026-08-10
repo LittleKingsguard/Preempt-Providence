@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Loop-safety probes (Step 7)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <main>
+    <h1>Loop-safety probes</h1>
+    <p class="goals">
+      Mirror of <code>tests/e2e/loop-safety.test.ts</code> — intentionally tries to create
+      infinite circles through the public surface and asserts the safety guard trips.
+      Each probe shows its expected behavior, the graph structure built, and the observed
+      result.
+    </p>
+
+    <section>
+      <h2>Probe 1 — A→B→A anchors: attach/move that would close the circle</h2>
+      <p class="expect">
+        Expected: <code>move a under b</code> (where the tree is <em>root → a → b</em>) is
+        rejected with <code>cycle-detected</code>; the graph is rolled back and nothing is
+        journaled.
+      </p>
+      <pre id="s1" class="doc"></pre>
+      <p id="p1" class="probe"></p>
+    </section>
+
+    <section>
+      <h2>Probe 2 — A↔B anchor circle compile</h2>
+      <p class="expect">
+        Expected: compiling a graph where a and b are each other's parent yields zero
+        actionable states, a dropped <code>loop</code> arm, and a
+        <code>circular-source</code> warning — bounded, never hangs.
+      </p>
+      <pre id="s2" class="doc"></pre>
+      <p id="p2" class="probe"></p>
+    </section>
+
+    <section>
+      <h2>Probe 3 — component self-reference</h2>
+      <p class="expect">
+        Expected: a node that both provides and consumes <code>self-slot</code> resolves at
+        depth 0 (S4.1/S-R2.6) with status <code>ok</code> — it is not a loop.
+      </p>
+      <p id="p3" class="probe"></p>
+    </section>
+
+    <section>
+      <h2>Probe 4 — dangling source/target (unresolved reference)</h2>
+      <p class="expect">
+        Expected: a target with no source anywhere logs a warning, emits status
+        <code>unresolved-reference</code>, and the node still renders its own state (S-R4.3).
+      </p>
+      <p id="p4" class="probe"></p>
+    </section>
+
+    <section>
+      <h2>Probe 5 — prototype-only candidate drops silently</h2>
+      <p class="expect">
+        Expected: when the only provider lives under a component prototype, the arm
+        terminates at <code>component</code> and drops silently — zero events, zero
+        warnings.
+      </p>
+      <p id="p5" class="probe"></p>
+    </section>
+
+    <section>
+      <h2>Probe 6 — depth-cap trip</h2>
+      <p class="expect">
+        Expected: a borrow walk deeper than the compile depth cap (<code>MAX_COMPILE_DEPTH =
+        8</code>) is dropped as <code>loop</code> with a <code>circular-source</code>
+        warning.
+      </p>
+      <pre id="s6" class="doc"></pre>
+      <p id="p6" class="probe"></p>
+    </section>
+
+    <section>
+      <h2>Probe 7 — single-parent enforcement</h2>
+      <p class="expect">
+        Expected: a second parent is rejected with <code>SingleParentError</code> — never a
+        silent reparent.
+      </p>
+      <p id="p7" class="probe"></p>
+    </section>
+
+    <section id="results"></section>
+  </main>
+  <script type="module" src="loop-safety.js"></script>
+</body>
+</html>

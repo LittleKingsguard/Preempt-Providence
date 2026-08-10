@@ -1,0 +1,224 @@
+// src/core/serialize.ts — JSON round-trip: serializeNode, serializeSlice,
+// SerializedAnchor, RenderNodeState, loadState, reResolve (contract.md §src/core/serialize.ts).
+// node → JSON → parse → recompile must round-trip equal render-relevant state (SER-R1).
+// Anchors serialize as typed refs — never live objects (notes §10.6, D4).
+import type { Node } from './node.js'
+import type { AnchorTarget, NodeBaseData, NodeRef, Role } from './types.js'
+
+export type SerializedAnchor = {
+  role: Role
+  target: NodeRef | 'rootNode' | 'component' | 'contentNodes' | string
+  options: { priority?: number; order?: number }
+  link: string
+  value?: unknown
+  parent?: string
+}
+
+export interface RenderNodeState {
+  id: NodeRef
+  state: 'in-tree'
+  type: string
+  props: Record<string, unknown>
+  css: { id?: string; classes?: string[]; style?: string; cssDef?: unknown }
+  content?: unknown
+  children: NodeRef[]
+  anchors: SerializedAnchor[]
+  forkKey?: string
+}
+
+export type SerializedRenderDoc = {
+  template: unknown
+  content: unknown[]
+  clientConfig: { adapter: string; persistence: boolean }
+}
+
+function targetKey(target: AnchorTarget): SerializedAnchor['target'] {
+  if (typeof target === 'string') return target
+  const id = (target as Node).id
+  if (typeof id !== 'string') throw new Error('serialization-error: live anchor target')
+  return id
+}
+
+function assertJsonSafe(value: unknown, seen?: WeakSet<object>): void {
+  if (value === null || value === undefined) return
+  const type = typeof value
+  if (type === 'string' || type === 'number' || type === 'boolean') return
+  if (type === 'function' || type === 'symbol' || type === 'bigint') {
+    throw new Error('serialization-error: non-JSON value')
+  }
+  const visited = seen ?? new WeakSet<object>()
+  if (visited.has(value as object)) throw new Error('serialization-error: circular reference')
+  visited.add(value as object)
+  if (Array.isArray(value)) {
+    for (const item of value) assertJsonSafe(item, visited)
+    return
+  }
+  for (const key of Object.keys(value)) assertJsonSafe((value as Record<string, unknown>)[key], visited)
+}
+
+function cssState(css: Record<string, unknown>): RenderNodeState['css'] {
+  const out: RenderNodeState['css'] = {}
+  if (typeof css.id === 'string') out.id = css.id
+  if (Array.isArray(css.classes) && css.classes.every((c) => typeof c === 'string')) out.classes = css.classes as string[]
+  if (typeof css.style === 'string') out.style = css.style
+  if (css.cssDef !== undefined) out.cssDef = css.cssDef
+  return out
+}
+
+export function serializeNode(node: Node): RenderNodeState {
+  const props = node.props
+  const content = node.content
+  assertJsonSafe(props)
+  assertJsonSafe(content)
+  const state: RenderNodeState = {
+    id: node.id,
+    state: 'in-tree',
+    type: node.type,
+    props: { ...props },
+    css: cssState(node.css),
+    children: node.children.map((child) => child.id),
+    anchors: node.anchors.map((a) => {
+      let parent: string | undefined
+      // encode the parent side of a child anchor so the family edge round-trips,
+      // while keeping the anchor's own target self-referencing (S3.1)
+      if (a.role === 'child' && typeof a.target === 'object' && a.target !== null && (a.target as Node).id === node.id) {
+        const parentAnchor = a.link.anchorsOf('parent')[0]
+        if (parentAnchor) {
+          if (typeof parentAnchor.target === 'string') {
+            parent = parentAnchor.target
+          } else if (typeof parentAnchor.target === 'object' && parentAnchor.target !== null) {
+            parent = (parentAnchor.target as Node).id
+          }
+        }
+      }
+      return {
+        role: a.role,
+        target: targetKey(a.target),
+        options: { ...a.options },
+        link: a.link.id,
+        value: a.value,
+        ...(parent !== undefined ? { parent } : {}),
+      }
+    }),
+  }
+  if (content !== undefined) state.content = content
+  // deterministic anchor order for stable round-trips
+  state.anchors.sort((x, y) => {
+    const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, target: 3, duplex: 4, placement: 5, component: 6 }
+    const r = (roleOrder[x.role] ?? 9) - (roleOrder[y.role] ?? 9)
+    if (r !== 0) return r
+    const tx = typeof x.target === 'string' ? x.target : (x.target as { id: string }).id
+    const ty = typeof y.target === 'string' ? y.target : (y.target as { id: string }).id
+    return tx < ty ? -1 : tx > ty ? 1 : 0
+  })
+  return state
+}
+
+export function serializeSlice(node: Node, kids: Node[]): SerializedRenderDoc {
+  return {
+    template: serializeNode(node),
+    content: kids.map(serializeNode),
+    clientConfig: { adapter: 'dom', persistence: false },
+  }
+}
+
+interface SeededNode {
+  id: string
+  type?: string
+  props?: Record<string, unknown>
+  css?: Record<string, unknown>
+  children?: string[]
+  content?: unknown
+  anchors?: SerializedAnchor[]
+  forkKey?: string
+}
+
+function assertNoLiveTargets(v: unknown): void {
+  if (typeof v !== 'object' || v === null) return
+  const anchors = (v as Record<string, unknown>).anchors
+  if (!Array.isArray(anchors)) return
+  for (const a of anchors) {
+    if (typeof a !== 'object' || a === null) throw new Error('schema-boundary: malformed anchor')
+    const target = (a as Record<string, unknown>).target
+    if (typeof target !== 'string') throw new Error('schema-boundary: live anchor target')
+  }
+}
+
+function parseNodeState(v: unknown): SeededNode {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error('NodeSchema-shape-mismatch')
+  const o = v as Record<string, unknown>
+  if (typeof o.id !== 'string') throw new Error('NodeSchema-shape-mismatch')
+  assertNoLiveTargets(o)
+  const seed: SeededNode = { id: o.id }
+  if (typeof o.type === 'string') seed.type = o.type
+  if (o.props !== undefined) {
+    if (typeof o.props !== 'object' || o.props === null || Array.isArray(o.props)) throw new Error('NodeSchema-shape-mismatch')
+    seed.props = o.props as Record<string, unknown>
+  }
+  if (o.css !== undefined) {
+    if (typeof o.css !== 'object' || o.css === null || Array.isArray(o.css)) throw new Error('NodeSchema-shape-mismatch')
+    seed.css = o.css as Record<string, unknown>
+  }
+  if (o.children !== undefined) {
+    if (!Array.isArray(o.children)) throw new Error('NodeSchema-shape-mismatch')
+    for (const c of o.children) if (typeof c !== 'string') throw new Error('NodeSchema-shape-mismatch')
+    seed.children = o.children as string[]
+  }
+  if (o.content !== undefined) seed.content = o.content
+  if (o.anchors !== undefined) {
+    if (!Array.isArray(o.anchors)) throw new Error('NodeSchema-shape-mismatch')
+    seed.anchors = o.anchors as SerializedAnchor[]
+  }
+  if (typeof o.forkKey === 'string') seed.forkKey = o.forkKey
+  return seed
+}
+
+function validateClientConfig(doc: SerializedRenderDoc): void {
+  const cfg = doc.clientConfig
+  if (typeof cfg !== 'object' || cfg === null) throw new Error('clientConfig-excess')
+  const keys = Object.keys(cfg)
+  if (keys.length !== 2) throw new Error('clientConfig-excess')
+  if (typeof cfg.adapter !== 'string') throw new Error('clientConfig-excess')
+  if (typeof cfg.persistence !== 'boolean') throw new Error('clientConfig-excess')
+}
+
+export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
+  if (typeof doc !== 'object' || doc === null) throw new Error('envelope-mismatch')
+  const template = (doc as { template?: unknown }).template
+  if (typeof template !== 'object' || template === null || Array.isArray(template)) throw new Error('envelope-mismatch')
+  if (!Array.isArray(doc.content)) throw new Error('envelope-mismatch')
+  validateClientConfig(doc)
+  assertNoLiveTargets(template)
+  const groups = new Map<string, Array<{ seed: SeededNode; idx: number }>>()
+  const seeds: SeededNode[] = []
+  for (const item of doc.content) {
+    const seed = parseNodeState(item)
+    const idx = seeds.push(seed) - 1
+    if (seed.forkKey !== undefined) {
+      let group = groups.get(seed.forkKey)
+      if (!group) {
+        group = []
+        groups.set(seed.forkKey, group)
+      }
+      group.push({ seed, idx })
+    }
+  }
+  const drop = new Set<number>()
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const first = group[0]!
+    const sig = JSON.stringify(first.seed)
+    for (let i = 1; i < group.length; i += 1) {
+      const entry = group[i]!
+      if (JSON.stringify(entry.seed) !== sig) throw new Error('fork-key-collision')
+      drop.add(entry.idx)
+    }
+  }
+  const out: SeededNode[] = []
+  seeds.forEach((s, i) => {
+    if (!drop.has(i)) out.push(s)
+  })
+  return out as unknown as NodeBaseData[]
+}
+
+export const reResolve = loadState

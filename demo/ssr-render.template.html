@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — SSR receive → complete render (Step 7)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <main>
+    <h1>SSR receive → complete render</h1>
+    <p class="goals">
+      Mirror of <code>tests/e2e/ssr-render.test.ts</code>. The input data below is the
+      exact <code>preempt-initial-data</code> document the framework ships to the browser
+      (render.md §5); this page ingests it and renders it in-browser to verify the HTML
+      rendering succeeds.
+    </p>
+
+    <!-- Framework input: the SSR snapshot document, delivered exactly as the
+         framework delivers it (render.md §5). The page below re-resolves from
+         these serialized anchors (S4.2). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section>
+      <h2>1 · Input data passed to the browser</h2>
+      <p class="expect">
+        Expected behavior: the server compiles the nested pane and serializes it to this
+        JSON document (<code>template</code> + <code>content</code> +
+        <code>clientConfig</code>). The browser must parse it, re-resolve from the
+        serialized anchors, and produce a valid complete render.
+      </p>
+      <pre id="server-doc" class="doc"></pre>
+    </section>
+
+    <section>
+      <h2>2 · Expected behavior (mirror of the e2e goals)</h2>
+      <ul class="expect-list">
+        <li><strong>SSR-H1 / PAR-5</strong> — the in-browser render tree must be structurally equal to the server render tree (same input ⇒ same output).</li>
+        <li><strong>Fork</strong> — <em>dock</em> consumes <code>feed</code> provided twice at <em>app</em>: two fork arms render as multiple valid states, never a coerced pick.</li>
+        <li><strong>Nesting</strong> — <em>badge</em> renders nested inside <em>dock</em>; <em>zone</em> renders with its placement anchor.</li>
+        <li><strong>SSR-H3 / S4.2</strong> — the client re-resolves from anchors; shipped fork traces are inputs, not conclusions.</li>
+        <li><strong>SSR-H2</strong> — hydration reuses SSR DOM via the <code>css.id</code> seam.</li>
+        <li><strong>SSR-F1</strong> — a tampered shipped fork id is never materialized.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>3 · Expected document tree structure</h2>
+      <p class="expect">
+        Expected behavior: the rendered document tree below is the structure the browser
+        must produce — <em>dock</em> (with both fork arms resolved from <code>feed</code>),
+        its nested <em>badge</em>, and the <em>zone</em> node.
+      </p>
+      <div id="expected-tree" class="tree-view"></div>
+    </section>
+
+    <section>
+      <h2>4 · Rendered document tree (in-browser)</h2>
+      <p class="expect">
+        Expected behavior: the live DOM mount below is produced by applying the render ops
+        through the DOM adapter; the tree dump underneath is walked from the actual
+        rendered elements — proving the HTML rendering succeeded.
+      </p>
+      <div id="mount" class="mount"></div>
+      <div id="rendered-tree" class="tree-view"></div>
+    </section>
+
+    <section>
+      <h2>5 · Fork arms — both candidate resolutions render</h2>
+      <div id="fork-arms" class="fork-arms"></div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+  <script type="module" src="ssr-render.js"></script>
+</body>
+</html>

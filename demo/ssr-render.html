@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — SSR receive → complete render (Step 7)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <main>
+    <h1>SSR receive → complete render</h1>
+    <p class="goals">
+      Mirror of <code>tests/e2e/ssr-render.test.ts</code>. The input data below is the
+      exact <code>preempt-initial-data</code> document the framework ships to the browser
+      (render.md §5); this page ingests it and renders it in-browser to verify the HTML
+      rendering succeeds.
+    </p>
+
+    <!-- Framework input: the SSR snapshot document, delivered exactly as the
+         framework delivers it (render.md §5). The page below re-resolves from
+         these serialized anchors (S4.2). -->
+    <script id="preempt-initial-data" type="application/json">{"template":{"id":"node-1","state":"in-tree","type":"app","props":{"id":"preempt-node-node-1"},"css":{"id":"css-app"},"children":["node-2","node-4"],"anchors":[{"role":"child","target":"node-1","options":{"priority":0},"link":"link-1","parent":"rootNode"},{"role":"parent","target":"node-1","options":{},"link":"link-2"},{"role":"source","target":"feed","options":{},"link":"link-4","value":{"label":"A"}},{"role":"source","target":"feed","options":{},"link":"link-5","value":{"label":"B"}}],"content":"shell"},"content":[{"id":"node-1","state":"in-tree","type":"app","props":{"id":"preempt-node-node-1"},"css":{"id":"css-app"},"children":["node-2","node-4"],"anchors":[{"role":"child","target":"node-1","options":{"priority":0},"link":"link-1","parent":"rootNode"},{"role":"parent","target":"node-1","options":{},"link":"link-2"},{"role":"source","target":"feed","options":{},"link":"link-4","value":{"label":"A"}},{"role":"source","target":"feed","options":{},"link":"link-5","value":{"label":"B"}}],"content":"shell"},{"id":"node-2","state":"in-tree","type":"dock","props":{"role":"main","id":"preempt-node-node-2"},"css":{"id":"css-dock"},"children":["node-3"],"anchors":[{"role":"child","target":"node-2","options":{"priority":0},"link":"link-2","parent":"node-1"},{"role":"parent","target":"node-2","options":{},"link":"link-3"},{"role":"target","target":"feed","options":{},"link":"link-6"}]},{"id":"node-3","state":"in-tree","type":"badge","props":{"id":"preempt-node-node-3"},"css":{"id":"css-inner"},"children":[],"anchors":[{"role":"child","target":"node-3","options":{"priority":0},"link":"link-3","parent":"node-2"}],"content":"inner"},{"id":"node-4","state":"in-tree","type":"zone","props":{"id":"preempt-node-node-4"},"css":{"id":"css-zone"},"children":[],"anchors":[{"role":"child","target":"node-4","options":{"priority":1},"link":"link-2","parent":"node-1"},{"role":"placement","target":"slot-alpha","options":{},"link":"link-7"}],"content":"slot"}],"clientConfig":{"adapter":"dom","persistence":false}}</script>
+    <script id="server-data" type="application/json">{"serverTreeSig":"[{\"type\":\"dock\",\"props\":{\"prop:role\":\"main\",\"prop:id\":\"preempt-node-node-2\",\"css:id\":\"css-dock\"},\"children\":\"[{\\\"type\\\":\\\"badge\\\",\\\"props\\\":{\\\"prop:id\\\":\\\"preempt-node-node-3\\\",\\\"css:id\\\":\\\"css-inner\\\",\\\"text\\\":\\\"inner\\\"},\\\"children\\\":\\\"[]\\\"},{\\\"type\\\":\\\"badge\\\",\\\"props\\\":{\\\"prop:id\\\":\\\"preempt-node-node-3\\\",\\\"css:id\\\":\\\"css-inner\\\",\\\"text\\\":\\\"inner\\\"},\\\"children\\\":\\\"[]\\\"}]\"},{\"type\":\"badge\",\"props\":{\"prop:id\":\"preempt-node-node-3\",\"css:id\":\"css-inner\",\"text\":\"inner\"},\"children\":\"[]\"},{\"type\":\"zone\",\"props\":{\"prop:id\":\"preempt-node-node-4\",\"css:id\":\"css-zone\",\"text\":\"slot\"},\"children\":\"[]\"}]","nodeLabels":{"node-1":{"name":"app","type":"app","content":"shell","cssId":"css-app"},"node-2":{"name":"dock","type":"dock","cssId":"css-dock"},"node-3":{"name":"badge","type":"badge","content":"inner","cssId":"css-inner"},"node-4":{"name":"zone","type":"zone","content":"slot","cssId":"css-zone"}},"expectedTree":[{"wire":"node-2","type":"dock","props":{"prop:role":"main","prop:id":"preempt-node-node-2","css:id":"css-dock"},"children":[{"wire":"node-3","type":"badge","props":{"prop:id":"preempt-node-node-3","css:id":"css-inner","text":"inner"},"children":[]},{"wire":"node-3","type":"badge","props":{"prop:id":"preempt-node-node-3","css:id":"css-inner","text":"inner"},"children":[]}]},{"wire":"node-3","type":"badge","props":{"prop:id":"preempt-node-node-3","css:id":"css-inner","text":"inner"},"children":[]},{"wire":"node-4","type":"zone","props":{"prop:id":"preempt-node-node-4","css:id":"css-zone","text":"slot"},"children":[]}],"forkArms":[{"pathKey":"root/node-2#f:node-1#0","feed":{"label":"A"},"trace":["node-1"]},{"pathKey":"root/node-2#f:node-1#1","feed":{"label":"B"},"trace":["node-1"]}]}</script>
+
+    <section>
+      <h2>1 · Input data passed to the browser</h2>
+      <p class="expect">
+        Expected behavior: the server compiles the nested pane and serializes it to this
+        JSON document (<code>template</code> + <code>content</code> +
+        <code>clientConfig</code>). The browser must parse it, re-resolve from the
+        serialized anchors, and produce a valid complete render.
+      </p>
+      <pre id="server-doc" class="doc"></pre>
+    </section>
+
+    <section>
+      <h2>2 · Expected behavior (mirror of the e2e goals)</h2>
+      <ul class="expect-list">
+        <li><strong>SSR-H1 / PAR-5</strong> — the in-browser render tree must be structurally equal to the server render tree (same input ⇒ same output).</li>
+        <li><strong>Fork</strong> — <em>dock</em> consumes <code>feed</code> provided twice at <em>app</em>: two fork arms render as multiple valid states, never a coerced pick.</li>
+        <li><strong>Nesting</strong> — <em>badge</em> renders nested inside <em>dock</em>; <em>zone</em> renders with its placement anchor.</li>
+        <li><strong>SSR-H3 / S4.2</strong> — the client re-resolves from anchors; shipped fork traces are inputs, not conclusions.</li>
+        <li><strong>SSR-H2</strong> — hydration reuses SSR DOM via the <code>css.id</code> seam.</li>
+        <li><strong>SSR-F1</strong> — a tampered shipped fork id is never materialized.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>3 · Expected document tree structure</h2>
+      <p class="expect">
+        Expected behavior: the rendered document tree below is the structure the browser
+        must produce — <em>dock</em> (with both fork arms resolved from <code>feed</code>),
+        its nested <em>badge</em>, and the <em>zone</em> node.
+      </p>
+      <div id="expected-tree" class="tree-view"></div>
+    </section>
+
+    <section>
+      <h2>4 · Rendered document tree (in-browser)</h2>
+      <p class="expect">
+        Expected behavior: the live DOM mount below is produced by applying the render ops
+        through the DOM adapter; the tree dump underneath is walked from the actual
+        rendered elements — proving the HTML rendering succeeded.
+      </p>
+      <div id="mount" class="mount"></div>
+      <div id="rendered-tree" class="tree-view"></div>
+    </section>
+
+    <section>
+      <h2>5 · Fork arms — both candidate resolutions render</h2>
+      <div id="fork-arms" class="fork-arms"></div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+  <script type="module" src="ssr-render.js"></script>
+</body>
+</html>
