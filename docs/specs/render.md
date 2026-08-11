@@ -140,6 +140,8 @@ interface SerializedAnchor {                  // anchors serialize as typed refs
   target: NodeRef | 'rootNode' | 'component' | 'contentNodes' | string // string = referenceName token (notes §10.8.2)
   options: { priority?: number; order?: number }
   link: string                                // Link id
+  value?: unknown                             // provider value (source/duplex) or component binding hint
+  parent?: string                             // child anchors: the parent side's id/token (family edge round-trip)
 }
 
 interface RenderNodeState {                   // render-relevant slice of the compiled state; JSON-safe
@@ -156,6 +158,12 @@ interface RenderNodeState {                   // render-relevant slice of the co
 
 type SerializedRenderDoc = { template: unknown /* TemplateData */; content: unknown[] /* ContentPayload[] */; clientConfig: { adapter: string; persistence: boolean } }
 ```
+
+`serializeSlice(node, kids, clientConfig?)` accepts an optional
+`{ adapter, persistence }` (the translated legacy `run*`-gate mapping is
+preserved); the default is `{ adapter: 'dom', persistence: false }`. Node
+**handlers are runtime-only** — function bodies are not JSON-safe (SER-F1)
+and never appear in the doc; they survive on the live tree (see handlers.md).
 
 Round-trip rules:
 

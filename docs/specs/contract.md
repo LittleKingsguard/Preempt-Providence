@@ -10,16 +10,26 @@ Imports in tests take the form `import { Link } from '../src/core/link.js'`. Mod
 | Module | Exports |
 | --- | --- |
 | `src/core/types.ts` | all shared types |
+| `src/core/constants.ts` | `MAX_COMPILE_DEPTH` (leaf) |
 | `src/core/errors.ts` | error classes |
 | `src/core/link.ts` | `Link`, link factories, `mintLinkId`, default configs |
-| `src/core/node.ts` | `Node`, `mintNodeId`, `MAX_COMPILE_DEPTH`, `Supervisor` |
+| `src/core/node.ts` | `Node`, `mintNodeId`, `findCycle`, `reconcileParentTargets`, re-exports (`Supervisor`, `MAX_COMPILE_DEPTH`, `JournalEntry`, `focusedSliceFor`) |
+| `src/core/supervisor.ts` | `Supervisor`, `JournalEntry`, `focusedSliceFor`, `takePass2States` |
+| `src/core/registry.ts` | node/content registry, sweep, `registerContentNode`, `resolveNodeRef` |
+| `src/core/resolve.ts` | fork/borrow resolution engine (`resolveArms`, `ArmState`, …) |
 | `src/core/ops.ts` | structural-op executors, cycle guard, `CycleError`, state-slice applier |
 | `src/core/pipeline.ts` | `PhaseRegistry`, `PhaseWorker`, `PipelineStage`, `SliceLock`, `MicrotaskQueue`, `RenderMicrotaskQueue` |
 | `src/core/validation.ts` | `TAG_SCHEMAS`, `registerTagSchema`, `validateNode`, `TagSchema` |
 | `src/core/render.ts` | `RenderAdapter`, `MinimalElement`, `diffMinimal`, `RenderOp`, mock adapter |
+| `src/core/adapters.ts` | `DomAdapter`, `SSRFragmentAdapter`, `FragmentDescriptor`, `VOID_TAGS`, `DomAdapterOptions` — requires tsconfig `lib` to include `"DOM"` (DECIDED, adapters.md §5) |
+| `src/core/render-helpers.ts` | `minimalFromState`, `applyOps`, `treeFromOps`, `treeSig`, `jsonClone`, `MinimalElementSource`, `RenderTree` |
 | `src/core/serialize.ts` | JSON round-trip: `serializeNode`, `serializeSlice`, `SerializedAnchor`, `RenderNodeState`, `reResolve` |
 | `src/core/client.ts` | `ClientAPI`, `createClient`, `ExposedState`, `CompileStatus` |
 | `src/core/events.ts` | `EventBridge`, `EventEnvelope`, `PreemptEvent`, `coalesceByTick` |
+| `src/core/handlers.ts` | `HandlerContext`, `dispatchEvent`, `dispatchPhase`, `dispatchPhaseForNodes`, `makeHandlerContext` |
+| `src/core/translate.ts` | legacy NodeSchema → graph (`translateLegacy`) and reverse (`reverseTranslate`) |
+| `src/core/payload.ts` | payload lifecycle: `dropPayload`, `refreshPayload`, `appendToPayload`, `nextPriority` |
+| `src/core/debug.ts` | dev compile-pass logging (`setCompilePassLogging`) |
 
 ---
 
@@ -319,6 +329,90 @@ export class MockAdapter implements RenderAdapter<{ wire: string; type: string }
 }
 ```
 `diffMinimal` implements D1–D5 (create/set/append/remove/styles).
+
+## `src/core/adapters.ts`
+
+Behavior contract: `docs/specs/adapters.md` §3 (`DomAdapter`), §4 (`SSRFragmentAdapter`).
+Requires `tsconfig` `"lib": ["ES2022", "DOM"]` (DECIDED, adapters.md §5 — the implementer
+applies the tsconfig diff in the commit that introduces this module).
+
+```ts
+import type { RenderAdapter } from './render.js'
+import type { NodeRef } from './types.js'
+
+export interface FragmentDescriptor {
+  openTag: string          // '<div id="x">' — regenerated from type + attr map on each setProp
+  closeTag: string         // '</div>' or '' for void
+  contentText: string      // escaped text + serialized children, in emit order
+  isVoid: boolean
+}
+
+export const VOID_TAGS: ReadonlySet<string>  // area base br col embed hr img input link meta param source track wbr
+
+export interface DomAdapterOptions { onEvent?: (wire: NodeRef, event: Event) => void }
+
+export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
+  readonly wires: Map<NodeRef, HTMLElement>   // persistent wire map — applyOps cross-batch resolution source
+  readonly reused: Set<string>                // css.ids collected by hydrate (adapters.md §3.6)
+  constructor(mount: HTMLElement, opts?: DomAdapterOptions)   // throws when no global `document` (DOM-F2)
+  createEl(type: string, wire: NodeRef): HTMLElement
+  setProp(wire: NodeRef, name: string, val: unknown): void
+  appendChild(owner: HTMLElement, child: HTMLElement): void
+  removeEl(wire: NodeRef): void
+  hydrate(rootWire: NodeRef, vdom: unknown): void
+  styles(cssDefs: unknown[]): void
+}
+
+export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, string> {
+  readonly fragments: Map<NodeRef, FragmentDescriptor>
+  readonly styles: string[]
+  createEl(type: string, wire: NodeRef): FragmentDescriptor
+  setProp(wire: NodeRef, name: string, val: unknown): void
+  appendChild(owner: FragmentDescriptor, child: FragmentDescriptor): void
+  removeEl(wire: NodeRef): void
+  hydrate(rootWire: NodeRef, vdom: unknown): void   // no-op: server never hydrates
+  styles(cssDefs: unknown[]): void
+  toString(): string   // stylesPrefix + root fragment html; root = first-created wire (R-ORD-6)
+}
+```
+
+`setProp` namespace dispatch (text / `css:*` / `on:<event>` / `prop:*` / bare), the
+focus-safe form-value writes, `cssDef` style-block coalescing, `onEvent` injection, and
+the DECIDED fail-states (missing-wire no-op, no-`document` guard, duplicate-create
+overwrite) are all adapters.md §3/§4.
+
+## `src/core/render-helpers.ts`
+
+Behavior contract: `docs/specs/adapters.md` §10.3 (HLP-*). No DOM globals — compiles under
+`lib: ["ES2022"]` alone.
+
+```ts
+import type { MinimalElement, RenderAdapter, RenderOp } from './render.js'
+
+export interface MinimalElementSource {
+  nodeId: string
+  type: string
+  props?: Record<string, unknown>
+  css?: Record<string, unknown>
+  content?: unknown
+  children?: string[]
+}
+export interface RenderTree { wire: string; type: string; props: Record<string, unknown>; children: RenderTree[] }
+
+export function minimalFromState(cs: MinimalElementSource): MinimalElement
+export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): void
+export function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => boolean }): RenderTree[]
+export function treeSig(trees: RenderTree[]): string
+export function jsonClone<T>(v: T): T
+```
+
+- `applyOps` dispatches `create`/`set`/`append`/`remove`/`styles`; `append`/`remove`
+  resolve owner/child first from this batch's created map, then from the adapter's
+  persistent `wires` map when it exists (adapters.md §3 `DomAdapter.wires`); a wire in
+  neither is skipped. `styles` ops call `(adapter as { styles?: (d: unknown[]) => void }).styles?.(cssDefs)`.
+- `treeFromOps` folds `set` ops onto props (order-independent) and builds `children` from
+  `append` edges (adapters.md HLP-H8/H9/H12); `treeSig` is the wire-agnostic PAR-5
+  signature; `jsonClone` is `JSON.parse(JSON.stringify(v))`.
 
 ## `src/core/serialize.ts`
 

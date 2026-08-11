@@ -133,4 +133,4 @@ export interface NodeLayer {
 }
 export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[] }
 export interface LinkConfigNameHub { linkFor(name: string, kind: 'component'|'placement'): Link }
-export interface HandlerDef { name: string; body?: (ctx: unknown, ...args: unknown[]) => unknown }
+export interface HandlerDef { name: string; event?: string; phase?: string; body?: (ctx: unknown, ...args: unknown[]) => unknown }

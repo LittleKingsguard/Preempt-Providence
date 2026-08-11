@@ -119,7 +119,7 @@ interface CompileResult {
 
 | Field | Type | Writer (only) | Reader |
 | --- | --- | --- | --- |
-| `id` | `string` | constructor (unique, S3.1) | anyone |
+| `id` | `string` | constructor (unique, S3.1 — exact scope in §4.1) | anyone |
 | `base` | `NodeBaseData` (readonly canon) | constructor | `compileLocal` |
 | `layers` | `NodeLayer[]` — **the canon**, may include `AnchorLayer`s (S-R3.8) | `addLayer`/`removeLayer`/`removeLayersForSource`, only inside a `MutationOp` | `compileLocal` |
 | `anchors` | `readonly Anchor[]` — **reconciled materialization** | `compileLocal` reconcile only — **no independent write path** (S1.3/S-R3.8) | pass-2 walks, getters |
@@ -150,6 +150,29 @@ new Node(data: NodeBaseData, actor: Actor)
 
 There is **no** `parent`/`phase`/`isInTree` constructor argument (legacy
 signature `new Node(item, parent, phase, inTree)` is dead — notes §8.4 #2).
+
+### 4.1 `id` uniqueness (S3.1) — exact guarantee
+
+`mintNodeId()` (node.ts) returns `node-${++nodeSeq}` from a **module-global
+monotonic counter**. What this guarantees, and what it does not:
+
+| Claim | Holds? | Detail |
+| --- | --- | --- |
+| Minted ids are unique **among themselves** | ✅ always | monotonic counter per module instance — two `mintNodeId()` calls never return the same string. |
+| Minted ids are unique **against loaded (seeded) ids** | ⚠️ conditional | a seeded doc carries ids verbatim (`data.id`); the constructor uses `id ?? data.id ?? mintNodeId()` and does **not** advance `nodeSeq` for seeds. New minted ids therefore stay clear of the seeded range **only while `nodeSeq` has not reached the seeded numeric range**. |
+| Cross-process uniqueness (SSR-shared / multi-doc-per-process smoke) | ❌ not free | in the headless smoke every demo module shares ONE module instance (one counter), so a later doc's seeded `node-N` range can be reached by earlier modules' mints — the runtime `rt-*` wire-id convention sidesteps it (feature-matrix `render()` comment; notes §10.10.10). |
+
+**Verified empirically** (probe, same build): a fresh module instance minting
+after loading the shipped feature-matrix doc (seeded `node-31..node-57`) yields
+`node-1..node-5` with zero collisions. The failure mode reproduces only when
+the counter is pre-advanced ~40+ mints into the seeded range (shared-process
+smoke) — then minted ids collide with seeds (`node-46..node-50`). Enforcing
+true uniqueness against arbitrary seed ids would need a full-tree scan or a
+used-ids collection; **the framework does not do this** — it relies on the
+monotonic counter + the loader never resetting it. Consequence for callers:
+treat minted ids as unique **within a document's runtime** in a single-process
+page; for runtime-created nodes in a multi-doc-per-process harness, pass an
+explicit id.
 
 ---
 
@@ -264,7 +287,11 @@ no-op (S-R2.9).
 
 ## 8. Two-pass compile contract (notes §10.8.4 — DECIDED)
 
-`compile(slice, entry)` is the only sanctioned entry point. Pass order is
+`compile(slice, opts?: { focusNodeId? })` is the only sanctioned entry point. Pass order is
+described in §8.1; `opts.focusNodeId` scopes console warnings to one node.
+Pass-2 (incremental updates) is BOUNDED: the slice is the changed node's walk
+path (itself + ancestors + subtree) plus every source-bearing node — never a
+whole-tree recompile (notes §10.8.4, §10.10.4).
 invariant: **pass 1 completes for the whole slice before any pass 2 runs** —
 a batch of local mutations lands before any walk reads them (no half-remote
 views, no mid-op walk).

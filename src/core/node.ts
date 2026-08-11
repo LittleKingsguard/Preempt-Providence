@@ -18,6 +18,7 @@ import { Link } from './link.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
 import { registerNode, scheduleSweep, markPending, resolveNodeRef } from './registry.js'
 import { resolveArms } from './resolve.js'
+import { logCompilePass, compilePassLogEnabled } from './debug.js'
 
 export { MAX_COMPILE_DEPTH }
 
@@ -98,6 +99,7 @@ export class Node {
   private readonly _anchors: Anchor[]
   private readonly _dirty: Set<DirtyScope>
   private readonly hub: LinkConfigNameHub | null
+  private _resolved: CompiledState[] = []
   private pass1: {
     type: string
     props: Record<string, unknown>
@@ -270,6 +272,12 @@ export class Node {
     return this.pathKeyFrom(new Set<NodeId>())
   }
 
+  /** Read-only pass-2 resolved states (compiled by the supervisor's pass-2).
+   *  Returns a fresh shallow copy — callers can never mutate the node's cache. */
+  get resolved(): CompiledState[] {
+    return [...this._resolved]
+  }
+
   private pathKeyFrom(seen: Set<NodeId>): string {
     if (seen.has(this.id)) return this.id
     seen.add(this.id)
@@ -427,10 +435,27 @@ export class Node {
     for (const kid of this.children) kid.compileRemote(visited, depth + 1)
   }
 
-  compile(slice: Node[]): CompileResult {
+  /**
+   * Two-pass compile over a slice. `opts.focusNodeId` scopes CONSOLE warnings
+   * to one node: the slice remains the full resolution universe (bindings
+   * need every provider), but only the focused node's warnings are logged —
+   * atomic pass-2 updates never re-log unrelated nodes (e.g. a dangling
+   * reference elsewhere in the tree).
+   */
+  compile(slice: Node[], opts?: { focusNodeId?: NodeId }): CompileResult {
     const actionable: CompiledState[] = []
     const dropped: CompileResult['dropped'] = []
     const warnings: CompileResult['warnings'] = []
+    const shouldWarn = (node: Node): boolean =>
+      opts?.focusNodeId === undefined || opts.focusNodeId === node.id
+
+    // dev aid: log this pass's node set + derived states (enabled explicitly)
+    if (compilePassLogEnabled()) {
+      logCompilePass(
+        slice.map(n => ({ id: n.id, state: n.state })),
+        opts?.focusNodeId,
+      )
+    }
 
     for (const node of slice) node.compileLocal()
 
@@ -447,7 +472,7 @@ export class Node {
       const kind = kinds.get(node.id)!
       if (kind.kind === 'loop') {
         warnings.push({ code: 'circular-source', pathKey: node.pathKey })
-        console.warn('circular-source at', node.pathKey)
+        if (shouldWarn(node)) console.warn('circular-source at', node.pathKey)
         dropped.push({ arm: [node.id], reason: 'loop' })
         continue
       }
@@ -464,8 +489,14 @@ export class Node {
         continue
       }
       if (kind.kind === 'unplaced') {
-        const selfResolvable = node.anchors.some(a => a.role === 'target' && typeof a.target === 'string')
-        if (selfResolvable) {
+        // not-in-tree nodes are dropped unless they SELF-provide a resolved
+        // name (source/duplex) — the S-R2.6 depth-0 case (self-contained
+        // content nodes). Unplaced pure consumers stay unactionable until
+        // placed (S1.1).
+        const selfProviding = node.anchors.some(a =>
+          (a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string',
+        )
+        if (selfProviding) {
           viable.add(node.id)
         } else {
           dropped.push({ arm: [node.id], reason: 'owner-terminated' })
@@ -494,7 +525,9 @@ export class Node {
     const makeCs = (node: Node): CompiledState => ({
       nodeId: node.id,
       pathKey: node.pathKey,
-      state: 'in-tree',
+      // honest label: derived node state, never hardcoded (S1.1 carve-out
+      // §10.10.4: a self-providing unplaced node compiles as 'unplaced')
+      state: node.state,
       type: node.type,
       props: node.props,
       css: node.css,
@@ -535,7 +568,7 @@ export class Node {
         if (arm.drop) {
           if (arm.drop.reason === 'loop') {
             warnings.push({ code: 'circular-source', pathKey: node.pathKey })
-            console.warn('circular-source at', node.pathKey)
+            if (shouldWarn(node)) console.warn('circular-source at', node.pathKey)
           }
           dropped.push({ arm: [node.id], reason: arm.drop.reason })
           continue
@@ -550,7 +583,7 @@ export class Node {
         if (cs.unresolved.length > 0 && !warnedUnresolved) {
           warnedUnresolved = true
           warnings.push({ code: 'unresolved-reference', pathKey: node.pathKey })
-          console.warn('unresolved-reference at', node.pathKey)
+          if (shouldWarn(node)) console.warn('unresolved-reference at', node.pathKey)
         }
         actionable.push(cs)
       }
@@ -569,6 +602,8 @@ export class Node {
         this.addLayer(makeLayer(id, src, { type: m.value as string }))
       } else if (m.targetProp === 'content') {
         this.addLayer(makeLayer(id, src, { content: m.value }))
+      } else if (m.targetProp === 'handlers') {
+        this.addLayer(makeLayer(id, src, { handlers: m.value as unknown[] }))
       } else if (m.targetProp.startsWith('props.')) {
         const key = m.targetProp.slice('props.'.length)
         this.applyPropSlice(id, key, m.mode, m.value, src)
@@ -604,6 +639,12 @@ export class Node {
   __onLinkDissolve(anchor: Anchor): void {
     if (anchor.role !== 'child') return
     if (this.childAnchor() === null) markPending(this)
+  }
+
+  /** internal — the Supervisor writes pass-2 resolved states here (stored as
+   *  a copy). Never call from app code; read-only via the `resolved` getter. */
+  __setResolved(states: CompiledState[]): void {
+    this._resolved = [...states]
   }
 
   private materializeAnchors(decls: AnchorDecl[]): void {
@@ -704,4 +745,4 @@ export function findCycle(node: Node, dest: Node): boolean {
 
 // Re-exported for compatibility — existing importers use node.js as the
 // public surface (Supervisor/JournalEntry now live in supervisor.ts).
-export { Supervisor, type JournalEntry } from './supervisor.js'
+export { Supervisor, focusedSliceFor, type JournalEntry } from './supervisor.js'

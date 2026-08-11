@@ -256,7 +256,7 @@ class HydrationAdapter implements RenderAdapter<PEl> {
   hydrate(rootWire: string, vdom: unknown): void {
     for (const n of nodesFromDoc(vdom as SerializedRenderDoc)) {
       const cssId = (n.css ?? {}).id
-      if (!cssId) continue
+      if (typeof cssId !== 'string') continue
       const wire = this.bound.get(cssId)
       void rootWire
       if (wire && this.els.has(wire)) {

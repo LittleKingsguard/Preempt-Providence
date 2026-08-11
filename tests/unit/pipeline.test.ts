@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { canonical, SliceLock, MicrotaskQueue, PipelineError, PipelineLockError, type PipelineStage, type RenderMicrotaskQueue, type QueueTask, type PhaseWorker, type EmissionResult } from '../../src/core/pipeline.js'
+import type { RenderOp } from '../../src/core/render.js'
 import { Node } from '../../src/core/node.js'
 import { findCycle } from '../../src/core/node.js'
 import { CycleError } from '../../src/core/errors.js'
@@ -20,7 +21,7 @@ const STAGES: PipelineStage[] = [
   'postprocessing',
 ]
 
-const emitted = (renderOps: unknown[] = []): EmissionResult => ({ kind: 'emitted', renderOps })
+const emitted = (renderOps: RenderOp[] = []): EmissionResult => ({ kind: 'emitted', renderOps })
 const dropped = (reason: string): EmissionResult => ({ kind: 'dropped', reason } as EmissionResult)
 const forwarded = (to: PipelineStage): EmissionResult => ({ kind: 'forwarded', to })
 const deferredResult = (): EmissionResult => ({ kind: 'deferred' })
@@ -216,7 +217,7 @@ describe('PhaseWorker — uniform contract (§2)', () => {
       try {
         res = w.emission(n, ctxFor(root, lock)) as EmissionResult
       } catch (e) {
-        for (const t of ctxFor(root, lock, (node) => errors.push(node.id)).telemetry) t.onError(n, e)
+        for (const t of ctxFor(root, lock, (node) => errors.push(node.id)).telemetry) t.onError?.(n, e)
         res = dropped('validation-failed')
       }
       kinds.push(res.kind)
@@ -240,7 +241,7 @@ describe('PhaseWorker — uniform contract (§2)', () => {
     try {
       w.emission(n, ctxFor(root, lock)) as EmissionResult
     } catch (e) {
-      for (const t of ctxFor(root, lock, (node) => caught.push(node.id)).telemetry) t.onError(n, e)
+      for (const t of ctxFor(root, lock, (node) => caught.push(node.id)).telemetry) t.onError?.(n, e)
     }
     expect(caught).toContain('nx')
   })
@@ -613,7 +614,7 @@ describe('Fail-states F1..F20 (§8.2)', () => {
     try {
       w.emission(n, ctxFor(root, lock)) as EmissionResult
     } catch (e) {
-      for (const t of ctxFor(root, lock, (node) => caught.push(node.id)).telemetry) t.onError(n, e)
+      for (const t of ctxFor(root, lock, (node) => caught.push(node.id)).telemetry) t.onError?.(n, e)
     }
     expect(caught).toEqual(['nx'])
     expect(() => canonical.getWorker('elementCreation')).not.toThrow()

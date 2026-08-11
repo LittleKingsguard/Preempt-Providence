@@ -579,3 +579,148 @@ Round-4 reviewer compared the 7 parallel-written `docs/specs/*.md` against canon
 | S-R4.3 | **Unresolved-reference disposition**: if the compile still produces a **viable state**, **log a warning and render the node's own state anyway** — the node is not dropped and not hidden; the unresolved binding is simply absent and flagged. |
 
 (TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)
+## 10.10 Feature-completeness decisions (S5 phase) — DECIDED
+
+Feature-gap work closing the original-project parity holes found in the
+sanity checks: legacy data schemas, event handlers, phase handlers. Each
+carries a `DECIDED:` record; reviewers verify against these + the specs.
+
+### 10.10.1 Legacy schema translation layer (DECIDED)
+
+- **DECIDED:** the rebuild keeps its own anchors-first serialized node shape
+  (`id` + `anchors[]` typed refs; children derived, never stored). Original
+  `/Preempt` NodeSchema JSON is therefore translated AT THE BOUNDARY, not
+  parsed directly: `src/core/translate.ts` maps
+  `TemplateData/ContentPayload/NodeData/ComponentBinding/PlacementConfig/
+  HandlerDef/run* gates` onto live nodes (component binding → `target`
+  anchor, placement config → `placement` anchor, children arrays → parent-
+  child anchors in array order, handlers carried on the node, `run*` gates →
+  `{adapter,persistence}`).
+- **DECIDED:** the root node stores its OWN default children
+  (`template.root.children`, attached in-tree via parent-child anchors).
+  `template.children` and content-payload items are the **UNPLACED content
+  nodes** — translated with NO parent anchor (awaiting placement), returned
+  in `TranslatedTree.content`; payload `metadata`/`userData` surface on the
+  translated result (first payload wins), not on nodes. Content nodes stay
+  dropped from compile (S1.1) until attached into a placement zone.
+- **DECIDED:** the translated tree is a normal graph — it compiles, forks,
+  and serializes through the existing pipeline; no legacy code path survives
+  past translation (PAR-4).
+
+### 10.10.2 Event handlers (DECIDED)
+
+- **DECIDED:** `HandlerDef` gains `event?` and `phase?`; a node's compiled
+  `handlers` are dispatched by `dispatchEvent(node, ctx, event, ...args)`
+  (event OR name match) and `dispatchPhase(node, ctx, phase)`.
+- **DECIDED:** the handler context (`makeHandlerContext(supervisor,
+  clientAPI)`) exposes exactly the managed channel `ctx.clientAPI` (apply/
+  getState), the supervisor, and tree search: `getNode`, `allNodes`,
+  `ancestorsOf`, `descendantsOf`.
+- **DECIDED:** handler bodies that throw are CONTAINED — the error is
+  returned in the result list, never propagated into compile/render (same
+  containment policy as PhaseWorker per-node errors).
+- **DECIDED:** a component may provide a phase/event handler as its source
+  value; the consumer wires the component-provided handler onto its own
+  handler list (component defs carry behavior), and the after-compile phase
+  dispatches it once the consumer compiles — e.g. a user-info panel whose
+  provider resolves a handler that populates its descendants (welcome text /
+  login button) from session state.
+
+### 10.10.3 Phase-based handlers (DECIDED)
+
+- **DECIDED:** three pipeline phases, minimum:
+  - `before-compile` — dispatched in `Supervisor.apply` on the op node
+    BEFORE the op executes (observes the pre-op state);
+  - `after-compile` — dispatched in the pass-2 flush immediately after
+    `compile(slice)`, BEFORE any state/diagnostic events are pushed
+    ("after compile / before render");
+  - `after-render` — dispatched after the tick's events have flushed
+    (destroyed nodes skip).
+- **DECIDED:** ordering within one apply+flush cycle is strictly
+  `before-compile → after-compile → state-event(s) → after-render`;
+  `Supervisor.runPhase(phase, nodeId?)` also allows manual dispatch (single
+  node or all registered).
+- **DECIDED:** the pass-2 (compile + `after-compile` + `after-render`) runs
+  regardless of whether an EventBridge is attached — only the event
+  push/flush is gated on `events`.
+
+### 10.10.4 S1.1 carve-out — self-providing unplaced nodes (DECIDED)
+
+- **DECIDED:** S1.1 (not-in-tree ⇒ no usable state) is carved out ONLY for
+  nodes that self-provide a resolved referenceName (`source`/`duplex`
+  anchor): such unplaced content nodes resolve depth-0 (S-R2.6) and yield a
+  compiled state. Pure consumers (target-only) stay dropped until placed.
+- **DECIDED:** `CompiledState.state` reflects the node's DERIVED state
+  (`node.state`), never a hardcoded `'in-tree'` — a self-providing unplaced
+  node compiles with `state: 'unplaced'`, keeping the label honest.
+- **DECIDED:** pass-2 is BOUNDED (render.md §4): for an atomic update the
+  compile slice is the changed node's walk path — itself, its ancestor
+  chain, its subtree — plus every source/duplex-bearing node (the fallback
+  universe for prototype/owner-terminated arms). Resolution walks are
+  graph-based (own → descendants → ancestors), so unrelated nodes are
+  neither recompiled nor re-flagged; `compile(slice, { focusNodeId })`
+  additionally scopes console warnings to the changed node, so a dangling
+  reference elsewhere in the tree is never re-logged by unrelated updates.
+- **DECIDED (payload drop semantics, origin-aware):** the root node and the
+  content/component arrays are the SOURCES OF TRUTH for graph access.
+  Payload-owned nodes are registered (`registerContentNode` in registry.ts);
+  while owned, an unplaced or placement-detached content node PERSISTS in the
+  background (placement may return) — the sweep skips content nodes. Dropping
+  a payload unregisters its roots, so even PLACED content is destroyed with
+  it. Handler-created nodes (no payload basis) are discarded once they lose
+  root visibility (detach → sweep destroy). An explicit `destroy` op
+  unregisters content too, so it finalizes.
+- **DECIDED (dev aid):** `src/core/debug.ts` provides a gated
+  compile-pass logger (`setCompilePassLogging(true)`, off by default). Each
+  `compile(slice)` pass prints one `[compile]` info line with the processed
+  node ids + derived states (+ `focus=` when focused), so dirty-node
+  isolation is verifiable in the browser console — the demo page enables it
+  and exposes `window.setCompilePassLogging` for toggling.
+- **DECIDED (incremental render):** the demo's re-render never compiles
+  after bootstrap. `Supervisor.takePass2States()` hands the renderer the
+  `CompiledState`s pass-2 already produced (grouped per node, fork arms
+  preserved; a later dirty node's compile REPLACES the walk-path copy an
+  ancestor's pass produced). With the flush awaited, every dirty node's
+  compile has resolved — the renderer merges the fresh states into a
+  per-node cache and diffs the element set, without a single render-side
+  compile. The only full-depth compile is the bootstrap pass; every update
+  is a 3–7-node focused pass, each node compiled exactly once.
+- **DECIDED (in-place render, focus retention):** updates to a rendered
+  element never destroy/replace it — `diffMinimal` emits only `set` ops for
+  changed props on existing wires (D4), never `create`/`remove`. The
+  markdown editor → display e2e/demo pins this: typing updates the editor
+  source and the display's after-compile handler re-parses `**bold**` into
+  structured nodes, asserting element-object identity across renders (a
+  replaced element would lose focus). Form elements take `text` through
+  `.value` (focus-safe), and `on:<event>` bindings forward the real DOM
+  event object — the demo maps `domEvent.type` to the `HandlerDef.event`
+  name and `domEvent.target.value` to the handler arg (earlier bug: the
+  event OBJECT was passed as the event name, so real typing/clicks never
+  matched a handler).
+- **DECIDED (feature-matrix emission, PAR-5 shared emit):** the feature-matrix
+  page and the server builder share ONE emitter (`demo/lib/feature-matrix-emit.js`)
+  so in-browser render data ≡ server render data. Fork arms are wired
+  `<nodeId>#<i>`; a parent whose `childOrder` references a forked node id
+  adopts the arm wires (in arm order) so `diffMinimal` attaches every arm.
+  Elaboration (feature-matrix-review.md §4.1): a forked node NEVER emits an
+  element for its base id `node-X` — only the `<nodeId>#<i>` arms, all leaves.
+  The emitter MUST expand a forked-child reference in a parent's `childOrder`
+  into the arm wires in arm order; leaving the base id would make `diffMinimal`
+  look for a wire that no element creates and silently attach no arm (the
+  original "fork arms not rendered" bug). The parent adopts ALL arms as direct
+  children (no per-fork wrapper element); adopting exactly ONE arm via a
+  `#<i>`-specific reference is NOT supported by the emit layer.
+  Parity compares emission minus `on:*` bindings (handler wiring is
+  runtime-only, SER-F1). Runtime-created demo nodes (websocket append,
+  refreshed article) use explicit wire ids (`rt-*`) — `mintNodeId()` is a
+  process-global counter, so in the headless smoke (all demo modules in one
+  process) it could collide with seeded serialized wires (uniqueness scope
+  verified + documented in node.md §4.1).
+- **DECIDED (demo applyOps is cross-batch):** `demo/lib/render-ops.js`
+  `applyOps` resolves an append's owner/child (and removes) from the
+  adapter's persistent `wires` map when not created in the current op batch —
+  incremental diffs re-append to elements created in earlier renders, and the
+  headless `El` shim mirrors real-DOM move semantics + parent detach on
+  `remove()` so dropped payload wires leave the DOM.
+
+(TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)

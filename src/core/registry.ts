@@ -11,6 +11,25 @@ export const registered = new Set<Node>()
 const pendingDestroy: Node[] = []
 let sweepScheduled = false
 
+// Origin tracking: content/component nodes owned by payload arrays are the
+// source of truth for graph accessibility (besides the root + template).
+// They PERSIST in the background while unplaced (placement may return);
+// handler-created nodes (no basis in root/payload arrays) are discarded once
+// they lose root visibility.
+const contentNodes = new Set<Node>()
+
+export function registerContentNode(node: Node): void {
+  contentNodes.add(node)
+}
+
+export function unregisterContentNode(node: Node): void {
+  contentNodes.delete(node)
+}
+
+export function isContentNode(node: Node): boolean {
+  return contentNodes.has(node)
+}
+
 // id -> most recently constructed node; used to resolve serialized parent refs
 const byId = new Map<NodeId, Node>()
 
@@ -39,6 +58,7 @@ function runSweep(): void {
   for (const node of batch) {
     if (node.destroyed) continue
     if (node.state === 'in-tree' || node.state === 'prototype') continue
+    if (isContentNode(node)) continue // payload-owned content persists (placement may return)
     finalizeDestroyed(node)
   }
   // pass-2: coalesced compileRemote over the union of 'remote'-dirty nodes.
@@ -78,6 +98,7 @@ function finalizeDestroyed(node: Node): void {
   node.dirty.add('sweep-candidate')
   for (const kid of node.children) {
     if (kid.destroyed) continue
+    if (isContentNode(kid)) continue // a payload-owned descendant survives its tree owner
     if (kid.state === 'in-tree' || kid.state === 'prototype') continue
     finalizeDestroyed(kid)
   }

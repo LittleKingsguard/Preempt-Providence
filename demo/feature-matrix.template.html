@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Feature Matrix</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <!--
+    ============================================================================
+    FEATURE MATRIX DEMO — every framework surface in one document.
+
+    First authored from documentation only (docs/skills/designing-pages.md +
+    docs/specs/*.md + RENDER_PROCESS_NOTES §10). A review sub-agent compared it
+    against the real implementation; the corrections made (and why) are listed
+    in docs/DEMO-FEEDBACK.md and summarized next to each assumption below.
+
+    The page exercises, in one document: placements (content/comments zones),
+    components (session + theme forks), event + phase handlers (session
+    populate, markdown render), managed updates (ClientAPI.apply — journaled),
+    in-place render with focus retention (markdown), payload lifecycle
+    (drop/refresh/append), reverse translation, loop-safety (circular-source
+    arm drop), compile-pass logging, and SSR-parity data (PAR-5).
+
+    HOW THE PAGE IS BUILT (scripts/build-demo.mjs → demo/feature-matrix-fixture.js):
+      1. translateLegacy(demoData) builds the live graph from the legacy
+         envelope below.
+      2. The harness completes the graph with the two things legacy data
+         cannot express:
+           - component SOURCE anchors (session, theme ×2, loop providers) —
+             legacy `component.reference` is always a TARGET (consumer) anchor
+             (translate.md §2). [ASSUME-1 CORRECTED: `template.component` is
+             the ROOT's own target binding, NOT a provider.]
+           - placement ATTACH: content roots are placed into their zones by
+             adding parent-child anchors on the zones' family links. Content
+             nodes never auto-attach — unplaced content stays out of the tree
+             until attach/payload ops (translate.md §2, payload.md P-*).
+             [ASSUME-2 CORRECTED: the original draft assumed placement borrow
+             auto-attaches on compile.]
+      3. compile → diffMinimal → serializeSlice → the shipped
+         `preempt-initial-data` document; the browser re-resolves from the
+         serialized anchors (S4.2) and re-renders.
+
+    CORRECTED AUTHORING FINDINGS (see docs/DEMO-FEEDBACK.md for file:line detail):
+      F1  'template.component' is a target anchor on the root, not a provider.
+          The pane would otherwise never resolve 'session'. Fix: harness adds
+          the real source anchor.
+      F2  Content nodes with placement: { placementName: 'theme' } do NOT act
+          as component sources; placements and components are orthogonal.
+          Fork providers must be real source/duplex anchors. Fix: root sources
+          'theme' ×2 (FRK-H2) instead of a theme content payload.
+      F3  Loop safety trips on the borrow-walk/ancestry cycles and depth caps
+          (S-R2.5/F11), NOT on sibling-provider pairs — siblings are outside a
+          node's resolution scope (own → descendants → ancestors). The draft's
+          sibling A⇄B 'circular' pair would just be unresolved. Fix: an
+          ancestry resolution cycle (loop-cycle ⇄ loop-nest) that genuinely
+          re-enters the walk.
+      F4  Fork arms: N providers render N arms for EACH consumer (FRK-H2) —
+          never one arm per consumer. The draft's "fork-a → dark, fork-b →
+          light" implied a coerced pick. Fix: both consumers render both arms.
+      F5  Markdown display re-parses **bold** into structured nodes via an
+          after-compile handler (markdown-display e2e/demo T8); the draft's
+          expected DOM showed the raw text. Fix: structured parts + corrected
+          expected DOM.
+      F6  css.id is the hydrate seam and wins over props.id on the root
+          element (adapter behavior); class= comes from css.classes, not
+          css.id. Corrected expected DOM reflects this.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>Feature Matrix — one document, every framework surface</h1>
+    <p class="goals">
+      Legacy <code>preempt-initial-data</code> → <code>translateLegacy</code> →
+      compile → serialize (server, embedded below) → re-resolve (S4.2) →
+      compile → diff → DOM (client). The smoke expectations are embedded in
+      <code>server-data</code>; the page asserts them in-browser (PAR-5
+      parity, fork arms, loop drop, placements, payload ops, reverse
+      translation).
+    </p>
+
+    <!-- Framework input: the SSR snapshot document (render.md §5). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section>
+      <h2>1 · Rendered feature matrix (live DOM)</h2>
+      <p class="expect">
+        Every element below is framework-rendered: placements, the session
+        pane (component + after-compile handler + click events), the markdown
+        editor → display (in-place), the two theme fork consumers (2 arms
+        each), and the loop probe (circular-source arm dropped, siblings
+        survive).
+      </p>
+      <div id="app"></div>
+    </section>
+
+    <section>
+      <h2>2 · Server reference document embedded with the page</h2>
+      <pre id="server-doc" class="doc"></pre>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="feature-matrix.js"></script>
+</body>
+</html>

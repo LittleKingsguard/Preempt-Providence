@@ -117,16 +117,29 @@ partial state (S1.1). "Unplaced but chain reaches a permanent owner" is not "usa
 
 Handlers receive `context.clientAPI` and mutate **only** through it. A handler never
 touches node fields, never calls `receiveNextState` (absorbed), never names a phase
-numerically.
+numerically. The context shape and dispatch contract are owned by
+`docs/specs/handlers.md`; the implemented context is:
 
 ```ts
 interface HandlerContext {
   clientAPI: ClientAPI     // sole mutation channel
-  node: NodeRef            // the node the handler is bound to
-  event?: Event            // DOM event for event handlers
+  supervisor: Supervisor   // journal / phases / registration
+  tree: { getNode; allNodes; ancestorsOf; descendantsOf }
 }
 type HandlerBody = (ctx: HandlerContext, ...args: unknown[]) => void
 ```
+
+**Read access (handlers.md §2.1):** `ctx.tree.getNode(id)` returns the live
+`Node`; its value getters (`type`/`props`/`css`/`content`/`handlers`) read the
+node's **compiled pass-1 state** (always fresh — every mutation path runs
+`compileLocal` synchronously, node.md §5). This is the sanctioned read channel;
+writes still go exclusively through `clientAPI.apply`. Pass-2 **resolved**
+values (component `bindings`/fork arms) are not exposed on `Node` today —
+`clientAPI.getState` returns surface only (`nodeId`/`status`/`pathKey`/`state`);
+see handlers.md §2.1 TODO(code) for exposing them read-only.
+
+(`node` and `event` reach the body as dispatch args — `dispatchEvent(node, ctx,
+event, ...args)`; event handlers are matched by `event`/`name`.)
 
 | # | Contract rule | Ref |
 | --- | --- | --- |

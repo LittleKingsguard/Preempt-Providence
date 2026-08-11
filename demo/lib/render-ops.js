@@ -21,13 +21,15 @@ export function applyOps(adapter, ops) {
         adapter.setProp(op.wire, op.name, op.value)
         break
       case 'append': {
-        const owner = els.get(op.owner)
-        const child = els.get(op.child)
+        // owner may have been created in an earlier diff — resolve from the
+        // adapter's persistent wire map when not in this batch.
+        const owner = els.get(op.owner) ?? adapter.wires.get(op.owner)
+        const child = els.get(op.child) ?? adapter.wires.get(op.child)
         if (owner && child) adapter.appendChild(owner, child)
         break
       }
       case 'remove': {
-        const w = els.get(op.wire)
+        const w = els.get(op.wire) ?? adapter.wires.get(op.wire)
         if (w && adapter.removeEl) adapter.removeEl(op.wire)
         els.delete(op.wire)
         break

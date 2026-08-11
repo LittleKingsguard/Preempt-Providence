@@ -15,9 +15,18 @@ import { loadState } from '../dist/core/serialize.js'
 import { createClient } from '../dist/core/client.js'
 import { EventBridge } from '../dist/core/events.js'
 import { Supervisor } from '../dist/core/node.js'
+import { dispatchEvent } from '../dist/core/handlers.js'
+import { setCompilePassLogging } from '../dist/core/debug.js'
 import { hub } from './demo-fixtures.js'
 import { DomAdapter } from './lib/dom-adapter.js'
 import { applyOps, jsonClone } from './lib/render-ops.js'
+
+// dev aid: log every compile pass (node ids + states) so dirty-node
+// isolation is verifiable in the console — incremental pass-2s list only the
+// focused walk path + providers, never unrelated nodes. Toggle anytime:
+// window.setCompilePassLogging(false)
+setCompilePassLogging(true)
+globalThis.setCompilePassLogging = setCompilePassLogging
 
 const initialData = JSON.parse(document.getElementById('preempt-initial-data').textContent)
 const serverData = JSON.parse(document.getElementById('server-data').textContent)
@@ -27,15 +36,149 @@ const byName = {}
 for (const [id, l] of Object.entries(labels)) byName[l.name] = id
 
 const rootEl = document.getElementById('root')
-const adapter = new DomAdapter(rootEl)
+const adapter = new DomAdapter(rootEl, { onEvent: handleDomEvent })
 
 // ---- reconstruct the graph from the shipped document (S4.2) --------------
 const seeded = loadState(jsonClone(initialData)).map((d) => new Node(d, hub()))
 reconcileParentTargets(seeded)
+const wireToNode = new Map(seeded.map((n) => [n.id, n]))
 const events = new EventBridge()
 const supervisor = new Supervisor({ hub: hub(), events })
 for (const n of seeded) supervisor.registerNode(n)
 const clientAPI = createClient(supervisor)
+const ctx = supervisor.handlerContext
+
+// ---- user pane: session + component-provided after-compile handler --------
+// The `user-panel` component (source on root) resolves on the pane; the
+// after-compile handler (wired here from the resolved component) populates
+// the pane's descendants from session state. Login/logout are mock buttons
+// driven by the pane's own event handlers.
+const predefinedUser = { name: 'Ada Lovelace' }
+const session = { loggedIn: false, user: predefinedUser }
+let tick = 0
+
+const paneId = byName['user-pane']
+const usernameId = byName['username']
+const statusId = byName['status']
+const loginId = byName['login']
+const logoutId = byName['logout']
+
+const paneNode = wireToNode.get(paneId)
+const loginNode = wireToNode.get(loginId)
+const logoutNode = wireToNode.get(logoutId)
+
+const populateHandler = {
+  name: 'user-panel:populate',
+  phase: 'after-compile',
+  body: (c) => {
+    if (session.loggedIn) {
+      c.clientAPI.apply(usernameId, [{ targetProp: 'content', mode: 'replace', value: `Welcome, ${session.user.name}` }])
+      c.clientAPI.apply(statusId, [{ targetProp: 'content', mode: 'replace', value: 'Signed in' }])
+    } else {
+      c.clientAPI.apply(usernameId, [{ targetProp: 'content', mode: 'replace', value: 'You are signed out' }])
+      c.clientAPI.apply(statusId, [{ targetProp: 'content', mode: 'replace', value: 'Signed out' }])
+    }
+  },
+}
+paneNode.addLayer({ id: 'user-handler', handlers: [populateHandler] })
+loginNode.addLayer({
+  id: 'login-handler',
+  handlers: [
+    {
+      name: 'login',
+      event: 'click',
+      body: () => {
+        session.loggedIn = true
+        session.user = predefinedUser // mock login: show the predefined user
+        return clientAPI.apply(paneId, [{ targetProp: 'props.tick', mode: 'replace', value: ++tick }])
+      },
+    },
+  ],
+})
+logoutNode.addLayer({
+  id: 'logout-handler',
+  handlers: [
+    {
+      name: 'logout',
+      event: 'click',
+      body: () => {
+        session.loggedIn = false
+        return clientAPI.apply(paneId, [{ targetProp: 'props.tick', mode: 'replace', value: ++tick }])
+      },
+    },
+  ],
+})
+
+// ---- markdown editor → display window -------------------------------------
+// Typing updates the editor source; the display's after-compile handler
+// parses **bold** into a strong element. The editor element is NEVER
+// replaced (in-place diff + .value writes), so focus is retained while
+// typing.
+const editorId = byName['editor']
+const displayId = byName['display']
+const part0Id = byName['part-0']
+const part1Id = byName['part-1']
+const part2Id = byName['part-2']
+
+const editorNode = wireToNode.get(editorId)
+const displayNode = wireToNode.get(displayId)
+
+/** POC markdown: split on the first **bold** pair into prefix/bold/suffix. */
+function parseBold(md) {
+  const m = /^(.*?)\*\*([^*]+)\*\*(.*)$/.exec(String(md ?? ''))
+  if (!m) return { prefix: String(md ?? ''), bold: '', suffix: '' }
+  return { prefix: m[1], bold: m[2], suffix: m[3] }
+}
+
+const mdRenderHandler = {
+  name: 'markdown:render',
+  phase: 'after-compile',
+  body: (c) => {
+    const src = String(c.tree.getNode(editorId)?.content ?? '')
+    const { prefix, bold, suffix } = parseBold(src)
+    c.clientAPI.apply(part0Id, [{ targetProp: 'content', mode: 'replace', value: prefix }])
+    c.clientAPI.apply(part1Id, [{ targetProp: 'content', mode: 'replace', value: bold }])
+    c.clientAPI.apply(part2Id, [{ targetProp: 'content', mode: 'replace', value: suffix }])
+  },
+}
+displayNode.addLayer({ id: 'md-handler', handlers: [mdRenderHandler] })
+
+editorNode.addLayer({
+  id: 'input-handler',
+  handlers: [
+    {
+      name: 'input',
+      event: 'input',
+      body: (c, value) => {
+        const v = String(value ?? '')
+        c.clientAPI.apply(editorId, [{ targetProp: 'content', mode: 'replace', value: v }])
+        c.clientAPI.apply(displayId, [{ targetProp: 'props.tick', mode: 'replace', value: ++tick }])
+      },
+    },
+  ],
+})
+
+function flushMicrotasks() {
+  const waits = []
+  for (let i = 0; i < 4; i += 1) waits.push(new Promise((r) => setTimeout(r, 0)))
+  return Promise.all(waits)
+}
+
+/** Browser event → dispatch the node's handlers (with the input value when
+ *  the event came from a form element), then re-render through the framework.
+ *  The adapter hands us the DOM event object; the event NAME is its `.type`
+ *  ('input', 'click', …) — matching `HandlerDef.event`. */
+async function handleDomEvent(wire, domEvent) {
+  const node = wireToNode.get(wire)
+  if (!node) return
+  const eventName = domEvent && typeof domEvent === 'object' && typeof domEvent.type === 'string'
+    ? domEvent.type
+    : String(domEvent ?? '')
+  const extra = domEvent && domEvent.target && typeof domEvent.target.value === 'string' ? [domEvent.target.value] : []
+  dispatchEvent(node, ctx, eventName, ...extra)
+  await flushMicrotasks() // pass-2 → after-compile population
+  render()
+}
 
 // ---- component expansion (emission layer) --------------------------------
 /**
@@ -43,6 +186,8 @@ const clientAPI = createClient(supervisor)
  * - A state whose 'panel' target resolved: the component reference drives the
  *   element TYPE and populates DESCENDANT nodes from the definition; each
  *   child's value comes from its SOURCE reference binding.
+ * - The user pane resolves the 'user-panel' component → after-compile handler
+ *   label; its buttons carry `on:click` bindings dispatched by the adapter.
  * - Placement states render their resolution label.
  * - Every element carries a label describing the resolution it follows.
  */
@@ -75,31 +220,34 @@ function expandState(state, armIdx) {
 
   const placement = state.anchors.find((a) => a.role === 'placement')
   const unresolved = state.unresolved.length > 0
+  const userPanel = state.bindings['user-panel']
+  const node = wireToNode.get(state.nodeId)
+  const eventHandlers = node ? (node.handlers ?? []).filter((h) => h && typeof h.event === 'string') : []
   const props = { 'css:classes': classes }
   if (state.content !== undefined) props['text'] = state.content
   if (placement) props['prop:data-resolution'] = `placement:${placement.target}`
   if (unresolved) props['prop:data-resolution'] = 'component:missing → unresolved-reference'
-  els.push({ wire: state.nodeId, type: state.type, props, childOrder: [`${state.nodeId}:label`] })
+  if (userPanel) props['prop:data-resolution'] = 'component:user-panel → after-compile handler'
+  for (const h of eventHandlers) props[`on:${h.event}`] = true
+  els.push({ wire: state.nodeId, type: state.type, props, childOrder: [...state.children, `${state.nodeId}:label`] })
   const labelText = placement
     ? `placement: ${placement.target}`
     : unresolved
       ? 'component: missing → unresolved-reference (own content still renders)'
-      : classes.includes('test-item')
-        ? 'content node · test (goal updated by the pipeline)'
-        : 'content node'
+      : userPanel
+        ? 'component: user-panel — after-compile handler populates descendants'
+        : eventHandlers.length
+          ? `on:${eventHandlers.map((h) => h.event).join(', on:')} → ${eventHandlers.map((h) => h.name).join(', ')} (mock session)`
+          : classes.includes('test-item')
+            ? 'content node · test (goal updated by the pipeline)'
+            : 'content node'
   label(state.nodeId, labelText)
   return els
 }
 
-function buildElements(cr) {
-  const byNode = new Map()
-  for (const s of cr.actionable) {
-    const arr = byNode.get(s.nodeId) ?? []
-    arr.push(s)
-    byNode.set(s.nodeId, arr)
-  }
+function buildElementsFrom() {
   const els = []
-  for (const states of byNode.values()) {
+  for (const states of prevStates.values()) {
     states.forEach((s, i) => {
       els.push(...expandState(s, states.length > 1 ? i : 0))
     })
@@ -107,19 +255,43 @@ function buildElements(cr) {
   return els
 }
 
+function setStates(actionable) {
+  const byNode = new Map()
+  for (const s of actionable) {
+    const arr = byNode.get(s.nodeId) ?? []
+    arr.push(s)
+    byNode.set(s.nodeId, arr)
+  }
+  for (const [id, states] of byNode) prevStates.set(id, states)
+}
+
+/** Incremental render: consume the supervisor's pass-2 compiled states
+ *  (the flush was awaited, so every dirty node's compile has resolved) and
+ *  merge them into the cached state set — no render-side compile. */
+let prevStates = new Map()
 let prevMap = null
-let cr = null
+let bootstrapped = false
 function render() {
   const rootNode = seeded[0]
+  // bootstrap (first full compile) logs compile warnings — e.g. node-7's
+  // dangling-reference warning fires ONCE on load (S-R4.3). Incremental
+  // re-renders stay silent: their warnings are scoped to the pass-2 focus.
   const silent = console.warn
-  console.warn = () => {}
-  cr = rootNode.compile(seeded)
+  if (bootstrapped) console.warn = () => {}
+  if (!bootstrapped) {
+    const cr = rootNode.compile(seeded)
+    setStates(cr.actionable)
+  } else {
+    const fresh = supervisor.takePass2States()
+    for (const [id, arr] of fresh) prevStates.set(id, arr)
+  }
   console.warn = silent
-  const els = buildElements(cr)
+  bootstrapped = true
+  const els = buildElementsFrom()
   const ops = diffMinimal(prevMap, els)
   applyOps(adapter, ops)
   prevMap = new Map(els.map((e) => [e.wire, e]))
-  return { cr, els }
+  return { els }
 }
 
 function nodeText(wire) {
@@ -127,7 +299,18 @@ function nodeText(wire) {
   return el ? el.textContent : ''
 }
 
+/** Merged compiled states for a node (bootstrap + incremental recompiles). */
+function statesOf(id) {
+  return prevStates.get(id) ?? []
+}
+
 async function main() {
+  // initial population: trigger pass-2 once so the pane's after-compile
+  // handler runs (component-provided) and the display parses **bold**
+  // before the first paint
+  clientAPI.apply(paneId, [{ targetProp: 'props.init', mode: 'replace', value: true }])
+  clientAPI.apply(displayId, [{ targetProp: 'props.init', mode: 'replace', value: true }])
+  await flushMicrotasks()
   render()
 
   const panelId = byName['panel']
@@ -151,10 +334,24 @@ async function main() {
     return n
   }
 
+  const warnCountAsync = async (fn) => {
+    let n = 0
+    const o = console.warn
+    console.warn = () => {
+      n++
+    }
+    try {
+      await fn()
+    } finally {
+      console.warn = o
+    }
+    return n
+  }
+
   const checks = [
     {
       run: () => {
-        const arms = cr.actionable.filter((s) => s.nodeId === panelId)
+        const arms = statesOf(panelId)
         if (arms.length !== 2) throw new Error(`expected 2 panel arms, got ${arms.length}`)
         if (!arms.every((a) => a.bindings['panel']?.type === 'section')) throw new Error('resolved panel type missing')
         const p0 = adapter.wires.get(`${panelId}#0`)
@@ -188,19 +385,91 @@ async function main() {
       },
     },
     {
-      run: () => {
-        const warns = warnCount(() => seeded[0].compile(seeded))
+      run: async () => {
+        // count the warning through the framework's own focused pass-2
+        // (the supervisor compiles the intro node, scoped + non-silent)
+        const warns = await warnCountAsync(async () => {
+          const introNode = wireToNode.get(introId)
+          if (!introNode) return
+          clientAPI.apply(introId, [{ targetProp: 'props.probe', mode: 'replace', value: 'x' }])
+          await flushMicrotasks()
+        })
         if (warns === 0) throw new Error('expected an unresolved-reference warning')
-        const introState = cr.actionable.find((s) => s.nodeId === introId)
+        const introState = statesOf(introId)[0]
         if (!introState?.unresolved?.length) throw new Error('intro should be unresolved')
         if (!nodeText(introId).includes(introContent)) throw new Error('intro own content not rendered')
       },
     },
     {
       run: () => {
-        const arms = cr.actionable.filter((s) => s.nodeId === panelId)
+        const arms = statesOf(panelId)
         if (arms.length !== 2) throw new Error(`expected 2 arms, got ${arms.length}`)
         if (new Set(arms.map((a) => a.pathKey)).size !== 2) throw new Error('fork arms not distinct')
+      },
+    },
+    {
+      // T7 — user pane: component-provided after-compile handler populates
+      // descendants; mock login shows the predefined user; logout clears it
+      run: async () => {
+        const paneState = statesOf(paneId)[0]
+        if (!paneState?.bindings['user-panel']) throw new Error('user-panel component did not resolve as the handler source')
+        // initial: signed out (populated by the after-compile handler)
+        if (!nodeText(usernameId).includes('You are signed out')) throw new Error(`expected signed-out username, got "${nodeText(usernameId)}"`)
+        if (nodeText(statusId).trim() !== 'Signed out') throw new Error(`expected status Signed out, got "${nodeText(statusId)}"`)
+        // mock login → predefined user
+        dispatchEvent(loginNode, ctx, 'click')
+        await flushMicrotasks()
+        render()
+        if (!nodeText(usernameId).includes('Welcome, Ada Lovelace')) throw new Error(`predefined user not shown: "${nodeText(usernameId)}"`)
+        if (nodeText(statusId).trim() !== 'Signed in') throw new Error(`expected status Signed in, got "${nodeText(statusId)}"`)
+        // logout → cleared
+        dispatchEvent(logoutNode, ctx, 'click')
+        await flushMicrotasks()
+        render()
+        if (nodeText(statusId).trim() !== 'Signed out') throw new Error('logout did not clear the session')
+        if (!nodeText(usernameId).includes('You are signed out')) throw new Error('username not reset after logout')
+        // all state changes flowed through the managed channel (journaled)
+        if (supervisor.journal.length < 5) throw new Error(`expected journaled updates, got ${supervisor.journal.length}`)
+      },
+    },
+    {
+      // T8 — markdown display: typing updates the source; **bold** parses
+      // into a strong element; elements update IN PLACE (no rebuild, so the
+      // editor never loses focus)
+      run: async () => {
+        // initial parse of "Hello **world**!"
+        if (nodeText(part1Id).trim() !== 'world') throw new Error(`expected initial bold "world", got "${nodeText(part1Id)}"`)
+        if (nodeText(part0Id).trim() !== 'Hello') throw new Error(`expected prefix "Hello ", got "${nodeText(part0Id)}"`)
+        if (adapter.wires.get(part1Id)?.tagName !== 'STRONG') throw new Error('bold part is not a strong element')
+
+        // capture element identity — replacement would mean focus loss
+        const editorEl = adapter.wires.get(editorId)
+        const boldEl = adapter.wires.get(part1Id)
+
+        // typing: simulate the textarea input handler with the new source
+        dispatchEvent(editorNode, ctx, 'input', 'Goodbye **bold** reader')
+        await flushMicrotasks()
+        render()
+
+        // editor updated in place (same element object → focus retained)
+        if (adapter.wires.get(editorId) !== editorEl) throw new Error('editor element was replaced (focus would be lost)')
+        if (adapter.wires.get(part1Id) !== boldEl) throw new Error('strong element was replaced')
+        // markdown re-parsed into the structured nodes
+        if (nodeText(part0Id).trim() !== 'Goodbye') throw new Error(`expected prefix "Goodbye ", got "${nodeText(part0Id)}"`)
+        if (nodeText(part1Id).trim() !== 'bold') throw new Error(`expected bold "bold", got "${nodeText(part1Id)}"`)
+        if (nodeText(part2Id).trim() !== 'reader') throw new Error(`expected suffix " reader", got "${nodeText(part2Id)}"`)
+
+        // parent change: updating the display container leaves parts in place
+        const suffixEl = adapter.wires.get(part2Id)
+        clientAPI.apply(displayId, [{ targetProp: 'props.note', mode: 'replace', value: 'x' }])
+        await flushMicrotasks()
+        render()
+        if (adapter.wires.get(part1Id) !== boldEl) throw new Error('parent update replaced the bold element')
+        if (adapter.wires.get(part2Id) !== suffixEl) throw new Error('parent update replaced the suffix element')
+        if (nodeText(part1Id).trim() !== 'bold') throw new Error('parent update clobbered the parsed content')
+
+        // everything flowed through the managed channel
+        if (supervisor.journal.length < 12) throw new Error(`expected journaled updates, got ${supervisor.journal.length}`)
       },
     },
   ]
@@ -208,7 +477,7 @@ async function main() {
   let passed = 0
   for (let i = 0; i < checks.length; i++) {
     try {
-      checks[i].run()
+      await checks[i].run()
       passed++
       clientAPI.apply(testIds[i], [
         { targetProp: 'content', mode: 'replace', value: `PASS — ${goals[i]}` },
@@ -220,6 +489,7 @@ async function main() {
         { targetProp: 'css.classes', mode: 'replace', value: ['test-item', 'fail'] },
       ])
     }
+    await flushMicrotasks() // let the pass-2 flush drain, then render incrementally
     render()
   }
   const failed = checks.length - passed
@@ -230,6 +500,7 @@ async function main() {
       value: `Summary: ${passed} passed, ${failed} failed — component & placement resolutions verified in-browser (every element framework-rendered)`,
     },
   ])
+  await flushMicrotasks()
   render()
 }
 

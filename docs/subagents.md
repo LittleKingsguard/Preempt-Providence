@@ -8,18 +8,25 @@ hand-off prompts, acceptance checks, and storage paths are listed per step.
 Workflow topology:
 
 ```
- S1 (inline+reviewer) ─▶ S2 arch review ─▶ S3 reviewer loop ─▶ S4 specs ─▶ S5 unit ─▶ S6 integ ─▶ S7 e2e
-     §10 consistency        (user gate)     (user gate per turn)  (user gate)   (verify)  (verify)   (verify)
+ S1 (inline+reviewer) ─▶ S2 arch review ─▶ S3 reviewer loop ─▶ S4 specs ─▶ S5/6/7 units: TESTS FIRST ─▶ implement ─▶ verify
+     §10 consistency        (user gate)     (user gate per turn)  (user gate)     (red: failing)   (green)   (full trio)
 ```
+
+Every S5/S6/S7 code unit is TDD: the TestWriter writes FAILING tests from the
+spec first (red), the Implementer then makes them green, and only then is the
+final result verified. Tested-before-implementation is the only acceptable
+order; a delegated prompt that says "implement X and add tests" is out of
+process.
 
 ## Roles
 
 | Role | Tool set | Guardrails |
 | --- | --- | --- |
 | Architect (me / user) | read/edit/notes | owns §10; makes design calls; inserts into notes |
-| Reviewer | explore/general, read-only by default | never edits; returns inconsistency list + questions |
+| Reviewer | explore/general, read-only by default | never edits; returns inconsistency list + questions; a code change with no test is itself a finding |
 | SpecDoc | write | writes class/API specs derived from congealed §10 |
-| TestWriter | write/bash | writes tests; requires a runnable target (future source checkout) |
+| TestWriter | write/bash | writes tests FIRST (red) from `docs/specs/*.md`; runs them to confirm they fail; never implements alongside |
+| Implementer | read/edit/bash | may run only after TestWriter reports red; edits the least code to go green; re-runs the test trio and reports |
 
 Inputs always read from `RENDER_PROCESS_NOTES.md` sections §8–§10 unless stated.
 All artifacts get committed in the repo alongside the notes.
@@ -95,25 +102,46 @@ Launch only after the user confirms readiness (per Workflow). Output
 | `docs/specs/ops.md` | `StructuralOp` kinds + executors, reducers, replay |
 | `docs/specs/pipeline.md` | `PhaseRegistry`, `PhaseWorker`, workers, locking |
 | `docs/specs/render.md` | `RenderAdapter`, render ops, client/SSR mapping |
+| `docs/specs/adapters.md` | concrete adapters (`DomAdapter`, `SSRFragmentAdapter`, fragment descriptor) in `src/core/adapters.ts`, render-helper utilities (`minimalFromState`/`applyOps`/`treeFromOps`/`treeSig`/`jsonClone`) in `src/core/render-helpers.ts`, `tsconfig` `lib: ["ES2022","DOM"]` decision |
 | `docs/specs/validation.md` | tag schemas, `LinkConfig` vs schema boundary |
 | `docs/specs/api.md` | `ClientAPI`, WS events, handler/emission contracts |
+| `docs/specs/translate.md` | legacy `/Preempt` NodeSchema → anchor graph (`translateLegacy`) |
+| `docs/specs/handlers.md` | `HandlerContext`, event/phase dispatch, pipeline phase ordering |
+| `docs/specs/payload.md` | payload lifecycle (drop/refresh/append) + reverse translation |
 
 Specs must be exhaustive enough that a TestWriter can derive every state and
 fail-state from them (Step 4 prerequisite).
 
-## Step 4/5/6/7 — Tests
+## Step 4/5/6/7 — Tests (TDD: red → green → verify)
 
-Test prompt boilerplate (insert target scope, reuse per phase):
+Every code step splits into TWO separate sub-agent runs: a TestWriter run
+(red) and an Implementer run (green). They are never merged into a single
+"implement and add tests" prompt.
+
+**Run A — TestWriter (red).** Prompt boilerplate (insert target scope, reuse
+per phase):
 
 > You are the TestWriter for the Preempt-Providence rewrite. Use
-> `docs/specs/*.md` as the behavior contract and the CURRENT new code (paths
-> in `docs/specs/`). Do not modify specfs. Write tests in the repo's existing
-> runner (check package.json; Vitest today). For every method/API:
+> `docs/specs/*.md` as the behavior contract. Do not modify specFs. Write ONLY
+> tests in the repo's existing runner (check package.json; Vitest today). For
+> every method/API:
 >   - one valid/happy-path test per reasonable data state (enumerate the
 >     states in a comment block first);
 >   - one fail-safe test per documented fail-state.
-> Report at the end: state-machine (which states are covered), fail-states
-> covered, skip reasons.
+> Do NOT touch `src/`. Run the new tests and report the failing (red) set,
+> the state-machine (which states are covered), fail-states covered, skip
+> reasons.
+
+**Run B — Implementer (green).** Boilerplate:
+
+> You are the Implementer for the Preempt-Providence rewrite. The TestWriter
+> has already committed failing (red) tests derived from `docs/specs/*.md`
+> (see the paths in `docs/specs/`). Write the least `src/` code that makes
+> exactly those tests pass. Do not add tests, do not change the spec. After
+> implementation, run `npm test`, `npm run typecheck`, `npm run demo:smoke`
+> and report green/failing counts against the red set from Run A.
+
+Exit gate: green set matches the red set from Run A, plus the trio passes.
 
 Scopes:
 - **Step 4** — specs sub-agent only (user gate).
@@ -142,3 +170,10 @@ Scopes:
 3. Between sub-agent runs that share a boundary (esp. Reviewer → Architect,
    Specs → TestWriter), **Pause at the user gate**; the user resolves
    ambiguous design calls before the next run starts.
+4. **Delegation gate:** an Implementer unit is only launched after (a) its
+   `docs/specs/*.md` contract exists and passed the Step 3 reviewer loop and
+   (b) a TestWriter unit has run and reported the red set. Never skip Run A:
+   no-tests tickets are rejected by the Reviewer.
+5. A caller spurring a sub-agent MUST check that the hand-off is in spec →
+   red → green order, and MUST NOT pass a prompt that mixes test-writing and
+   implementation into one unit.

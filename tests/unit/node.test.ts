@@ -11,7 +11,7 @@ import { LinkConfigError, SingleParentError, CycleError } from '../../src/core/e
 import { applyStateSlice } from '../../src/core/ops.js'
 import { SliceLock } from '../../src/core/pipeline.js'
 import { serializeNode } from '../../src/core/serialize.js'
-import type { NodeBaseData, NodeState, Anchor, CompileResult } from '../../src/core/types.js'
+import type { NodeBaseData, NodeState, Anchor, CompileResult, LayerMutation } from '../../src/core/types.js'
 import {
   makeRoot,
   makeNode,
@@ -785,7 +785,7 @@ describe('fail-states — §9 FS-1…FS-11', () => {
   it('FS-10 placement-target-blocked: state-slice mutations targeting a placement zone hard-block (S-R4.1)', () => {
     const root = makeRoot()
     const node = childOf(root, makeNode())
-    const slice = [{ targetProp: 'placement' as never, mode: 'replace', value: 'zone' }]
+    const slice: LayerMutation[] = [{ targetProp: 'placement' as never, mode: 'replace', value: 'zone' }]
     expect(() => applyStateSlice(node, slice)).toThrow()
     expect(node.content).toBeUndefined()
     expect(() => applyStateSlice(node, [{ targetProp: 'content', mode: 'replace', value: 'ok' }])).not.toThrow()

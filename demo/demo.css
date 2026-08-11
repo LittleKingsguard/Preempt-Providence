@@ -414,3 +414,103 @@ ul.doc-tree > li::after {
 .test-item.fail {
   border-left-color: var(--fail);
 }
+
+/* -------- user pane (component-provided after-compile handler) -------- */
+
+.user-pane {
+  border: 1px solid #3b4d7a;
+  border-left: 4px solid #9cc0ff;
+  border-radius: 10px;
+  background: #0b0d12;
+  padding: 12px 14px;
+  max-width: 420px;
+}
+
+.user-pane .username {
+  margin: 0 0 4px;
+  font-weight: 700;
+  font-size: 15px;
+  color: #cfe0ff;
+}
+
+.user-pane .status {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.user-pane .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.user-pane button {
+  font: 600 12.5px/1 system-ui, sans-serif;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  color: var(--ink);
+  background: #1a2030;
+  transition: background 0.15s ease;
+}
+
+.user-pane button:hover {
+  background: #26324a;
+}
+
+.user-pane .login-btn {
+  border-color: #2ecc71;
+  color: #2ecc71;
+}
+
+.user-pane .login-btn:hover {
+  background: rgba(46, 204, 113, 0.12);
+}
+
+.user-pane .logout-btn {
+  border-color: #ff5d5d;
+  color: #ff5d5d;
+}
+
+.user-pane .logout-btn:hover {
+  background: rgba(255, 93, 93, 0.12);
+}
+
+/* -------- markdown editor → display (in-place render, focus retention) -------- */
+
+.editor {
+  width: 100%;
+  max-width: 460px;
+  min-height: 72px;
+  font: 13px/1.5 ui-monospace, Consolas, monospace;
+  color: var(--ink);
+  background: #0b0d12;
+  border: 1px solid #3b4d7a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.editor:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.display {
+  border: 1px dashed #4a5a80;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #0e1220;
+  min-height: 40px;
+  max-width: 460px;
+}
+
+.md-part {
+  color: var(--ink);
+}
+
+.md-bold {
+  color: #ffd479;
+  font-weight: 700;
+}

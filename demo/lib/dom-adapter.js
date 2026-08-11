@@ -6,11 +6,12 @@
  * only hand-written HTML is the placeholder root element.
  */
 export class DomAdapter {
-  constructor(mount) {
+  constructor(mount, opts = {}) {
     this.mount = mount
     this.wires = new Map()
     this.reused = new Set()
     this.stylesEl = null
+    this.onEvent = opts.onEvent ?? null // (wire, event) => void — dispatched for on:* bindings
   }
 
   createEl(type, wire) {
@@ -25,7 +26,14 @@ export class DomAdapter {
     const el = this.wires.get(wire)
     if (!el) return
     if (name === 'text') {
-      el.textContent = String(val)
+      // form elements take .value — setting value never moves focus or
+      // replaces the node (a textContent write on a textarea would not
+      // update the visible value and is not focus-safe by contract)
+      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.tagName === 'SELECT') {
+        if (el.value !== String(val)) el.value = String(val)
+      } else {
+        el.textContent = String(val)
+      }
     } else if (name.startsWith('css:')) {
       const key = name.slice(4)
       if (key === 'id') el.id = String(val)
@@ -34,7 +42,10 @@ export class DomAdapter {
       else if (key === 'cssDef') this.ensureStyles(val)
       else el.setAttribute(key, String(val))
     } else if (name.startsWith('on:')) {
-      el.addEventListener(name.slice(3), () => {})
+      const evtName = name.slice(3)
+      el.addEventListener(evtName, (domEvent) => {
+        if (this.onEvent) this.onEvent(wire, domEvent)
+      })
     } else {
       const attr = name.startsWith('prop:') ? name.slice(5) : name
       if (attr === 'value' && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) el.value = String(val)

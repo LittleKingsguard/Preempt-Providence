@@ -2,6 +2,11 @@
  * Shared demo runner — mirrors the vitest check surface in the browser.
  * Each `check` renders a visible goal line with a PASS/FAIL badge and detail;
  * `summary()` renders the totals banner.
+ *
+ * BANNER FORMAT (contract): `${title}: ${passed} passed, ${failed} failed`.
+ * Headless assertions in scripts/demo-smoke.mjs and any page checks MUST match
+ * this exact shape — e.g. a zero-failure scan tests `b.includes(title) &&
+ * /0 failed/.test(b)` (NOT `failed: 0`, which never matches this format).
  */
 export function makeRunner() {
   const container = document.createElement('section')

@@ -114,11 +114,11 @@ export function serializeNode(node: Node): RenderNodeState {
   return state
 }
 
-export function serializeSlice(node: Node, kids: Node[]): SerializedRenderDoc {
+export function serializeSlice(node: Node, kids: Node[], clientConfig?: { adapter: string; persistence: boolean }): SerializedRenderDoc {
   return {
     template: serializeNode(node),
     content: kids.map(serializeNode),
-    clientConfig: { adapter: 'dom', persistence: false },
+    clientConfig: clientConfig ?? { adapter: 'dom', persistence: false },
   }
 }
 

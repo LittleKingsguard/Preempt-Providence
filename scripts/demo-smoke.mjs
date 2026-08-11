@@ -22,7 +22,12 @@ class El {
     return this._innerHTML
   }
   appendChild(c) {
+    // real-DOM move semantics: re-appending an already-present child relocates
+    // it (diffMinimal re-appends every child in order on each render)
+    const i = this.children.indexOf(c)
+    if (i !== -1) this.children.splice(i, 1)
     this.children.push(c)
+    c.parent = this
     return c
   }
   setAttribute(k, v) {
@@ -36,6 +41,11 @@ class El {
   }
   remove() {
     this.removed = true
+    if (this.parent) {
+      const i = this.parent.children.indexOf(this)
+      if (i !== -1) this.parent.children.splice(i, 1)
+      this.parent = null
+    }
   }
 }
 
@@ -85,9 +95,15 @@ await import(`${base}demo/loop-safety.js`).catch((e) => {
   console.error('loop-safety failed:', e)
   process.exit(1)
 })
+const fmHtml = await readFile(`${base}demo/feature-matrix.html`, 'utf8')
+seedPage(fmHtml)
+await import(`${base}demo/feature-matrix.js`).catch((e) => {
+  console.error('feature-matrix failed:', e)
+  process.exit(1)
+})
 
-// Give microtasks a chance (Supervisor event flushes).
-await new Promise((r) => setTimeout(r, 50))
+// Give microtasks a chance (Supervisor event flushes + async page checks).
+await new Promise((r) => setTimeout(r, 250))
 
 const banners = [...byId.values()].flatMap((el) => walk(el, []))
 function walk(el, acc) {
@@ -113,6 +129,10 @@ if (fails.length > 0) {
 }
 if (banners.some((b) => /failed: [1-9]/.test(b))) {
   console.error('summary reports failures')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('Feature Matrix') && /0 failed/.test(b))) {
+  console.error('feature-matrix page did not complete its checks (banner missing)')
   process.exit(1)
 }
 
