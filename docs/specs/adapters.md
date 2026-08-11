@@ -60,7 +60,7 @@ Three modules own the render surface. The existing `src/core/render.ts` is **unc
 | --- | --- | --- |
 | Abstract `RenderAdapter`, `RenderOp`, `MinimalElement`, `diffMinimal`, `MockAdapter` | `src/core/render.ts` (unchanged) | per contract.md |
 | Concrete DOM + SSR adapters, fragment descriptor, void-tag table — the **only** modules that touch `document`/DOM globals / emit HTML strings | `src/core/adapters.ts` (new) | `DomAdapter`, `SSRFragmentAdapter`, `FragmentDescriptor`, `VOID_TAGS`, `DomAdapterOptions` |
-| Adapter-neutral op decoding: compiled state → `MinimalElement`; op stream → adapter calls; op stream → structural tree (parity) | `src/core/render-helpers.ts` (new) | `minimalFromState`, `applyOps`, `treeFromOps`, `treeSig`, `jsonClone`, `MinimalElementSource`, `RenderTree` |
+| Adapter-neutral op decoding: compiled state → `MinimalElement`; op stream → adapter calls; op stream → structural tree (parity) | `src/core/render-helpers.ts` (new) | `minimalFromState`, `applyOps`, `treeFromOps`, `treeSig`, `jsonClone`, `wireKey`, `MinimalElementSource`, `RenderTree` |
 
 Split rationale *(derived from the constraint "helpers that decode ops into structures are
 src/core; DOM/SSR-specific mutation is adapters.ts")*: `adapters.ts` owns every DOM/string
@@ -119,8 +119,10 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
 ```
 
 Both adapters **read `forkKey` off the op they are given** (render-helpers `applyOps`
-forwards the op's `forkKey` onto the `createEl`/`setProp`/`removeEl` call) — they never
-derive it (pure consumer, R2). Fork-arm emission can produce **two `create` ops for one
+forwards the op's `forkKey` onto the `createEl`/`setProp`/`removeEl` call — through a
+structural cast, since the abstract `RenderAdapter` methods take no `forkKey` param; the
+concrete signatures are the authorized superset, contract.md) — they never derive it
+(pure consumer, R2). Fork-arm emission can produce **two `create` ops for one
 wire in a single batch** (e.g. `tests/e2e/ssr-render.test.ts` asserts two creates for
 `dock.id`); the entry key is the composite `wireKey(wire, forkKey)` = `wire` when
 `forkKey` is absent, else `wire + '\x00' + forkKey`. Multiple arms stay mounted and
@@ -174,7 +176,9 @@ demo. Rows: every branch below has a corresponding row in §10.1.
 
 - Duplicate create for the **same `(wire, forkKey)`** **overwrites** the `wires` mapping
   (last-write-wins, `Map.set` semantics — de facto). The previously created element stays
-  mounted; a correct pipeline only re-creates a wire after `remove` (D3, R-ORD-6) — see DOM-F4.
+  mounted; a correct pipeline only re-creates a wire after `remove` (D3, R-ORD-6) — the
+  re-create rule operates per `(wire, forkKey)` composite, so two arms of one wire in a
+  batch never collide — see DOM-F4/DOM-H26.
 - Fork arms share one wire ref but carry **different** forkKeys: each is a **distinct**
   entry — the last created arm does **not** clobber the earlier arm's entry (DOM-H26);
   both stay mounted and addressable by their forkKey.
@@ -253,9 +257,23 @@ arms' elements stay mounted.
 
 ### 3.6 `hydrate(rootWire, vdom)` — the §5.1 seam
 
-`rootWire` is unused. Walks `[vdom.template, ...(vdom.content ?? [])]` and adds every
-node's `css.id` (when it is a string) to `this.reused` — the de facto demo behavior. The
-`css.id` → wire binding that SSR-H2 asserts is established through the normal
+`rootWire` is unused. Hydration keeps the DOM/reused state consistent so a later
+`setProp(wire, 'css:id', id)` with a matching id can **discover and mark-as-reused**
+content (R3):
+
+1. Walk `[vdom.template, ...(vdom.content ?? [])]` and add every node's `css.id` (when it
+   is a string) to `this.reused` — the de facto demo behavior.
+2. **Reuse validation seam (R3, DECIDED):** whenever the environment supplies a real
+   `document`/`mount.querySelector` (demo/browser — the unit harness's `El` shim covered
+   in §9 does not), validate each collected id against the mount:
+   `mount.querySelector('[id="<css.id>"]')` must resolve. Hydration-driven reuse means the
+   DOM **already contains** the element, so the adapter will **not re-create** it: the
+   matched element is the one the later `setProp(wire, 'css:id', id)` targets (that
+   `setProp` writes `el.id = val` on an element that already carries the id — a bind, not
+   a new node). When `document` is absent the seam degrades to step 1 only (no validation,
+   no throw).
+
+The `css.id` → wire binding that SSR-H2 asserts is established through the normal
 `setProp(…, 'css:id', …)` path (the `bound` map in the test `HydrationAdapter`,
 `tests/unit/render.test.ts`), which the test-level adapter tracks; the concrete
 `DomAdapter` exposes `reused` + `wires` so the same assertion is expressible without a
@@ -265,10 +283,12 @@ separate `bound` map.
 
 | Decision | Statement | Rationale |
 | --- | --- | --- |
-| `DECIDED` missing-wire `setProp`/`removeEl` | silent no-op | The de facto demo returns silently; R-ORD-6 + `applyOps` cross-batch resolution make a missing wire unreachable on a correct emit; throwing would couple the pure consumer to pipeline ordering (DOM-F1/F3) |
-| `DECIDED` no-`document` environment | `constructor` throws a descriptive error (`DomAdapter requires a DOM (document) environment`) when `typeof document === 'undefined'` | Fail-fast once at the boundary; per-call branches stay branch-free like the demo (DOM-F2) |
-| `DECIDED` duplicate `createEl` | last-write-wins overwrite of `wires` | De facto `Map.set`; the caller must `remove` first per D3 (DOM-F4) |
+| `DECIDED` missing-wire `setProp`/`removeEl` | silent no-op | The de facto demo returns silently; `applyOps` first attempts cross-batch resolution against the persistent `wires`/`fragments` map (R12/HLP-H5), so a missing wire means no prior create in this or a prior batch. The no-op is **defensive against cross-batch drift**, not an "unreachable" branch (R1/R15): the fail-state tests (DOM-F1/F3, HLP-H6, FRG-F2) deliberately construct missing-wire cases. Throwing would couple the pure consumer to pipeline ordering |
+| `DECIDED` no-`document` environment | `constructor` throws a descriptive error (`DomAdapter requires a DOM (document) environment`) when `typeof document === 'undefined'` | Fail-fast once at the boundary; per-call branches stay branch-free like the demo (DOM-F2; NVA-3 is scoped to missing wires and does NOT forbid this throw, R15) |
+| `DECIDED` duplicate `createEl` | last-write-wins overwrite of the **`(wire, forkKey)`** entry | De facto `Map.set`; the caller must `remove` first per D3 (DOM-F4). Different forkKeys never collide (DOM-H26) |
 | `PARKED` repeated `setProp` on the same `on:<event>` | additive listener per set (de facto) | A listener-dedupe registry is state the pure consumer does not hold; D4 only re-emits changed names, so the normal path never double-binds (DOM-F5) |
+| `PARKED` listener-removal (`on:<event>` set with `undefined`) | no-op — the listener stays bound (R7 `on:<event>` row) | Removing requires a retained handler reference the current de facto pattern does not keep; a documented DOM/SSR divergence — SSR inlines the handler as an attribute and does drop it (§4.2/FRG-H18) while the DOM keeps the live listener |
+| `PARKED` tag-match reuse (legacy notes §6.8) | not performed; DOM reuse is the `css.id` hydration seam (§3.6) | Keeps `createEl` pure and matches the demo; render.md §2 mirrors this (R3) |
 
 ---
 
@@ -278,13 +298,13 @@ The SSR product is the fragment descriptor `{ openTag, closeTag, contentText, is
 (notes §6.8). The adapter consumes the **same op stream** as `DomAdapter` (PAR-1) and
 serializes it to an HTML string. Every branch has a corresponding row in §10.2.
 
-### 4.1 `createEl(type, wire)`
+### 4.1 `createEl(type, wire, forkKey?)`
 
 | Step | Behavior | Ref |
 | --- | --- | --- |
 | 1 | `isVoid = VOID_TAGS.has(type)` | *(derived)* HTML void-elements table |
 | 2 | descriptor with `openTag = '<' + type + '>'`, `closeTag = isVoid ? '' : '</' + type + '>'`, `contentText = ''` | de facto §6.8 shape |
-| 3 | `this.fragments.set(wire, descriptor)` | de facto analog |
+| 3 | `this.fragments.set(wireKey(wire, forkKey), descriptor)` — composite `(NodeRef, forkKey)` key (R2); fork arms stay distinct entries | de facto analog |
 | 4 | return the descriptor | |
 
 Attributes accumulate into an internal ordered `Map<attrName, attrValue>` (first-set
@@ -292,26 +312,41 @@ order preserved; a re-set of an existing name **replaces** its value in place); 
 regenerates as `'<'+type+attrs+'>'`. This makes D4 re-`set`s idempotent (no duplicate
 attribute strings) *(derived: no demo SSR reference exists; required for D4 correctness)*.
 
-### 4.2 `setProp(wire, name, val)` — attribute/text emission
+**Private side-storage (R9, DECIDED):** the ordered attr map and the
+childrenHtml/`contentText` materialization are **private** fields on the descriptor (an
+internal `SSRFragmentState`), NOT part of the public
+`{ openTag, closeTag, contentText, isVoid }` shape — which stays **exactly** the notes
+§6.8 shape. `openTag` is **regenerated from type + the ordered attr map on every
+`setProp`**, so the public `openTag` field is always current (FRG-H4/H21); `contentText`
+is rematerialized on `text`/`append` from the private text+children state (FRG-H22).
+
+### 4.2 `setProp(wire, name, val, forkKey?)` — attribute/text emission
+
+The fragment resolves via `wireKey(wire, forkKey)` (R2); a `set` with a `forkKey` targets
+only that arm's fragment.
 
 | Branch (`name`) | Behavior | Ref |
 | --- | --- | --- |
-| wire not in `this.fragments` | **silent no-op** (mirrors the DOM DECIDED) | DOM-F2 analog |
+| `wireKey(wire, forkKey)` not in `this.fragments` | **silent no-op** (mirrors the DOM DECIDED) | DOM-F2 analog |
 | `text` | `textContent = escapeText(val)`; materialized `contentText = textContent + childrenHtml` | de facto §6.8 (text into `contentText`) |
 | `css:id` | attr `id = escapeAttr(val)` | de facto |
 | `css:classes` | attr `class = escapeAttr(Array.isArray(val) ? val.join(' ') : String(val))` | de facto |
 | `css:style` | attr `style = escapeAttr(val)` | de facto |
-| `css:cssDef` | **not an attribute** — pushed to `this.styles` buffer (§4.5) | de facto §6.9 styles block |
 | `css:<other>` | attr `<key> = escapeAttr(val)`, `key = name.slice(4)` | de facto symmetry with §3.2 |
 | `on:<event>` | attr `on<event> = escapeAttr(val)` — handler **inlined** | de facto §6.8 "handlers inlined as `on…="…"`" |
 | `prop:<name>` / bare | attr `<name> = escapeAttr(val)`, `prop:` prefix stripped | de facto |
 | `value` | **no property special-case in string form** — always emitted as the attribute `value="…"` | de facto: `<input value="…">` is valid SSR |
+| any branch with `val === undefined` | **DECIDED drop** (R7): the attribute is **omitted** from `openTag`, and a previously-set attribute of that name is **removed** from the ordered attr map; `text` with `undefined` → **empty content** (`textContent = ''`, `contentText = childrenHtml`) | DECIDED (R7) — D4 removed-props re-set |
 
 Escaping *(derived: string emission needs deterministic entity encoding)*:
 `escapeAttr(v) = String(v)` with `& → &amp;`, `" → &quot;`, `< → &lt;`, `> → &gt;`;
 `escapeText(v) = String(v)` with `& → &amp;`, `< → &lt;`, `> → &gt;`. Attribute **names**
 are emitted verbatim (names come from the pipeline; invalid names are a validation/Pillar
 E concern, not the adapter's).
+
+`css:cssDef` does **not** appear in the branch table — removed (R6, mirrors §3.2):
+cssDefs flow only through the `styles` op (§4.5); if a `css:cssDef` set still arrives it
+is treated as a `css:<other>` attribute `cssDef="…"` (legacy-unsupported, deterministic).
 
 ### 4.3 `appendChild(owner, child)`
 
@@ -329,34 +364,46 @@ mutates state but is ignored at serialization time.
 
 ### 4.5 Styles block — emitted once
 
-`css:cssDef` sets and `styles(cssDefs)` ops push payloads to `this.styles` (stringified
-with `String(val)`, appended in arrival order). `toString()` emits the styles block
-**exactly once**, prefixed before the root html (render.md §2 "prefixed into the SSR
-result", notes §6.9):
+`styles(cssDefs)` ops push payloads to `this.styles` (stringified with `String(val)`,
+appended in arrival order). `css:cssDef` sets do **not** feed this buffer (R6 — removed).
+`toString()` emits the styles block **exactly once**, prefixed before the root html
+(render.md §2 "prefixed into the SSR result", notes §6.9).
+
+Pinned join formula **(R18, DECIDED)** — a single leading `\n` before each def, defs
+joined, no stray trailing newline:
+
+```
+stylesPrefix = '<style id="preempt-dynamic-styles">' + defs.map(d => '\n' + String(d)).join('') + '</style>'
+```
 
 ```
 <style id="preempt-dynamic-styles">\n<def1>\n<def2></style>
 <root html>
 ```
 
+The DOM side mirrors the same inner join: `ensureStyles` accumulates
+`'\n' + String(defs)` per call, so the single style element's `textContent` is
+`'\n<def1>\n<def2>'` (DOM-H12/H13, PARS-H3).
+
 ### 4.6 `removeEl` / `hydrate` / `toString()`
 
 | Method | Behavior | Ref |
 | --- | --- | --- |
-| `removeEl(wire)` | `this.fragments.delete(wire)` — the fragment no longer contributes to output ("omission from the string pass", render.md §2) | de facto |
+| `removeEl(wire, forkKey?)` | `this.fragments.delete(wireKey(wire, forkKey))` — the fragment no longer contributes to output ("omission from the string pass", render.md §2) | de facto |
 | `hydrate(rootWire, vdom)` | **no-op** — the server never hydrates (render.md §2 "n/a") | de facto |
-| `toString()` | `stylesPrefix + htmlOf(root)`; `root` = the wire of the **first `createEl`** — deterministic because R-ORD-6 guarantees `create(parent)` precedes `append(parent, child)` so the root is always first *(derived: no demo SSR reference; root detection must be deterministic)* | render.md §2 |
+| `toString()` | `stylesPrefix + htmlOf(root)`; `root` = the wire of the **first `createEl`** — deterministic because R-ORD-8 guarantees the actionable array is root-first (every node's `create` precedes its descendants'), so the root is always the first created wire *(derived: no demo SSR reference; root detection must be deterministic; R10)*. If `removeEl` removed the root wire (or no `create` ever ran), `toString()` returns **just the styles prefix** — the `<style id="preempt-dynamic-styles">` block alone, no root html (FRG-H24) | render.md §2 + R10 |
 
 ---
 
 ## 5. TypeScript `lib` decision (DECIDED)
 
 `src/core/adapters.ts` types `HTMLElement`, `HTMLInputElement`, `HTMLTextAreaElement`,
-`HTMLSelectElement`, `Element`, `Document`, `document`, `Event`, `CSSStyleSheet` — none of
-which exist under the current `"lib": ["ES2022"]`. **`DECIDED: adapters require tsconfig
-`lib: ["ES2022", "DOM"]`** — recorded here (`docs/specs/adapters.md` §5) and folded into
-the notes §10.9 ledger; the implementer applies the tsconfig diff in the same commit that
-introduces `adapters.ts`.
+`HTMLSelectElement`, `Element`, `Document`, `document`, `Event` — none of which exist under
+the current `"lib": ["ES2022"]`. (`CSSStyleSheet` is **not** used by any behavior and is
+**not** required.) **`DECIDED: adapters require tsconfig `lib: ["ES2022", "DOM"]`** —
+recorded here (`docs/specs/adapters.md` §5) and folded into the notes §10.9 ledger as an
+accepted, repo-global change (R16); the implementer applies the tsconfig diff in the same
+commit that introduces `adapters.ts`.
 
 Exact tsconfig diff (SpecDoc does NOT edit `tsconfig.json`; this is the declared change):
 
@@ -366,9 +413,11 @@ Exact tsconfig diff (SpecDoc does NOT edit `tsconfig.json`; this is the declared
 +    "lib": ["ES2022", "DOM"],
 ```
 
-Scope guard: `"lib": ["DOM"]` is additive and `skipLibCheck` is already true; the change
-is confined to the types `adapters.ts` needs. `render.ts` and `render-helpers.ts` must
-compile under both configurations (render-helpers.ts touches no DOM globals).
+Scope guard: `"lib": ["DOM"]` is additive and `skipLibCheck` is already true. The change
+is **repo-global — every `src/**` and `tests/**` file compiles under the combined lib**
+(this is accepted and recorded in the notes ledger, R16). `render.ts` and
+`render-helpers.ts` must compile under **both** configurations (render-helpers.ts touches
+no DOM globals).
 
 ---
 
@@ -378,7 +427,9 @@ compile under both configurations (render-helpers.ts touches no DOM globals).
 | --- | --- | --- |
 | PAR-1 | Same pipeline, same `compile(slice)`, same fork/disposition rules on both sides — the only difference is **which adapter** | render.md §8 PAR-1/PAR-3 |
 | PAR-5 | Same input state ⇒ structurally equal output: server HTML ≡ client DOM after hydrate + re-resolution | render.md §8 PAR-5 |
-| SSR-H2 | `hydrate(rootWire, vdom)` reuses `css.id`-keyed DOM: the `reused` set collects every `css.id` in the doc; wires remain bound via the normal `setProp`/`wires` path | render.md §7.3, notes §5.1 |
+| PAR-6 | Fork arms stay **distinct `(wire, forkKey)` entries on both adapters**; the `treeFromOps`/`treeSig` parity oracle keys by `wireKey(wire, forkKey)` and never collapses arms (R11) | §10.4 PARS-H1 |
+| PAR-7 | Root-first emit (R-ORD-8, R10): the actionable `next` array is root-first on both sides, so the SSR `toString()` root = first-created wire ≡ the DOM mount root | render.md §3.3 |
+| SSR-H2 | `hydrate(rootWire, vdom)` reuses `css.id`-keyed DOM: the `reused` set collects every `css.id` in the doc (validated against `mount.querySelector` by id when the DOM exists — the seam yields the actual SSR-rendered element, which is never re-created); wires remain bound via the normal `setProp`/`wires` path | render.md §7.3, notes §5.1 |
 | SSR-F2 | On hydrate mismatch, the **client re-resolution is canon**; the mismatched slice re-renders through the normal op path — adapters never bake in their own resolution | render.md §7.5 |
 | SSR-F4 | Adapter behaviors must not diverge for the same op — both adapters are pure mappings of the identical `RenderOp` stream | render.md §8/§10.3 SSR-F4 |
 
@@ -397,7 +448,7 @@ render.md §5).
 | --- | --- | --- |
 | NVA-1 | Run `compile`/`compileRemote`, resolve forks, or read anchors | §1 pure consumer; render.md §1 |
 | NVA-2 | Mint or reorder `NodeRef` wires | §1; wires are opaque (S3.1) |
-| NVA-3 | Make a pipeline decision on missing wires — silent no-op, never throw, never synthesize ops | §3.7 DECIDED |
+| NVA-3 | Make a pipeline decision on missing wires — silent no-op, never throw, never synthesize ops. **Scoped to missing wires only** (DOM-F1/F3, HLP-H6, FRG-F2 deliberately construct them); it does **not** forbid the documented constructor throw (DOM-F2) | §3.7 DECIDED |
 | NVA-4 | Read `clientConfig` or any serialized doc field beyond the `css.id`/content walk in `hydrate` | §1, render.md §5 |
 | NVA-5 | Implement hydration resolution — reuse is keyed on `css.id` strings only | §6 SSR-H2/SSR-F2 |
 | NVA-6 | Coalesce or drop ops (the sweep/diff owns ordering); the adapter executes what it is given, in order | render.md R-ORD-6 |
@@ -420,10 +471,16 @@ Unit tests for `DomAdapter` require DOM globals. The repo's vitest env is plain 
 (no jsdom/happy-dom in `package.json` today); the demo smoke harness
 (`scripts/demo-smoke.mjs`) already ships a minimal DOM shim (`El` with `tagName`,
 `children`, `attrs`, `dataset`, `style`, `listeners`, `textContent`, `className`, `value`,
-`appendChild` move-semantics, `setAttribute`, `addEventListener`). The TestWriter may
-either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency — a
-`package.json` change that the Architect must gate. `SSRFragmentAdapter` and
-`render-helpers.ts` need no DOM.
+`appendChild` move-semantics, `setAttribute`, `addEventListener`). The TestWriter should
+replicate that shim pattern **and extend it** (R14, DECIDED) with: (a) a satisfiable
+`document.head` (the styles-insertion assertion, DOM-H12/H13), and (b) a manual
+listener-invocation helper (DOM-H15 dispatch — call the registered listener yourself, the
+shim does not run real events). DOM-F2 (the no-`document` tender throw) must be **split
+off** from the DOM-presence tests — a separate `describe` that temporarily stubs/removes
+the global so the constructor path is exercised without an environment. Alternatively the
+TestWriter may request a `jsdom`/`happy-dom` devDependency — a `package.json` change that
+the Architect must gate (package.json is untouched by this spec change). `SSRFragmentAdapter`
+and `render-helpers.ts` need no DOM.
 
 ---
 
@@ -444,8 +501,8 @@ either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency �
 | DOM-H9 | `setProp(w, 'css:classes', ['a','b'])` | `el.className === 'a b'` |
 | DOM-H10 | `setProp(w, 'css:classes', 'x')` (string) | `el.className === 'x'` |
 | DOM-H11 | `setProp(w, 'css:style', 'color:red')` | `el.style.cssText === 'color:red'` |
-| DOM-H12 | `setProp(w, 'css:cssDef', '.x{}')` | exactly one `<style id="preempt-dynamic-styles">` in `document.head`; textContent contains `.x{}` |
-| DOM-H13 | multiple `css:cssDef` sets + `styles([...])` | still exactly **one** style element; defs appended in arrival order |
+| DOM-H12 | `styles(['.x{}'])` (single `styles` op) | exactly one `<style id="preempt-dynamic-styles">` in `document.head`; `textContent === '\n.x{}'` (leading `\n` pinned by R18) |
+| DOM-H13 | multiple `styles([...])` ops (no `css:cssDef` sets) | still exactly **one** style element; defs appended in arrival order with the pinned `'\n<def>'` join — `textContent === '\n.a{}\n.b{}'` |
 | DOM-H14 | `setProp(w, 'css:data-x', v)` (unknown sub-name) | `el.setAttribute('data-x', String(v))` |
 | DOM-H15 | `setProp(w, 'on:click', fn)` with `opts.onEvent` set; dispatch a click | listener registered on `click`; dispatch invokes `opts.onEvent(wire, domEvent)` with the wire and the DOM event |
 | DOM-H16 | `setProp(w, 'on:click', fn)` with no `opts.onEvent` | listener registered; dispatch does not throw, no callback invoked |
@@ -456,12 +513,14 @@ either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency �
 | DOM-H21 | `setProp(w, 'prop:value', 'v')` on a `div` (and a `SELECT`) | `el.setAttribute('value', 'v')` — special-case is INPUT/TEXTAREA only |
 | DOM-H22 | `appendChild(ownerEl, childEl)` | child appended to owner (re-append relocates) |
 | DOM-H23 | `removeEl(w)` for a live wire | `el.remove()` called; `wires.has(w) === false` |
-| DOM-H24 | `hydrate(rootWire, { template: {css:{id:'a'}}, content:[{css:{id:'b'}},{css:{}}] })` | `reused` = `{'a','b'}`; missing `css.id` ignored |
-| DOM-H25 | `styles(['.a{}','.b{}'])` | `ensureStyles` per entry; one style element |
-| DOM-F1 | `setProp(unknownWire, 'text', 'x')` | silent no-op (DECIDED); no throw, no element created |
-| DOM-F2 | `new DomAdapter(mount)` with `typeof document === 'undefined'` | constructor throws a descriptive error (DECIDED) |
-| DOM-F3 | `removeEl(unknownWire)` | silent no-op |
-| DOM-F4 | `createEl('div', w)` twice for the same live wire | mapping overwritten (last-write-wins); previous element still mounted |
+| DOM-H24 | `hydrate(rootWire, { template: {css:{id:'a'}}, content:[{css:{id:'b'}},{css:{}}] })` | `reused` = `{'a','b'}`; missing `css.id` ignored; when the mount exposes a working `querySelector` and the elements exist, hydrate records them (reuse seam, §3.6) and creates **no** fresh element for them |
+| DOM-H26 | `createEl('div','w')` with `forkKey:'fk1'`, then `createEl('div','w')` with `forkKey:'fk2'` (two creates, same wire, one batch) | **both** elements mounted and addressable; `wires.get(wireKey('w','fk1')) !== wires.get(wireKey('w','fk2'))`; both have `dataset.wire === 'w'`; last arm does **not** clobber the first (R2) |
+| DOM-H27 | `setProp(w, 'title', 'a', 'fk1')` after both arms exist | only the `fk1` arm's element changes; the `fk2` arm's element untouched (forkKey-keyed targeting) |
+| DOM-H28 | `setProp(w, 'prop:title', undefined)`; `setProp(w, 'css:id', undefined)`; `setProp(w, 'css:style', undefined)`; `setProp(w, 'text', undefined)` on div and on form; then re-`set` each | D4 drop (R7): `prop:title` → `el.removeAttribute('title')`; `css:id` → `el.id === ''`; `css:style` → `el.style.cssText === ''`; `text` on div → `el.textContent === ''`, on `INPUT`/`TEXTAREA`/`SELECT` → `el.value === ''`; re-set after drop works normally |
+| DOM-F1 | `setProp(unknownWire, 'text', 'x')` (also unknown `(wire, forkKey)` composite) | silent no-op (DECIDED); no throw, no element created |
+| DOM-F2 | `new DomAdapter(mount)` with `typeof document === 'undefined'` | constructor throws a descriptive error (DECIDED; tested in a separate `describe` that stubs the global, §9) |
+| DOM-F3 | `removeEl(unknownWire)` (also unknown composite key) | silent no-op |
+| DOM-F4 | `createEl('div', w)` twice for the **same `(wire, forkKey)`** | mapping overwritten (last-write-wins); previous element still mounted; different forkKeys never collide (DOM-H26) |
 | DOM-F5 | `setProp(w, 'on:click', f)` twice | two listeners registered (additive — de facto; PARKED dedupe) |
 
 ### 10.2 `SSRFragmentAdapter` (FRG-*)
@@ -474,7 +533,7 @@ either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency �
 | FRG-H4 | `setProp(w, 'css:id', 'k')` | `openTag === '<div id="k">'` |
 | FRG-H5 | `setProp(w, 'css:classes', ['a','b'])` | `openTag` contains `class="a b"` |
 | FRG-H6 | `setProp(w, 'css:style', 'color:red')` | `openTag` contains `style="color:red"` |
-| FRG-H7 | `setProp(w, 'css:cssDef', '.x{}')` | no attribute on `openTag`; `.x{}` in `styles` buffer |
+| FRG-H7 | `setProp(w, 'css:data-x', v)` (unknown sub-name) | attr `data-x="…"` in `openTag` (mirrors DOM-H14) |
 | FRG-H8 | `setProp(w, 'on:click', 'alert(1)')` | `openTag` contains `onclick="alert(1)"` (inlined handler) |
 | FRG-H9 | `setProp(w, 'prop:title', 't')` | `openTag` contains `title="t"` (prefix stripped) |
 | FRG-H10 | `setProp(w, 'hidden', true)` (bare) | `openTag` contains `hidden="true"` |
@@ -483,32 +542,39 @@ either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency �
 | FRG-H13 | text `a < b & c > d` | `contentText === 'a &lt; b &amp; c &gt; d'` |
 | FRG-H14 | `appendChild(owner, child)` | `owner.contentText` ends with `child.openTag + child.contentText + child.closeTag` |
 | FRG-H15 | deep nesting (3+ levels) | full html string correct at every level |
-| FRG-H16 | `toString()` after a full render | `'<style id="preempt-dynamic-styles">' + styles + '</style>'` prefix, then root fragment html; root = first-created wire |
-| FRG-H17 | multiple cssDef / styles ops | single styles prefix block; defs in arrival order |
-| FRG-H18 | `removeEl(w)` | wire gone from `fragments`; absent from `toString()` |
+| FRG-H16 | `toString()` after a full render | prefix is **exactly** `'<style id="preempt-dynamic-styles">' + defs.map(d => '\n' + String(d)).join('') + '</style>'` — a single leading `\n` before each def, defs joined, **no stray trailing `\n`** (R18) — then root fragment html; root = first-created wire |
+| FRG-H17 | multiple `styles(['.a{}', '.b{}'])` ops (no `css:cssDef` sets) | single styles prefix block; defs in arrival order |
+| FRG-H18 | `setProp(w, 'hidden', true)` then `setProp(w, 'hidden', undefined)`; `setProp(w, 'text', undefined)` | D4 drop (R7): attr **omitted** from `openTag`, removed from the ordered attr map; `text` `undefined` → `contentText === ''` (empty content) |
 | FRG-H19 | `hydrate(rootWire, vdom)` | no-op — no state change, no throw |
 | FRG-H20 | `text` / children on a void fragment | output html is `openTag` only; content ignored |
+| FRG-H21 | `setProp(w, 'css:id', 'k')` twice | `openTag` identical both times (`<div id="k">`); no duplicate `id="k"` string — D4 idempotency (R8) |
+| FRG-H22 | `setProp(w, 'css:id', 'k')` then `setProp(w, 'text', 'hi')` then read `openTag` | `openTag` regenerated from type + attr map, **unchanged** by the text set; `contentText === 'hi'` (R8) |
+| FRG-H23 | `createEl('div','w')` with `forkKey:'fk1'`, then `forkKey:'fk2'` (two creates, same wire) | two **distinct** descriptors in `fragments` (`wireKey`-keyed); independent; no clobber (R2) |
+| FRG-H24 | `removeEl(rootWire)` then `toString()` | returns **just the styles prefix** — the `<style id="preempt-dynamic-styles">` block alone, no root html (R10) |
 | FRG-F1 | `appendChild(voidOwner, child)` | child serialization ignored in output (void html = openTag only) |
-| FRG-F2 | `setProp(unknownWire, 'text', 'x')` | silent no-op |
-| FRG-F3 | duplicate `createEl` same wire | mapping overwritten (last-write-wins) |
+| FRG-F2 | `setProp(unknownWire, 'text', 'x')` (also unknown composite key) | silent no-op |
+| FRG-F3 | duplicate `createEl` for the **same `(wire, forkKey)`** | mapping overwritten (last-write-wins); different forkKeys keep distinct entries (FRG-H23) |
 | FRG-F4 | `on:<event>` with a non-string value (function) | rendered via `String(val)` (deterministic); SSR handler values are required to be strings by the emit side — callable-handler serialization is a handlers.md concern (PARKED) |
 
 ### 10.3 render helpers (HLP-*)
 
 | ID | State / fail-state | Expected |
 | --- | --- | --- |
-| HLP-H1 | `minimalFromState(cs)` with props/css/content/children | `props` → `prop:*`, `css` → `css:*`, content → `text`, `childOrder` = `[...children]` |
+| HLP-H1 | `minimalFromState(cs)` with props/css/content/children | `props` → `prop:*`, `css` → `css:*` **excluding `cssDef`** (cssDefs flow via the `styles` op, R6), content → `text`, `childOrder` = `[...children]` |
 | HLP-H2 | `minimalFromState(cs)` with `content === undefined` | no `text` prop |
 | HLP-H3 | `minimalFromState(cs)` with no css | no `css:*` props |
-| HLP-H4 | `applyOps(adapter, ops)` full batch (create/set/append/remove) | adapter calls recorded in op order; resulting tree correct |
-| HLP-H5 | `applyOps` append/remove where owner/child comes from a **previous** batch | resolved from `adapter.wires` (persistent map); succeeds |
-| HLP-H6 | `applyOps` append/remove where wire is in neither batch nor `adapter.wires` | skipped silently (no call, no throw) |
-| HLP-H7 | `applyOps` with a `styles` op | `adapter.styles?.(cssDefs)` invoked; skipped when the adapter has no `styles` |
+| HLP-H4 | `applyOps(adapter, ops)` full batch (create/set/append/remove) | adapter calls recorded in op order; resulting tree correct; a `forkKey` on an op is **forwarded** to `createEl`/`setProp`/`removeEl` (R2) |
+| HLP-H5 | `applyOps` append/remove where owner/child comes from a **previous** batch | cross-batch resolution against the adapter's `wires`/`fragments`-shaped persistent map, probed at runtime with `'wires' in adapter` (structural cast); **succeeds** for adapters exposing such a map, **skipped** (no call) for adapters that do not (R12, mirrors HLP-H6) |
+| HLP-H6 | `applyOps` append/remove where wire is in neither batch nor the exposed persistent map | skipped silently (no call, no throw) |
+| HLP-H7 | `applyOps` with a `styles` op | `adapter.styles?.(cssDefs)` invoked when the adapter exposes `styles`; skipped otherwise — the demo's skip is **superseded** (R5) |
 | HLP-H8 | `treeFromOps(ops)` | tree with `type`/`props`/`children`; `set` ops folded onto props |
 | HLP-H9 | `treeFromOps(ops, { skip: (n) => n.startsWith('on:') })` | skipped names excluded from props |
-| HLP-H10 | `treeSig(trees)` | canonical JSON signature; equal for structurally-equal trees regardless of `set`-op order |
+| HLP-H10 | `treeSig(trees)` | canonical JSON signature via `JSON.stringify` with **sorted object keys** — stable regardless of `set`-op arrival order (R4); includes `forkKey` when present (R11); equal for structurally-equal trees |
 | HLP-H11 | `jsonClone(v)` | deep clone equal to input, not same reference |
 | HLP-H12 | `set` op whose `create` appears later in the stream | props still folded (propVals accumulation is order-independent) |
+| HLP-H13 | `minimalFromState(cs)` with `css.cssDef` present | `cssDef` is **not** mapped to a `css:cssDef` prop — no styles reach the adapter via `set` (R6) |
+| HLP-H14 | `treeFromOps` on a forked stream (two `create`s for one wire, distinct `forkKey`s) | two **distinct** `RenderTree` entries keyed by `wireKey(wire, forkKey)`; `treeSig` keeps them distinct — arms never collapse (R11) |
+| HLP-H15 | `wireKey('w')` / `wireKey('w', 'fk')` | `'w'` / `'w\x00fk'` — the shared composite key both adapters and `applyOps` use (R2/R12) |
 | HLP-F1 | `applyOps` `remove` for a wire never created | no `removeEl` call |
 | HLP-F2 | `treeFromOps` with a `styles` op | ignored; no effect on the tree |
 
@@ -516,7 +582,7 @@ either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency �
 
 | ID | State / fail-state | Expected |
 | --- | --- | --- |
-| PARS-H1 | identical op stream through `DomAdapter` and `SSRFragmentAdapter` | SSR `toString()` structure (types, attrs, nesting, text) ≡ DOM tree ≡ `treeSig(treeFromOps(ops))` (PAR-5) |
+| PARS-H1 | identical op stream — including **multiple `create`s for one wire with distinct `forkKey`s** and root-first order — through `DomAdapter` and `SSRFragmentAdapter` | SSR `toString()` structure (types, attrs, nesting, text) ≡ DOM tree ≡ `treeSig(treeFromOps(ops))` (PAR-5); **fork arms are preserved as distinct `(wire, forkKey)` entries on both adapters** — `treeFromOps`/`treeSig` must not collapse them (R11); the SSR root = first-created wire ≡ the DOM mount root (R-ORD-8, R10) |
 | PARS-H2 | hydrate over an SSR doc with `css.id`s | `reused` contains every `css.id`; wires bound via `setProp('css:id')`/`wires` (SSR-H2) |
 | PARS-H3 | styles across both adapters | SSR emits the styles prefix **once**, before root html — mirrors the single DOM `<style id="preempt-dynamic-styles">` element |
 | PARS-F1 | an adapter behavior diverges for the same op | parity failure (SSR-F4) |
@@ -526,8 +592,14 @@ either reuse that shim pattern or request a `jsdom`/`happy-dom` devDependency �
 
 | ID | State / fail-state | Expected |
 | --- | --- | --- |
-| TYP-H1 | `adapters.ts` under `lib: ["ES2022","DOM"]` | `tsc --noEmit` passes; `HTMLElement`/`document`/`Event`/`CSSStyleSheet` resolve |
-| TYP-F1 | `adapters.ts` under `lib: ["ES2022"]` (no DOM) | TS compile errors on DOM/CSSOM types — the DECIDED change is required |
+| TYP-H1 | `adapters.ts` under `lib: ["ES2022","DOM"]` | `tsc --noEmit` passes; `HTMLElement`/`document`/`Event` resolve (CSSStyleSheet is not required, R16) |
+
+> **TYP-F1 is NOT part of the vitest matrix** (R13, DECIDED): once the repo-global
+> `"DOM"` lib is applied (§5), the negative case — `adapters.ts` under
+> `lib: ["ES2022"]` alone — cannot compile inside this repo's config and cannot run under
+> vitest/tsc. It is a **one-time build/CI gate**: the PR that adds `"DOM"` to `lib` must
+> compile `adapters.ts` under **both** `["ES2022"]` and `["ES2022","DOM"]`, verified once
+> by the implementer, not by the unit suite.
 
 ---
 

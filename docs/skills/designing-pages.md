@@ -207,6 +207,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/unit/pipeline.test.ts` | registry/workers, slice lock, microtask queue, V/F matrix |
 | `tests/unit/validation.test.ts` | tag schemas, LinkConfigError catalog, timing, clone |
 | `tests/unit/render.test.ts` | serialization round-trip, fork keys, drop dispositions, SSR/ORD |
+| `tests/unit/adapters.test.ts` | concrete adapter layer: `DomAdapter`/`SSRFragmentAdapter`/render-helpers — §10 DOM/FRG/HLP/PARS matrices of `docs/specs/adapters.md` (fork-arm `wireKey` targeting, D4 undefined-drop, styles coalescing, hydrate seam, parity) |
 | `tests/unit/handlers.test.ts` / `phases.test.ts` | handler ctx/dispatch; phase ordering |
 | `tests/unit/translate.test.ts` | legacy schema → graph (in) |
 | `tests/unit/payload.test.ts` / `reverse.test.ts` | payload drop/refresh/append; reverse translation (out) |
@@ -237,6 +238,9 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   loop-safety drops, reverse translation round-trip, and PAR-5 parity
   against the server-embedded render signature + SSR hydrate seam check.
   Its smoke mirrors the vitest surface in the browser (`runner` list).
+  The concrete DOM adapter exercised here is `demo/lib/dom-adapter.js`
+  (canonicalized by `docs/specs/adapters.md` §3); the SSR fragment adapter's
+  `toString()` parity is checked by `tests/e2e/ssr-render.test.ts`.
 
 ## 13. Running checks
 

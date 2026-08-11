@@ -50,7 +50,7 @@ interface RenderAdapter<P, E> {   // P = element product (HTMLElement | fragment
 
 | Method | Client (DOM) adapter | SSR (string) adapter |
 | --- | --- | --- |
-| `createEl` | `document.createElement(type)`, keyed by `wire`; tag-match reuse per legacy notes §6.8 | fragment descriptor `{ openTag, closeTag, contentText, isVoid }` (notes §6.8 shape) |
+| `createEl` | `document.createElement(type)`, keyed by `wire` (+ optional `forkKey`); reuse is via the **functional `css.id` hydrate seam** (adapters.md §3.6), not tag-match (legacy §6.8 tag-match reuse PARKED) | fragment descriptor `{ openTag, closeTag, contentText, isVoid }` (notes §6.8 shape) |
 | `setProp` | `setAttribute` / `addEventListener` for `on*+raw` events / text content / input-`value` special-case; empty placement containers `display:none` | attribute strings; handlers inlined `on…="…"`; text into `contentText` |
 | `appendChild` | DOM insert/reorder in compiled child order; stale children removed (notes §6.9) | string concatenation in compiled child order |
 | `hydrate` | reuse SSR DOM via `getElementById(css.id)` seam (notes §5.1), bind wires, attach listeners | n/a — server never hydrates |
@@ -65,11 +65,11 @@ interface RenderAdapter<P, E> {   // P = element product (HTMLElement | fragment
 
 ```ts
 type RenderOp =
-  | { kind: 'create'; wire: NodeRef; type: string }
-  | { kind: 'set';    wire: NodeRef; name: string; value: unknown } // namespaced: 'prop:*' | 'css:*' | 'text' | 'on:<event>'
-  | { kind: 'append'; owner: NodeRef; child: NodeRef }              // reorder = re-append in compiled order
-  | { kind: 'remove'; wire: NodeRef }
-  | { kind: 'styles'; cssDefs: unknown[] }                          // one per sweep → preempt-dynamic-styles
+  | { kind: 'create'; wire: NodeRef; type: string; forkKey?: ForkPathKey }      // forkKey present only on actionable fork-arm emits (S-R3.10)
+  | { kind: 'set';    wire: NodeRef; name: string; value: unknown; forkKey?: ForkPathKey }
+  | { kind: 'append'; owner: NodeRef; child: NodeRef }                          // reorder = re-append in compiled order
+  | { kind: 'remove'; wire: NodeRef; forkKey?: ForkPathKey }
+  | { kind: 'styles'; cssDefs: unknown[] }                                      // one per sweep → preempt-dynamic-styles
 ```
 
 ### 3.2 MinimalElement — the node-local diff unit
@@ -78,8 +78,9 @@ type RenderOp =
 interface MinimalElement {
   wire: NodeRef
   type: string
-  props: Record<string, unknown>  // render-relevant compiled props incl. css id/classes/style, text, event bindings
+  props: Record<string, unknown>  // render-relevant compiled props incl. css id/classes/style, text, event bindings (cssDef flows via the styles op, not here)
   childOrder: NodeRef[]           // compiled children order (child-anchor `priority`, notes §10.8)
+  forkKey?: ForkPathKey           // present on actionable fork arms (S-R3.10); forwarded onto emitted create/set/remove ops
 }
 ```
 
@@ -93,6 +94,10 @@ Diff rules (prev vs next `MinimalElement`, per wire):
 | D4 | prop values changed | `set` **only for changed names** |
 | D5 | `childOrder` changed | re-`append` in next order + `remove` departed |
 
+Every emitted op **forwards the element's `forkKey` when present** (S-R3.10), so actionable
+fork arms stay distinct at the adapter boundary (adapters.md §2/R2; `append` carries no
+forkKey — it targets the already-created arm entries).
+
 ### 3.3 Emit ordering vs dirty sweep (D3/S-R2.3/S-R3.12)
 
 | Rule | Statement |
@@ -104,6 +109,7 @@ Diff rules (prev vs next `MinimalElement`, per wire):
 | R-ORD-5 | Slice stays **locked until final resolution** — every fork emitted **or** dropped; only then `unlock` (S2.3) |
 | R-ORD-6 | Within one emit batch: `create(parent)` precedes `append(parent, child)`; `remove(wire)` precedes any re-`create` of the same wire; at most one `styles` op |
 | R-ORD-7 | Nested emission on an active slice chain is **deferred to the microtask queue** (locking Option B); recursion-depth cap is the loop tripwire |
+| R-ORD-8 | The actionable `next` array is **root-first**: every node's `create` precedes its descendants' `create` (adapters derive the SSR root as the first-created wire, adapters.md §4.6) |
 
 ---
 
@@ -285,7 +291,7 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | ID | State / fail-state | Expected |
 | --- | --- | --- |
 | SSR-H1 | same input through server and client | structural equality (PAR-5) |
-| SSR-H2 | hydrate over SSR HTML | DOM reused via `css.id` seam; listeners bound |
+| SSR-H2 | hydrate over SSR HTML | DOM reused via the functional `css.id` seam (adapters.md §3.6 — the matched `mount.querySelector('[id="<css.id>"]')` element is targeted, not re-created); listeners bound |
 | SSR-H3 | client after hydrate | re-resolves from serialized anchors; result = its own compile (S4.2) |
 | SSR-F1 | shipped fork treated as materialization | ignored; client re-resolution is canon |
 | SSR-F2 | hydrate mismatch (HTML vs re-resolution) | client wins; mismatched slice re-emitted via §3 diff |
@@ -300,6 +306,7 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | ORD-H2 | multiple ops in one tick | one coalesced sweep, one emit batch (R-ORD-2) |
 | ORD-H3 | anchor-adding effect / new layer mid-batch | anchors populated in the sweep, idempotently (R-ORD-4, S-R3.12) |
 | ORD-H4 | node-local update, unchanged props | no `set` ops for unchanged names (D4) |
+| ORD-H5 | one emit batch with nested nodes | actionable `next` is root-first — every node's `create` precedes its descendants' `create` (R-ORD-8) |
 | ORD-F1 | emit attempted before sweep completion | impossible; slice locked until final resolution (R-ORD-3/5) |
 | ORD-F2 | nested emission on active slice | deferred to microtask; depth cap trips loops (R-ORD-7) |
 | ORD-F3 | `append` before `create` of same child | never emitted (R-ORD-6) |

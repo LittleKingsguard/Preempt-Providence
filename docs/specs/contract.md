@@ -22,7 +22,7 @@ Imports in tests take the form `import { Link } from '../src/core/link.js'`. Mod
 | `src/core/validation.ts` | `TAG_SCHEMAS`, `registerTagSchema`, `validateNode`, `TagSchema` |
 | `src/core/render.ts` | `RenderAdapter`, `MinimalElement`, `diffMinimal`, `RenderOp`, mock adapter |
 | `src/core/adapters.ts` | `DomAdapter`, `SSRFragmentAdapter`, `FragmentDescriptor`, `VOID_TAGS`, `DomAdapterOptions` — requires tsconfig `lib` to include `"DOM"` (DECIDED, adapters.md §5) |
-| `src/core/render-helpers.ts` | `minimalFromState`, `applyOps`, `treeFromOps`, `treeSig`, `jsonClone`, `MinimalElementSource`, `RenderTree` |
+| `src/core/render-helpers.ts` | `minimalFromState`, `applyOps`, `treeFromOps`, `treeSig`, `jsonClone`, `wireKey`, `MinimalElementSource`, `RenderTree` |
 | `src/core/serialize.ts` | JSON round-trip: `serializeNode`, `serializeSlice`, `SerializedAnchor`, `RenderNodeState`, `reResolve` |
 | `src/core/client.ts` | `ClientAPI`, `createClient`, `ExposedState`, `CompileStatus` |
 | `src/core/events.ts` | `EventBridge`, `EventEnvelope`, `PreemptEvent`, `coalesceByTick` |
@@ -309,12 +309,12 @@ only — never structural invariants (boundary rule, validation.md §2).
 
 ```ts
 export type RenderOp =
-  | { kind:'create'; wire: NodeRef; type: string }
-  | { kind:'set'; wire: NodeRef; name: string; value: unknown }
+  | { kind:'create'; wire: NodeRef; type: string; forkKey?: ForkPathKey }
+  | { kind:'set'; wire: NodeRef; name: string; value: unknown; forkKey?: ForkPathKey }
   | { kind:'append'; owner: NodeRef; child: NodeRef }
-  | { kind:'remove'; wire: NodeRef }
+  | { kind:'remove'; wire: NodeRef; forkKey?: ForkPathKey }
   | { kind:'styles'; cssDefs: unknown[] }
-export interface MinimalElement { wire: NodeRef; type: string; props: Record<string, unknown>; childOrder: NodeRef[] }
+export interface MinimalElement { wire: NodeRef; type: string; props: Record<string, unknown>; childOrder: NodeRef[]; forkKey?: ForkPathKey }
 export function diffMinimal(prev: Map<NodeRef, MinimalElement> | null, next: MinimalElement[]): RenderOp[]
 export interface RenderAdapter<P = unknown, E = unknown> {
   createEl(type: string, wire: NodeRef): P
@@ -328,7 +328,9 @@ export class MockAdapter implements RenderAdapter<{ wire: string; type: string }
   createEl(type, wire): { wire; type }; setProp(...); appendChild(...); hydrate(...); removeEl(wire)
 }
 ```
-`diffMinimal` implements D1–D5 (create/set/append/remove/styles).
+`diffMinimal` implements D1–D5 (create/set/append/remove/styles) and forwards an element's
+`forkKey` (when present) onto the `create`/`set`/`remove` ops it emits, so fork arms stay
+distinct at the adapter boundary (adapters.md §2/R2).
 
 ## `src/core/adapters.ts`
 
@@ -337,7 +339,7 @@ Requires `tsconfig` `"lib": ["ES2022", "DOM"]` (DECIDED, adapters.md §5 — the
 applies the tsconfig diff in the commit that introduces this module).
 
 ```ts
-import type { RenderAdapter } from './render.js'
+import type { ForkPathKey, RenderAdapter } from './render.js'
 import type { NodeRef } from './types.js'
 
 export interface FragmentDescriptor {
@@ -346,33 +348,35 @@ export interface FragmentDescriptor {
   contentText: string      // escaped text + serialized children, in emit order
   isVoid: boolean
 }
+// private side-state: ordered attr Map + childrenHtml live on an internal SSRFragmentState,
+// NOT on this public shape (adapters.md §4.1/R9).
 
 export const VOID_TAGS: ReadonlySet<string>  // area base br col embed hr img input link meta param source track wbr
 
 export interface DomAdapterOptions { onEvent?: (wire: NodeRef, event: Event) => void }
 
 export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
-  readonly wires: Map<NodeRef, HTMLElement>   // persistent wire map — applyOps cross-batch resolution source
+  readonly wires: Map<string, HTMLElement>    // key = wireKey(wire, forkKey): (NodeRef, forkKey) composite — applyOps cross-batch source
   readonly reused: Set<string>                // css.ids collected by hydrate (adapters.md §3.6)
   constructor(mount: HTMLElement, opts?: DomAdapterOptions)   // throws when no global `document` (DOM-F2)
-  createEl(type: string, wire: NodeRef): HTMLElement
-  setProp(wire: NodeRef, name: string, val: unknown): void
+  createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): HTMLElement
+  setProp(wire: NodeRef, name: string, val: unknown, forkKey?: ForkPathKey): void
   appendChild(owner: HTMLElement, child: HTMLElement): void
-  removeEl(wire: NodeRef): void
+  removeEl(wire: NodeRef, forkKey?: ForkPathKey): void
   hydrate(rootWire: NodeRef, vdom: unknown): void
   styles(cssDefs: unknown[]): void
 }
 
 export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, string> {
-  readonly fragments: Map<NodeRef, FragmentDescriptor>
+  readonly fragments: Map<string, FragmentDescriptor>   // key = wireKey(wire, forkKey): (NodeRef, forkKey) composite
   readonly styles: string[]
-  createEl(type: string, wire: NodeRef): FragmentDescriptor
-  setProp(wire: NodeRef, name: string, val: unknown): void
+  createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): FragmentDescriptor
+  setProp(wire: NodeRef, name: string, val: unknown, forkKey?: ForkPathKey): void
   appendChild(owner: FragmentDescriptor, child: FragmentDescriptor): void
-  removeEl(wire: NodeRef): void
+  removeEl(wire: NodeRef, forkKey?: ForkPathKey): void
   hydrate(rootWire: NodeRef, vdom: unknown): void   // no-op: server never hydrates
   styles(cssDefs: unknown[]): void
-  toString(): string   // stylesPrefix + root fragment html; root = first-created wire (R-ORD-6)
+  toString(): string   // stylesPrefix + root fragment html; root = first-created wire (R-ORD-8)
 }
 ```
 
@@ -387,7 +391,7 @@ Behavior contract: `docs/specs/adapters.md` §10.3 (HLP-*). No DOM globals — c
 `lib: ["ES2022"]` alone.
 
 ```ts
-import type { MinimalElement, RenderAdapter, RenderOp } from './render.js'
+import type { ForkPathKey, MinimalElement, RenderAdapter, RenderOp } from './render.js'
 
 export interface MinimalElementSource {
   nodeId: string
@@ -396,23 +400,34 @@ export interface MinimalElementSource {
   css?: Record<string, unknown>
   content?: unknown
   children?: string[]
+  forkKey?: ForkPathKey
 }
-export interface RenderTree { wire: string; type: string; props: Record<string, unknown>; children: RenderTree[] }
+export interface RenderTree { wire: string; type: string; props: Record<string, unknown>; children: RenderTree[]; forkKey?: ForkPathKey }
 
 export function minimalFromState(cs: MinimalElementSource): MinimalElement
 export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): void
 export function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => boolean }): RenderTree[]
 export function treeSig(trees: RenderTree[]): string
 export function jsonClone<T>(v: T): T
+export function wireKey(wire: NodeRef, forkKey?: ForkPathKey): string   // composite table key: bare `wire`, or `wire + '\x00' + forkKey`
 ```
 
-- `applyOps` dispatches `create`/`set`/`append`/`remove`/`styles`; `append`/`remove`
-  resolve owner/child first from this batch's created map, then from the adapter's
-  persistent `wires` map when it exists (adapters.md §3 `DomAdapter.wires`); a wire in
-  neither is skipped. `styles` ops call `(adapter as { styles?: (d: unknown[]) => void }).styles?.(cssDefs)`.
-- `treeFromOps` folds `set` ops onto props (order-independent) and builds `children` from
-  `append` edges (adapters.md HLP-H8/H9/H12); `treeSig` is the wire-agnostic PAR-5
-  signature; `jsonClone` is `JSON.parse(JSON.stringify(v))`.
+- `minimalFromState` maps `props` → `prop:*` and `css` → `css:*` **excluding `cssDef`**
+  (cssDefs flow via the `styles` op, R6), content → `text`, and forwards `cs.forkKey`.
+- `applyOps` dispatches `create`/`set`/`append`/`remove`/`styles`, **forwarding an op's
+  `forkKey`** onto `createEl`/`setProp`/`removeEl`; because the abstract `RenderAdapter`
+  methods take no `forkKey` param, the calls are made through a structural cast
+  `(adapter as { createEl(t: string, w: NodeRef, fk?: ForkPathKey): P; setProp(w: NodeRef, n: string, v: unknown, fk?: ForkPathKey): void; removeEl?(w: NodeRef, fk?: ForkPathKey): void })`
+  (the concrete `DomAdapter`/`SSRFragmentAdapter` signatures are the authorized superset);
+  `append`/`remove` resolve owner/child first from this batch's created map, then from the
+  adapter's persistent map (`'wires' in adapter` runtime probe over a `wireKey`-keyed map —
+  adapters.md §3 `DomAdapter.wires` / `SSRFragmentAdapter.fragments`); a wire in neither is
+  skipped. `styles` ops call `(adapter as { styles?: (d: unknown[]) => void }).styles?.(cssDefs)`.
+- `treeFromOps` keys by `wireKey(wire, forkKey)` so **fork arms stay distinct** (never
+  collapsed), folds `set` ops onto props (order-independent), and builds `children` from
+  `append` edges (adapters.md HLP-H8/H9/H12/H14); `treeSig` is the wire-agnostic PAR-5
+  signature over **sorted object keys** (stable under set-op order) including `forkKey`;
+  `jsonClone` is `JSON.parse(JSON.stringify(v))`.
 
 ## `src/core/serialize.ts`
 

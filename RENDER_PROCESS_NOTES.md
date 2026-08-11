@@ -579,6 +579,31 @@ Round-4 reviewer compared the 7 parallel-written `docs/specs/*.md` against canon
 | S-R4.3 | **Unresolved-reference disposition**: if the compile still produces a **viable state**, **log a warning and render the node's own state anyway** — the node is not dropped and not hidden; the unresolved binding is simply absent and flagged. |
 
 (TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)
+
+### §10.9 addendum — adapter-layer review resolutions (S-R5.x)
+
+Round-5 reviewer audited the concrete render-adapter spec (`docs/specs/adapters.md`,
+created as the Step-4 gate for `src/core/adapters.ts` / `render-helpers.ts`). 18 findings;
+all 18 resolutions below are **user-confirmed**. Folds into Pillar F on the next
+consistency pass.
+
+| ID | Decision (user-confirmed) |
+| --- | --- |
+| S-R5.1 | **Cross-batch set contract**: `set` ops target wires created in this **or a prior** batch; the adapter's persistent `wires`/`fragments` map is the resolution contract (node-local in-place updates never re-create, §10.10.4). |
+| S-R5.2 | **forkKey on render ops**: `RenderOp` create/set/remove and `MinimalElement` gain optional `forkKey`; adapters key entries by `wireKey(wire, forkKey)` composite so actionable fork arms stay mounted and addressable (both arms render; no clobber; e2e two-creates assertion kept). `applyOps` forwards the op's forkKey via a structural cast (abstract `RenderAdapter` methods stay forkKey-less; concrete signatures are the authorized superset). |
+| S-R5.3 | **Functional hydrate seam**: `css.id` reuse is functional — hydrate validates ids against `mount.querySelector`, marks them reused, and the matched element is targeted (never re-created); legacy §6.8 tag-match reuse is PARKED. |
+| S-R5.4 | **`treeSig` sorted keys**: canonical PAR-5 signature stringifies with sorted object keys (stable under set-op arrival order) and includes `forkKey`. |
+| S-R5.5 | **`styles` op supersedes demo skip**: `applyOps` invokes `adapter.styles?.(cssDefs)` when exposed; the demo's skip is superseded. |
+| S-R5.6 | **cssDef channel**: cssDefs flow through the `styles` op ONLY; `minimalFromState` excludes `css.cssDef` (never a `css:cssDef` set-prop) — no double emission into the single `<style id="preempt-dynamic-styles">` element. |
+| S-R5.7 | **undefined-valued set drops**: DOM `removeAttribute`/reset per key; SSR omits the attribute (and removes it from the ordered attr map); `text` undefined → empty. Identical across adapters (parity); `on:<event>` listener-removal is a documented DOM/SSR divergence (PARKED). |
+| S-R5.8 | **`FragmentDescriptor` private side-state**: ordered attr map + childrenHtml are private (`SSRFragmentState`); public shape stays `{ openTag, closeTag, contentText, isVoid }`. |
+| S-R5.9 | **Root-first emit (R-ORD-8)**: within one emit batch the actionable `next` array is root-first (every node's `create` precedes its descendants'), so the SSR root = first-created wire; root-removed → `toString()` = styles prefix only. |
+| S-R5.10 | **applyOps cross-batch probe**: `'wires' in adapter` runtime probe over the `wireKey`-keyed map; adapters without a map skip (same as unknown-wire). |
+| S-R5.11 | **TYP-F1 not a vitest unit**: the lib gate is a one-time build/CI check (compile `adapters.ts` under both libs); `CSSStyleSheet` not required. |
+| S-R5.12 | **Repo-global `lib: ["ES2022","DOM"]` accepted**; tsconfig change lands with the `adapters.ts` commit. |
+| S-R5.13 | **Test env**: replicate + extend the demo-smoke `El` shim (document.head + manual listener dispatch); DOM-F2 (no-document throw) split into a stubbed-global `describe`; devDependency only with Architect gate. |
+| S-R5.14 | **NVA-3 scoped to missing wires**; the documented constructor throw (DOM-F2) is not forbidden. |
+
 ## 10.10 Feature-completeness decisions (S5 phase) — DECIDED
 
 Feature-gap work closing the original-project parity holes found in the
