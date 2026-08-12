@@ -3,7 +3,8 @@
 // node → JSON → parse → recompile must round-trip equal render-relevant state (SER-R1).
 // Anchors serialize as typed refs — never live objects (notes §10.6, D4).
 import type { Node } from './node.js'
-import type { AnchorTarget, NodeBaseData, NodeRef, Role } from './types.js'
+import type { AnchorTarget, DerivedDecl, NodeBaseData, NodeRef, Role } from './types.js'
+import { validateDerived } from './derived.js'
 
 export type SerializedAnchor = {
   role: Role
@@ -24,6 +25,9 @@ export interface RenderNodeState {
   children: NodeRef[]
   anchors: SerializedAnchor[]
   forkKey?: string
+  /** the derived RULE (never the baked values) — re-derivation needs the
+   *  rule in the data, not the value (derived-state.md §2/§8, SER-R1). */
+  derived?: DerivedDecl
 }
 
 export type SerializedRenderDoc = {
@@ -70,11 +74,16 @@ export function serializeNode(node: Node): RenderNodeState {
   const content = node.content
   assertJsonSafe(props)
   assertJsonSafe(content)
+  // the derived RULE ships in the data; the baked KEYS never ship as values
+  // (the rule replaces them — a stale authored value must not round-trip)
+  const shipped: Record<string, unknown> = { ...props }
+  const derivedKeys = Object.keys(node.derived?.props ?? {})
+  for (const k of derivedKeys) delete shipped[k]
   const state: RenderNodeState = {
     id: node.id,
     state: 'in-tree',
     type: node.type,
-    props: { ...props },
+    props: shipped,
     css: cssState(node.css),
     children: node.children.map((child) => child.id),
     anchors: node.anchors.map((a) => {
@@ -102,6 +111,7 @@ export function serializeNode(node: Node): RenderNodeState {
     }),
   }
   if (content !== undefined) state.content = content
+  if (node.derived !== undefined) state.derived = node.derived
   // deterministic anchor order for stable round-trips
   state.anchors.sort((x, y) => {
     const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, target: 3, duplex: 4, placement: 5, component: 6 }
@@ -131,6 +141,7 @@ interface SeededNode {
   content?: unknown
   anchors?: SerializedAnchor[]
   forkKey?: string
+  derived?: DerivedDecl
 }
 
 function assertNoLiveTargets(v: unknown): void {
@@ -170,6 +181,12 @@ function parseNodeState(v: unknown): SeededNode {
     seed.anchors = o.anchors as SerializedAnchor[]
   }
   if (typeof o.forkKey === 'string') seed.forkKey = o.forkKey
+  if (o.derived !== undefined) {
+    // schema-boundary guard (derived-state.md §7): a malformed serialized
+    // `derived` never reaches a compile pass
+    validateDerived(o.derived)
+    seed.derived = o.derived as DerivedDecl
+  }
   return seed
 }
 
@@ -189,6 +206,9 @@ export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
   if (!Array.isArray(doc.content)) throw new Error('envelope-mismatch')
   validateClientConfig(doc)
   assertNoLiveTargets(template)
+  // the template's derived rule is validated at the same schema boundary as
+  // every content entry (derived-state.md §7)
+  validateDerived((template as { derived?: unknown }).derived)
   const groups = new Map<string, Array<{ seed: SeededNode; idx: number }>>()
   const seeds: SeededNode[] = []
   for (const item of doc.content) {

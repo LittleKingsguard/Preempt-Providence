@@ -4,6 +4,7 @@ import type {
   AnchorTarget,
   CompileResult,
   CompiledState,
+  DerivedDecl,
   DirtyScope,
   LayerMutationList,
   LinkConfigNameHub,
@@ -19,6 +20,7 @@ import { MAX_COMPILE_DEPTH } from './constants.js'
 import { registerNode, scheduleSweep, markPending, resolveNodeRef } from './registry.js'
 import { resolveArms } from './resolve.js'
 import { logCompilePass, compilePassLogEnabled } from './debug.js'
+import { validateDerived, applyDerived } from './derived.js'
 
 export { MAX_COMPILE_DEPTH }
 
@@ -118,6 +120,7 @@ export class Node {
     css: Record<string, unknown>
     content: unknown
     handlers: unknown[]
+    derived: DerivedDecl | undefined
   }
 
   get anchors(): Anchor[] {
@@ -136,6 +139,7 @@ export class Node {
   }
 
   constructor(data: NodeBaseData = {}, hub?: LinkConfigNameHub, id?: string, noSeed = false) {
+    validateDerived(data.derived)
     this.id = id ?? data.id ?? mintNodeId()
     this.base = { ...data }
     Object.freeze(this.base)
@@ -143,7 +147,7 @@ export class Node {
     this._anchors = []
     this._dirty = new Set<DirtyScope>()
     this.hub = hub ?? null
-    this.pass1 = { type: 'div', props: {}, css: {}, content: undefined, handlers: [] }
+    this.pass1 = { type: 'div', props: {}, css: {}, content: undefined, handlers: [], derived: undefined }
     if (data.type && !noSeed) {
       this.layers.push(makeLayer(`seed-${this.id}`, undefined, {
         type: data.type,
@@ -274,6 +278,12 @@ export class Node {
     return this.pass1.css
   }
 
+  /** Read-only merged derived declaration (base seeded, layers override per
+   *  key — like props/css). serializeNode emits from it. */
+  get derived(): DerivedDecl | undefined {
+    return this.pass1.derived
+  }
+
   get content(): unknown {
     return this.pass1.content
   }
@@ -307,6 +317,7 @@ export class Node {
 
   addLayer(layer: NodeLayer): void {
     this.ensureWritable()
+    validateDerived(layer.derived)
     const hasAnchors = Array.isArray(layer.anchors) && layer.anchors.length > 0
     const existingIdx = this.layers.findIndex(l => l.id === layer.id)
     if (existingIdx !== -1) {
@@ -353,6 +364,9 @@ export class Node {
         css: l.css ? { ...l.css } : undefined,
         handlers: l.handlers,
         anchors: l.anchors ? l.anchors.map(a => ({ ...a })) : undefined,
+        // derived rides the layer-copy loop too (spec §2): a clone inherits
+        // its prototype's derived declarations (fork-stress assembly)
+        derived: l.derived ? { ...l.derived, ...(l.derived.props ? { props: { ...l.derived.props } } : {}) } : undefined,
       }))
     }
     copy.compileLocal()
@@ -438,14 +452,23 @@ export class Node {
     let type = typeof this.base.type === 'string' ? this.base.type : 'div'
     let content: unknown = this.base.content
     let handlers: unknown[] | undefined = this.base.handlers
+    // derived merges like props/css/handlers: base seeded, layers override
+    // per key (spec §2); a layer whose decl carries no props leaves the
+    // merge untouched
+    let derived: DerivedDecl | undefined = this.base.derived
     for (const layer of this.layers) {
       if (layer.type) type = layer.type
       if (layer.content !== undefined) content = layer.content
       if (layer.props) for (const k of Object.keys(layer.props)) props[k] = layer.props[k]
       if (layer.css) for (const k of Object.keys(layer.css)) css[k] = layer.css[k]
       if (layer.handlers) handlers = [...(layer.handlers as unknown[])]
+      if (layer.derived?.props) {
+        derived = derived?.props
+          ? { props: { ...derived.props, ...layer.derived.props } }
+          : { props: { ...layer.derived.props } }
+      }
     }
-    this.pass1 = { type, props, css, content, handlers: handlers ?? [] }
+    this.pass1 = { type, props, css, content, handlers: handlers ?? [], derived }
     this.ensureAutoIds()
   }
 
@@ -633,6 +656,9 @@ export class Node {
         if (hasAnyTarget && isResolutionParticipant(node)) continue
         const cs = makeCs(node)
         publishOwn(node, cs)
+        // derived bake (§4): the copy is what lands — the pass-1 canon is
+        // never mutated (clone-before-merge)
+        cs.props = applyDerived(node, cs) ?? cs.props
         actionable.push(cs)
         continue
       }
@@ -665,6 +691,9 @@ export class Node {
           warnings.push({ code: 'unresolved-reference', pathKey: node.pathKey })
           if (shouldWarn(node)) console.warn('unresolved-reference at', node.pathKey)
         }
+        // derived bake (§4): per-arm evaluation — each arm's bindings drive
+        // its own baked props
+        cs.props = applyDerived(node, cs) ?? cs.props
         actionable.push(cs)
       }
     }

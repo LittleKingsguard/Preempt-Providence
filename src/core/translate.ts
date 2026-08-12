@@ -19,7 +19,8 @@
 import { Node, mintNodeId } from './node.js'
 import { Link } from './link.js'
 import { registerContentNode } from './registry.js'
-import type { Anchor, LinkConfigNameHub, NodeBaseData } from './types.js'
+import { validateDerived } from './derived.js'
+import type { Anchor, DerivedDecl, LinkConfigNameHub, NodeBaseData } from './types.js'
 
 export type LegacyHandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
 
@@ -54,6 +55,10 @@ export interface LegacyNodeData {
   handlers?: LegacyHandlerDef[]
   css?: { id?: string; classes?: string[]; style?: string; cssDef?: unknown }
   versions?: unknown
+  /** the derived RULE (never the baked values) — flat legacy home for the
+   *  merged declaration (derived-state.md §2/§8: layers have no legacy
+   *  home; the round-trip is value-equivalent, not shape-exact) */
+  derived?: DerivedDecl
 }
 
 export interface LegacyTemplateData {
@@ -142,6 +147,12 @@ function baseFrom(nodeData: LegacyNodeData): NodeBaseData {
     // backend stores loadable handler definitions as text and the render
     // process instantiates them at the translation boundary
     base.handlers = nodeData.handlers.map(h => (typeof h.body === 'string' ? { ...h, body: instantiateHandlerBody(h.body) } : h))
+  }
+  if (nodeData.derived !== undefined) {
+    // schema-boundary guard (derived-state.md §7): malformed legacy derived
+    // data throws `derived-invalid` at translate, never reaches compile
+    validateDerived(nodeData.derived)
+    base.derived = nodeData.derived
   }
   return base
 }
@@ -314,6 +325,12 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   if (node.content !== undefined) data.content = node.content
   if (node.props && Object.keys(node.props).length > 0) data.props = { ...node.props }
   if (node.css && Object.keys(node.css).length > 0) data.css = { ...node.css }
+  // the MERGED derived declaration ships flat (DECIDED — layers have no
+  // legacy home; the round-trip is value-equivalent)
+  const derived = node.derived
+  if (derived !== undefined) {
+    data.derived = derived.props ? { props: { ...derived.props } } : {}
+  }
   const rawHandlers = node.handlers as unknown as LegacyHandlerDef[] | undefined
   if (rawHandlers && rawHandlers.length > 0) {
     data.handlers = rawHandlers.map((h) => {

@@ -101,6 +101,19 @@ export function forkStressLegacyData(depth, method) {
         },
         css: levelCss(layer, slot),
         handlers: [{ name: 'stress-expand', phase: 'after-compile' }],
+        // `stress:expanded` is DERIVED from the node's own children count
+        // (docs/specs/derived-state.md §9.2): no marker op, no re-dirty.
+        // Clones inherit the declaration via baseFrom → Node.clone. Leaf
+        // clones read false forever; non-leaves bake true once their
+        // children exist. The chain (`stress:layers`) stays op-based
+        // (§6 — cross-node derived reads are out of scope).
+        derived: {
+          props: {
+            'stress:expanded': {
+              $if: { cond: { $gt: [{ $: 'children.length' }, 0] }, then: true, else: false },
+            },
+          },
+        },
       }
       if (method === 'values') {
         // every clone provides (and renders) its own scalar value
@@ -201,9 +214,11 @@ if (typeof document !== 'undefined') {
    *  every clone's after-compile. The body is SELF-CONTAINED: variant A
    *  (ctx.node) lets it identify the clone it runs on (layer/slot read from
    *  the clone's own props) and expand THAT clone — no pending registry, no
-   *  closure over (layer, slot). Each firing is O(1): the marker
-   *  `stress:expanded` (applied via the managed channel) makes re-fires
-   *  no-op, so every clone expands exactly once (idempotent). */
+   *  closure over (layer, slot). Each firing is O(1) and the clone fires
+   *  EXACTLY ONCE: no self-ops at all — the idempotency guard is
+   *  `children.length`-only (the parent sets the CHILDREN's chains at
+   *  creation; a leaf hits the deepest-layer return BEFORE any op, so it
+   *  never re-dirties; derived-state.md §9.2). */
   function installStressExpandBody(proto) {
     proto.addLayer({
       id: `stress-expand-${proto.id}`,
@@ -215,30 +230,34 @@ if (typeof document !== 'undefined') {
             PROFILE.handlerCalls += 1
             const n = c.node
             if (!n) return
-            // idempotency guard: already expanded (the marker apply re-fires
-            // this body on the clone's next pass — no-op) or has children
-            if (n.children.length > 0 || n.props?.['stress:expanded']) return
+            // idempotency guard: children.length-only — a clone with
+            // children was already expanded. No self-ops, so the clone is
+            // never re-dirtied by its own body.
+            if (n.children.length > 0) return
             const layer = n.props['stress:layer']
-            // mark the clone expanded FIRST (its own next after-compile will
-            // no-op) + build its stress:layers chain (parent chain +
-            // `|L<layer>:<kind>`)
-            const parentChain = n.parent?.props?.['stress:layers'] ?? ''
-            const segment = chainSegment(layer)
-            const chain = parentChain ? `${parentChain}|${segment}` : segment
-            c.clientAPI.apply(n.id, [
-              { targetProp: 'props.stress:expanded', mode: 'replace', value: true },
-              { targetProp: 'props.stress:layers', mode: 'replace', value: chain },
-            ])
-            // deepest layer: no children to create
+            // deepest layer: the leaf check runs BEFORE any op/child work —
+            // a leaf never touches an op (no re-dirty → no re-fire → no loop)
             if (layer >= depth - 1) return
             // clone the NEXT layer's prototypes under this clone — the
             // supervisor registers + attaches + marks the copies pass-2
             // dirty, so their own after-compile expands the next layer
-            // (recursive assembly — each clone expands itself).
+            // (recursive assembly — each clone expands itself). The parent
+            // then sets the CHILDREN's chains at creation: the fresh copy is
+            // in-tree right after attach, so the state-slice applies; both
+            // marks (clone-instance + chain slice) land in the SAME flush
+            // (pass2Dirty is a Set) — one flush, one compile, one fire.
+            const parentChain = n.props?.['stress:layers'] ?? ''
+            const childChain = parentChain ? `${parentChain}|${chainSegment(layer + 1)}` : chainSegment(layer + 1)
             const rA = c.clientAPI.apply(n.id, { kind: 'clone-instance', source: protoByKey.get(`${layer + 1}:a`), slot: n, priority: 0 })
             const rB = c.clientAPI.apply(n.id, { kind: 'clone-instance', source: protoByKey.get(`${layer + 1}:b`), slot: n, priority: 1 })
             if (rA.status !== 'applied' || rB.status !== 'applied') {
               throw new Error(`clone-instance rejected: ${rA.status}/${rB.status}`)
+            }
+            for (const r of [rA, rB]) {
+              const copyId = r.dirtied?.[0]
+              if (copyId) {
+                c.clientAPI.apply(copyId, [{ targetProp: 'props.stress:layers', mode: 'replace', value: childChain }])
+              }
             }
           },
         },
@@ -315,15 +334,21 @@ if (typeof document !== 'undefined') {
     // bootstrap render (the ONLY full compile of the page)
     render()
 
-    // kick off the recursion: clone the layer-1 prototypes onto the root.
-    // Each clone's inherited after-compile (self-contained via ctx.node)
-    // expands ITSELF, so the kickoff is just the two layer-1 clones. The
-    // root has no handler of its own, so it also gets a tick to recompile
-    // with the fresh childOrder.
+    // kick off the recursion: clone the layer-1 prototypes onto the root,
+    // then set the L1 chains the same way the expander sets child chains
+    // (the L1 copies are in-tree right after attach; both marks land in the
+    // same flush). The root has no handler of its own, so it also gets a
+    // tick to recompile with the fresh childOrder.
     const r1 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:a'), slot: rootNode, priority: 0 })
     const r2 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:b'), slot: rootNode, priority: 1 })
     if (r1.status !== 'applied' || r2.status !== 'applied') {
       throw new Error(`layer-1 clone-instance rejected: ${r1.status}/${r2.status}`)
+    }
+    for (const r of [r1, r2]) {
+      const copyId = r.dirtied?.[0]
+      if (copyId) {
+        clientAPI.apply(copyId, [{ targetProp: 'props.stress:layers', mode: 'replace', value: chainSegment(1) }])
+      }
     }
     clientAPI.apply(rootNode.id, [{ targetProp: 'props.stressTick', mode: 'replace', value: 1 }])
 
@@ -479,11 +504,17 @@ if (typeof document !== 'undefined') {
     await runner.check('idempotent expansion: every node expanded exactly once (2 children per non-leaf, no after-compile loops)', () => {
       for (const n of allNodes()) {
         const k = n.props?.['stress:layer']
+        // `stress:expanded` is DERIVED — read it from the RESOLVED state
+        // (never pass-1 `n.props`, which does not carry it). Non-leaves must
+        // bake true, leaves false (children.length-only rule).
+        const resolvedProps = supervisor.getResolvedStates(n.id)?.[0]?.props
         if (k < depth - 1) {
           if (n.children.length !== 2) throw new Error(`node ${n.id} (L${k}): expected 2 children, got ${n.children.length}`)
-          if (n.props?.['stress:expanded'] !== true) throw new Error(`node ${n.id} (L${k}): stress:expanded not set`)
+          if (resolvedProps?.['stress:expanded'] !== true) throw new Error(`node ${n.id} (L${k}): derived stress:expanded not true (${resolvedProps?.['stress:expanded']})`)
         } else if (n.children.length !== 0) {
           throw new Error(`leaf node ${n.id} (L${k}): expected 0 children, got ${n.children.length}`)
+        } else if (resolvedProps?.['stress:expanded'] !== false) {
+          throw new Error(`leaf node ${n.id} (L${k}): derived stress:expanded not false (${resolvedProps?.['stress:expanded']})`)
         }
       }
     })

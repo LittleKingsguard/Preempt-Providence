@@ -233,7 +233,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `demo/feature-matrix.js` (smoke) | one page exercising every surface: placements, components/forks, handlers, payload lifecycle (append/refresh/drop), managed updates, reverse translation, loop-safety, PAR-5 parity, SSR hydrate seam |
 | `demo/mode-toggle.js` (smoke) | same feature-matrix document driven through the three adapter modes — `?mode=ssr|client|markdown` (every build embeds both payloads, so static serves work; `scripts/serve-demo.mjs` serves per-mode too). **Demo-page test case — NOT expected real-world behavior.** SSR asserts the full well-formed server HTML was received (root-first, presentation ids present, balanced tags — the `validateHtmlShape` scan mirrors the e2e stack validator); markdown asserts the raw editor source is embedded verbatim for inspection alongside the live parsed display; client runs the shared harness with no mode-specific payload |
 | `demo/fork-stress.js` (smoke, depths 2–12) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Each level changes a different css property (L1 background-color, L2 border-style, L3 border-width, L4 text-decoration, cycling) with a value per sibling slot (demo-only helper `levelCss`, NOT a core API). Checks: per-layer node counts, rendered-count, css per-level property + slot pairs, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
-| `demo/fork-stress-data.js` (smoke, depths 2–12) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; page-side pending registry keeps re-runs O(1)). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes) + the three SINGLE-METHOD d12 variants `fork-stress-data-{placement,values,link}-d12.html` (spec §4): placement-only (pure clone structure), values-only (every prototype declares its scalar VALUE as a legacy `component` source — translate.md §2 — and every clone renders it as text), link-only (every prototype declares its component DEF as the source value; every clone's emission re-types the next layer — the recursive def chain, which exercises the emitter's covered-consumer `defChildren` path). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total, prototypes stay unplaced, css per-level property + slot pairs, `stress:kind` per layer mechanism, values/link method checks (per-node element text vs resolved source value / def content), DOM nesting vs graph children (all sources live on the prototypes, so the root emits like every node — walk from the root element), `stress:layers` ancestry chains, handler idempotency, incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` |
+| `demo/fork-stress-data.js` (smoke, depths 2–12) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; self-contained `c.node` bodies fire ONCE per clone — the DERIVED `stress:expanded` (`children.length > 0`, declared on the prototypes, inherited by clones — derived-state.md §9.2) replaces the marker op, so no self-ops, no re-dirties: 4094 handler calls at d12, half the marker era). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes) + the three SINGLE-METHOD d12 variants `fork-stress-data-{placement,values,link}-d12.html` (spec §4): placement-only (pure clone structure), values-only (every prototype declares its scalar VALUE as a legacy `component` source — translate.md §2 — and every clone renders it as text), link-only (every prototype declares its component DEF as the source value; every clone's emission re-types the next layer — the recursive def chain, which exercises the emitter's covered-consumer `defChildren` path). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total, prototypes stay unplaced, css per-level property + slot pairs, `stress:kind` per layer mechanism, values/link method checks (per-node element text vs resolved source value / def content), DOM nesting vs graph children (all sources live on the prototypes, so the root emits like every node — walk from the root element), `stress:layers` ancestry chains (parent-baked at creation), derived idempotency (resolved-state `stress:expanded` true for non-leaves / false for leaves), incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` + `docs/specs/derived-state.md` §9.2 |
 
 ## 12. Demo pages (`npm run demo` → http://localhost:4173/demo/)
 
@@ -313,15 +313,20 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   under it (recursive assembly — depth 12 = 4095 nodes). HandlerContext
   identifies the clone it runs on via `c.node` (variant A — per-dispatch
   context enrichment), reads its own layer from props, and expands ITSELF
-  exactly once (marker-guarded, O(1) per firing — no page-side queue, no
-  graph scans). The page uses ONLY core
-  (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/
+  exactly once (O(1) per firing — no page-side queue, no graph scans). No
+  self-ops at all: `stress:expanded` is DERIVED on the prototypes
+  (`children.length > 0` — derived-state.md §9.2), so each clone's body
+  fires exactly once per flush and is never re-dirtied (handlerCalls 4094 at
+  d12, half the marker-op era's 8188); the parent bakes the CHILDREN's
+  `stress:layers` chain onto the fresh copy at creation. The page uses ONLY
+  core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/
   `cssPropForLevel`/`LAYER_METHODS` — demo-only, see §14.3) — no
   demo-fixtures, no demo-side render machinery. Its runner checks mirror the
   imperative page's: per-layer counts + total, css property/slot pairs,
   `stress:kind` per mechanism, DOM nesting vs graph children, ancestry
-  chains, idempotency, and the incremental-render contract (bootstrap the
-  only full compile). Spec: `docs/specs/fork-stress-data.md`.
+  chains, derived idempotency (resolved-state `stress:expanded`), and the
+  incremental-render contract (bootstrap the only full compile). Spec:
+  `docs/specs/fork-stress-data.md`.
 - `fork-stress-data-{placement,values,link}-d12.html` — the SINGLE-METHOD
   d12 variants (spec §4): the whole tree relies on ONE mechanism.
   placement-only is pure clone structure; values-only adds `component`
@@ -447,9 +452,11 @@ From the legacy-envelope completion test (`docs/specs/fork-stress-data.md`):
    context with the node being dispatched (+ its last-known states). An
    after-compile body can read its own layer from `c.node.props` and expand
    itself — no prototype closure, no pending registry.
-3. **Self-expansion is O(1) per firing — but never scan the graph.** The
-   marker-prop apply re-fires the body on the node's next pass; the marker
-   guard no-ops it, so each node expands exactly once with no queue.
+3. **Self-expansion is O(1) per firing — but never scan the graph.** Each
+   node's body fires exactly once per flush (no self-ops: the
+   `stress:expanded` marker op is replaced by a DERIVED declaration on the
+   prototypes, derived-state.md §9.2 — nothing re-dirties a node after its
+   children exist, so handlerCalls halves from 2×N to N; 4094 at d12).
    Scanning `supervisor.allNodes()` per after-compile call was the original
    27.9s regression — never scan the whole graph inside a handler body.
 4. **Self-providing trees must not turn pass-2 into O(n²).** Every clone of
@@ -461,14 +468,21 @@ From the legacy-envelope completion test (`docs/specs/fork-stress-data.md`):
    `owner` backref), so arm-termination reads providers off the Link and
    the pass-2 slice is the walk path only; the universe sweep survives
    only for hub-less trees, target-gated (supervisor `focusedSliceFor` +
-   resolve.ts). Link d12 now ~8.7s shim.
+   resolve.ts). Link d12 now ~5.6s shim.
 5. **A clone inherits the prototype's LAYERS (handlers ride along) but NOT
-   its parent's chain.** Build `stress:layers` from
-   `c.tree.ancestorsOf(node)` and set it on the clone, or per-node-chain
-   checks fail.
-6. **Legacy envelope css is the flat legacy shape** (`{ style, classes }`),
+   its parent's chain.** The PARENT bakes the child's `stress:layers`
+   chain onto the fresh copy at creation (right after `clone-instance` —
+   the copy is in-tree, the slice applies, and both pass-2 marks coalesce
+   into one flush); the kickoff sets the L1 chains the same way. The
+   child's own body never sets its chain.
+6. **Derived props are read from the RESOLVED state, never pass-1
+   `n.props`.** A derived bake lands in `CompiledState.props`
+   (`node.resolved` / `getResolvedStates(id)[0].props`), NOT in
+   `node.props` — page checks that read `stress:expanded` must use the
+   supervisor's resolved store (non-leaves bake `true`, leaves `false`).
+7. **Legacy envelope css is the flat legacy shape** (`{ style, classes }`),
    never nested under an extra key — nesting stringifies into `cssText` and
    css checks fail. Markers go in `props`.
-7. **Self-verifying demos: the banner is the gate.** The smoke asserts the
+8. **Self-verifying demos: the banner is the gate.** The smoke asserts the
    exact banner string; keep checks merged to that count and the banner
    text verbatim.

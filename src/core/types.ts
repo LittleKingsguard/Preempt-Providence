@@ -7,7 +7,7 @@
 // C2 contract relies on (a Link can never fill AnchorTarget).
 export type Role = 'parent'|'child'|'source'|'target'|'duplex'|'placement'|'component'
 export type AnchorTarget = Node | 'rootNode' | 'component' | 'contentNodes' | string
-interface Node {
+export interface Node {
   readonly isNode: true
   readonly id: string
   readonly base: Readonly<NodeBaseData>
@@ -24,6 +24,7 @@ interface Node {
   readonly css: Record<string, unknown>
   readonly content: unknown
   readonly pathKey: string
+  readonly derived: DerivedDecl | undefined
   addLayer(layer: NodeLayer): void
   removeLayer(id: string): void
   removeLayersForSource(sourceName: string): void
@@ -129,11 +130,25 @@ export interface CompileResult {
   warnings: Array<{ code: 'circular-source'|'unresolved-reference'; pathKey: PathKey }>
 }
 export interface AnchorDecl { role: Role; target: AnchorTarget|string; options?: AnchorOptions }
+// Derived state (docs/specs/derived-state.md §2/§3): a data-carried,
+// JSON-only declaration of props derived from the node's own compiled state.
+// Expressions are pure and whitelisted — no eval, no dispatch, no journal.
+export type DerivedExpr =
+  | string
+  | number
+  | boolean
+  | null
+  | { $: string }
+  | { $concat: DerivedExpr[] }
+  | { $if: { cond: DerivedExpr; then: DerivedExpr; else?: DerivedExpr } }
+  | { $eq: [DerivedExpr, DerivedExpr] }
+  | { $gt: [DerivedExpr, DerivedExpr] }
+export interface DerivedDecl { props?: Record<string, DerivedExpr> }
 export interface NodeLayer {
   id: string; sourceName?: string; type?: string
   props?: Record<string, unknown>; css?: Record<string, unknown>
-  content?: unknown; handlers?: unknown[]; anchors?: AnchorDecl[]
+  content?: unknown; handlers?: unknown[]; anchors?: AnchorDecl[]; derived?: DerivedDecl
 }
-export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[] }
+export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl }
 export interface LinkConfigNameHub { linkFor(name: string, kind: 'component'|'placement'): Link }
 export interface HandlerDef { name: string; event?: string; phase?: string; body?: (ctx: unknown, ...args: unknown[]) => unknown }

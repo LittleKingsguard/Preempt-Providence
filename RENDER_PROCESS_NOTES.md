@@ -952,10 +952,44 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   recursion** cap (`resolveNames`/`continueArm`) only; `compileRemote`'s
   walk gate is removed as consistency cleanup. Real cycles (A→B→A) still
   drop as `loop` + `circular-source` at op time (FS-5) and compile time
-  (FS-7). Fork-stress depths 9-12 become compilable (L8/L9/L10/L11 layers
-  actionable; depth-12 needs a longer smoke settle). Landed via the
-  subagents workflow: spec `docs/specs/compile-horizon-review.md` §6
-  (reviewer loop exit criteria met); TestWriter red set + Implementer per
-  that spec's §6.4/§6.5.
+   (FS-7). Fork-stress depths 9-12 become compilable (L8/L9/L10/L11 layers
+   actionable; depth-12 needs a longer smoke settle). Landed via the
+   subagents workflow: spec `docs/specs/compile-horizon-review.md` §6
+   (reviewer loop exit criteria met); TestWriter red set + Implementer per
+   that spec's §6.4/§6.5.
+- **DECIDED (derived state, variant D — docs/specs/derived-state.md):**
+  node data may declare props DERIVED from the node's own compiled state
+  (`derived: { props: { <key>: <expr> } }` — a JSON-only, whitelisted-path
+  DSL: literals, `{ $: '<root>.<key>' }` reads, `$concat`/`$if`/`$eq`/`$gt`;
+  roots are props/bindings/content/type/pathKey/children.length/
+  unresolved.length/placement). `applyDerived` bakes the evaluated props
+  into every compiled state (clone-before-merge — the pass-1 canon is never
+  mutated), validated at every declaration boundary (`derived-invalid`),
+  and the RULE ships in all data boundaries (serializeSlice/parseNodeState,
+  legacy baseFrom/reverseTranslate — layers have no legacy home, so the
+  round-trip is value-equivalent). Derived props live in the compiled
+  state only — never pass-1 `node.props` — and re-derive deterministically
+  on every pass. Cross-node derived reads are OUT of scope (§6): the
+  fork-stress `stress:layers` chain stays managed-channel based.
+- **DECIDED (fork-stress-data adopts derived `stress:expanded` — §9.2):**
+  the data-driven fork-stress demo replaces the `stress:expanded` marker op
+  with the derived declaration
+  `{ $if: { cond: { $gt: [{ $: 'children.length' }, 0] }, then: true,
+  else: false } }` on the prototypes (clones inherit it via baseFrom →
+  Node.clone). Four coordinated changes, pinned in derived-state.md §9.2:
+  (a) the PARENT sets the CHILDREN's `stress:layers` chain at creation
+  (right after each `clone-instance` op — the copy is in-tree, both pass-2
+  marks coalesce into one flush; the kickoff sets the L1 chains the same
+  way); (b) NO self-ops at all — the body's guard is `children.length`-only
+  and it applies no op to itself, so each clone fires once per flush and is
+  never re-dirtied (handlerCalls 4094 at d12, half the marker era's 8188;
+  the clone's state-with-children publishes through the CHILDREN's focused
+  passes — `pass2States.set` replaces the parent's state, after-compile
+  dispatches only on the dirty node); (c) leaf clones hit the deepest-layer
+  return before any op — no re-dirty, no loop; (d) the idempotency check
+  reads `stress:expanded` from the RESOLVED state
+  (`supervisor.getResolvedStates(id)[0].props`), not pass-1 `n.props`.
+  demo/components.js `expandState` bake port (spec §9.1) is PARKED (no
+  `prop:data-resolution` derivation yet) — expandState stays emit-time.
 
 (TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)

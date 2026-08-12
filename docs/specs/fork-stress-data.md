@@ -93,8 +93,15 @@ export function forkStressLegacyData(depth, method) {
      layer with the body. The body needs the clone's layer+slot: read from
      `c.tree.getState(nodeId)` or from the node's own `props` (the clone
      inherits `props['stress:layer']`, `['stress:slot']`).
-   - Idempotency: only expand when the clone has no children yet (the
-     marker `stress:expanded` prop, or `children.length === 0`).
+   - Idempotency: only expand when the clone has no children yet
+     (`children.length === 0` — children.length-only guard, derived-state.md
+     §9.2). The body applies NO op to itself: `stress:expanded` is DERIVED
+     on the prototypes (`{ $if: { cond: { $gt: [{ $: 'children.length' },
+     0] }, then: true, else: false } }` — inherited by every clone, baked
+     into the compiled state on every pass, never a pass-1 prop), so a node
+     is never re-dirtied by its own body. A leaf (layer ≥ depth − 1) hits
+     the deepest-layer return BEFORE any op/child work — leaves never touch
+     an op.
    - Expansion: `const protoA = prototypeFor(layer+1, 'a')`, `protoB =
       prototypeFor(layer+1, 'b')` — looked up from the registered prototype
       nodes (by their props). `c.clientAPI.apply(id, { kind:
@@ -105,6 +112,13 @@ export function forkStressLegacyData(depth, method) {
       IT expands the next layer. Recursion builds the whole tree. NOTE: the
       single-arg `apply({ kind, ... })` form is NOT supported — use
       `apply(nodeRef, mutation)` (lesson 1 below).
+    - **The parent sets the CHILDREN's chains at creation**: after each
+      `clone-instance` op succeeds, apply the `props.stress:layers = ownChain
+      + '|' + chainSegment(layer + 1)` state-slice on the FRESH COPY (from
+      the op's `dirtied[0]`); the kickoff sets the L1 chains to
+      `chainSegment(1)` the same way. The copy is in-tree right after attach
+      and both pass-2 marks coalesce into ONE flush — the copy's body never
+      sets its own chain (derived-state.md §9.2a).
 5. **Render**: bootstrap `root.compile(all nodes)` once; then consume
    `takePass2States()` + `diffMinimal` + core `applyOps` (incremental
    contract). The DomAdapter is core `dist/core/adapters.js`.
@@ -112,8 +126,11 @@ export function forkStressLegacyData(depth, method) {
    node counts (2^k), total 2^depth − 1, css property/slot pairs,
    `stress:kind`/`stress:layers`-equivalent (the clones inherit props), the
    nesting check (DOM children == graph children), and the incremental
-   render contract. A `stress:layers` chain can be assembled by the handler
-   (the clone inherits the parent's chain + `|L<layer>:<kind>`).
+   render contract. The `stress:layers` chain is op-set (the parent bakes it
+   onto each child at creation — §9.2a — so the chain check reads pass-1
+   props as before); the idempotency check reads `stress:expanded` from the
+   RESOLVED state (`supervisor.getResolvedStates(id)[0].props` — the derived
+   bake is NOT a pass-1 prop): non-leaves must show `true`, leaves `false`.
 
 ## Single-method variants (replaces the per-layer mechanism cycle)
 
@@ -189,25 +206,35 @@ expects 2^depth − 1 elements for every variant.
    context with `c.node` (the node the handler runs on) and `c.states` (its
    last-known resolved states). The `stress-expand` body is now fully
    SELF-CONTAINED: it reads `stress:layer` from `c.node.props`, expands
-   THAT node, and the `stress:expanded` marker makes re-fires no-op. No
+   THAT node, and the `children.length` guard makes re-fires no-op. No
    closure over the prototype's (layer, slot).
 
 3. **Self-expansion needs no page-side queue — but never scan the graph.**
-   Each clone expands itself exactly once (the marker apply re-fires the
-   body on the clone's next pass; the marker guard no-ops it), so every
-   firing is O(1) — no `pendingByKey` registry, no per-call graph scan.
-   The earlier design (a pending queue fed from clone-instance `dirtied`
-   ids) was a workaround for the missing `c.node`; the 27.9s regression it
-   replaced (scanning `supervisor.allNodes()` per after-compile call) is
-   still the cautionary tale: never scan the whole graph inside a handler
-   body.
+   Each clone expands itself exactly once, and its after-compile fires ONCE
+   per flush: the body applies NO op to itself (no self-ops at all — the
+   derived-state adoption, `docs/specs/derived-state.md` §9.2). The
+   `stress:expanded` marker op is GONE — the prop is DERIVED
+   (`{ $if: { cond: { $gt: [{ $: 'children.length' }, 0] }, then: true,
+   else: false } }` declared on the prototypes, inherited by every clone),
+   so nothing re-dirties a node after its children exist: handlerCalls = the
+   clone count (4094 at d12, half the marker-op era's 8188). Every firing is
+   O(1) — no `pendingByKey` registry, no per-call graph scan. The earlier
+   design (a pending queue fed from clone-instance `dirtied` ids) was a
+   workaround for the missing `c.node`; the 27.9s regression it replaced
+   (scanning `supervisor.allNodes()` per after-compile call) is still the
+   cautionary tale: never scan the whole graph inside a handler body.
 
 4. **The clone inherits the prototype's LAYERS, so the handler body rides
    along automatically** — installing the body on the prototype once means
    every clone has it. `stress:layers` chains are NOT inherited (the clone
-   copies the prototype's props, not the parent's chain) — the handler must
-   assemble the chain from `c.tree.ancestorsOf(node)` and set it on the
-   clone, or the check for per-node chains fails.
+   copies the prototype's props, not the parent's chain) — the PARENT sets
+   the CHILD's chain at creation (after each `clone-instance` op the
+   expander applies the `props.stress:layers = ownChain + '|' +
+   chainSegment(layer + 1)` state-slice on the fresh copy; the kickoff sets
+   the L1 chains the same way). The copy is in-tree right after attach
+   (`slot.familyLinkFor()` → root-bound chain), so the slice's in-tree guard
+   passes, and both pass-2 marks (clone-instance + chain slice) land in the
+   SAME flush — one compile, one after-compile fire.
 
 5. **Legacy envelope is the serialization boundary.** `translateLegacy`
    parses the data; css must be the flat legacy shape (`{ style: string,
