@@ -7,8 +7,11 @@ the SSR result), §5.1 (hydration `css.id` seam), §2.2 (`preempt-initial-data` 
 `docs/specs/render.md` §2 (`RenderAdapter` interface + method-semantics table), §3
 (`RenderOp` / `MinimalElement` / diff rules D1–D5), §5 (serialization), §7 (SSR flow),
 §8 (parity PAR-1..PAR-5).
-De facto reference behavior: `demo/lib/dom-adapter.js` (browser `DomAdapter`, every
-branch) and `demo/lib/render-ops.js` (render-helper utilities). Tests already encoding
+De facto reference behavior: `src/core/adapters.ts` `DomAdapter` (browser
+`DomAdapter`, every branch) and `src/core/render-helpers.ts` (render-helper
+utilities — `minimalFromState`/`applyOps`/`treeFromOps`/`treeSig`/`jsonClone`/
+`emitElements`). The browser demos import these from `dist/core/*`; no demo-side
+render machinery exists. Tests already encoding
 the render contract: `tests/unit/render.test.ts` (`MockAdapter`/`HydrationAdapter`,
 `minimalFromState`, `applyOps`, `treeFromOps`), `tests/e2e/ssr-render.test.ts`
 (SSR-H1..H3, PAR-5 structural parity).
@@ -153,9 +156,9 @@ export function treeSig(trees: RenderTree[]): string  // canonical wire-agnostic
 export function jsonClone<T>(v: T): T                          // JSON.parse(JSON.stringify(v)) deep clone
 ```
 
-`treeSig` and `jsonClone` are *(derived)* from `demo/lib/render-ops.js` (the demo exposes
-them; the e2e suites re-implement the same signatures locally). Their canonical home is
-`render-helpers.ts` so parity tests stop re-deriving them.
+`treeSig`, `jsonClone`, `minimalFromState`, `applyOps`, `treeFromOps`, and
+`emitElements` live in `src/core/render-helpers.ts` (canonical home; the browser
+demos and parity tests import them from there).
 
 ---
 
@@ -237,10 +240,11 @@ emits cssDefs — coalesced ≤1 per batch (R-ORD-6). `minimalFromState` does **
 `ensureStyles` here (and the SSR styles buffer, §4.5). The "exactly one
 `<style id="preempt-dynamic-styles">` element" invariant (notes §6.9) is preserved.
 
-**`applyOps` supersession (R5, DECIDED):** the demo's `applyOps` skips `styles` ops
-(`demo/lib/render-ops.js` `case 'styles': break`) — that skip is **superseded**:
-render-helpers `applyOps` invokes `adapter.styles?.(cssDefs)` when the adapter exposes
-`styles`. `styles` is concrete-adapter-only; it is **not** on the abstract
+**`applyOps` supersession (R5, DECIDED):** the earlier demo-side `applyOps`
+skipped `styles` ops (`case 'styles': break`) — that skip is **superseded**:
+`render-helpers.ts` `applyOps` invokes `adapter.styles?.(cssDefs)` when the
+adapter exposes `styles`. `styles` is concrete-adapter-only; it is **not** on
+the abstract
 `RenderAdapter` (render.md §2).
 
 ### 3.4 `appendChild(owner, child)`
@@ -393,6 +397,19 @@ The DOM side mirrors the same inner join: `ensureStyles` accumulates
 | `hydrate(rootWire, vdom)` | **no-op** — the server never hydrates (render.md §2 "n/a") | de facto |
 | `toString()` | `stylesPrefix + htmlOf(root)`; `root` = the wire of the **first `createEl`** — deterministic because R-ORD-8 guarantees the actionable array is root-first (every node's `create` precedes its descendants'), so the root is always the first created wire *(derived: no demo SSR reference; root detection must be deterministic; R10)*. If `removeEl` removed the root wire (or no `create` ever ran), `toString()` returns **just the styles prefix** — the `<style id="preempt-dynamic-styles">` block alone, no root html (FRG-H24) | render.md §2 + R10 |
 
+**Floating fragments (DECIDED, §4.6):** after the root subtree, `toString()`
+serializes — in **creation order** — every fragment that was **created but never
+appended into any parent** (still registered in `fragments`, `parent === null`,
+excluding the root itself). Rationale: `DomAdapter.createEl` mounts every created
+element at top level, so a `create` with no `append` edge into the root subtree
+(e.g. an actionable descendant of a consumed provider, or a fork arm whose parent
+wire is not actionable) is still part of the DOM render surface — the SSR string
+must reflect the same surface for the same op stream (PAR-5, SSR-F4 class). The
+guard: fully-connected streams (every non-root fragment appended) emit **exactly**
+`stylesPrefix + htmlOf(root)` — no output change (FRG-H26). A `removeEl`d root
+still yields just the styles prefix (FRG-H24); the floating set is computed from
+creation order + parent linkage, never reordered by wire.
+
 ---
 
 ## 5. TypeScript `lib` decision (DECIDED)
@@ -434,7 +451,7 @@ no DOM globals).
 | SSR-F4 | Adapter behaviors must not diverge for the same op — both adapters are pure mappings of the identical `RenderOp` stream | render.md §8/§10.3 SSR-F4 |
 
 The adapter-neutral parity oracle is `treeFromOps` + `treeSig` over the op stream
-(render.md §3, `demo/lib/render-ops.js`); the SSR side is additionally checked by parsing
+(render.md §3, `src/core/render-helpers.ts`); the SSR side is additionally checked by parsing
 its `toString()` output into the same structural tree (type / attribute names+values /
 nesting order / text). Hydration reads the `preempt-initial-data`-shaped vdom (§2.2) —
 the adapter never interprets `clientConfig` (adapter selection + persistence only,
@@ -535,6 +552,7 @@ and `render-helpers.ts` need no DOM.
 | FRG-H6 | `setProp(w, 'css:style', 'color:red')` | `openTag` contains `style="color:red"` |
 | FRG-H7 | `setProp(w, 'css:data-x', v)` (unknown sub-name) | attr `data-x="…"` in `openTag` (mirrors DOM-H14) |
 | FRG-H8 | `setProp(w, 'on:click', 'alert(1)')` | `openTag` contains `onclick="alert(1)"` (inlined handler) |
+| FRG-H8b | `setProp(w, 'on:click', 'a&b "c" <d>')` (on:* with escapables) | `openTag` contains `onclick="a&amp;b &quot;c&quot; &lt;d&gt;"` — §4.2 `escapeAttr` applies to `on:<event>` values |
 | FRG-H9 | `setProp(w, 'prop:title', 't')` | `openTag` contains `title="t"` (prefix stripped) |
 | FRG-H10 | `setProp(w, 'hidden', true)` (bare) | `openTag` contains `hidden="true"` |
 | FRG-H11 | `setProp(w, 'value', 'v')` on `input` | `openTag` contains `value="v"` (attribute form; no property special-case) |
@@ -551,6 +569,8 @@ and `render-helpers.ts` need no DOM.
 | FRG-H22 | `setProp(w, 'css:id', 'k')` then `setProp(w, 'text', 'hi')` then read `openTag` | `openTag` regenerated from type + attr map, **unchanged** by the text set; `contentText === 'hi'` (R8) |
 | FRG-H23 | `createEl('div','w')` with `forkKey:'fk1'`, then `forkKey:'fk2'` (two creates, same wire) | two **distinct** descriptors in `fragments` (`wireKey`-keyed); independent; no clobber (R2) |
 | FRG-H24 | `removeEl(rootWire)` then `toString()` | returns **just the styles prefix** — the `<style id="preempt-dynamic-styles">` block alone, no root html (R10) |
+| FRG-H25 | root + appended child, PLUS one created-but-never-appended fragment | `toString()` = root html then the floating fragment (creation order, §4.6 DECIDED) — both well-formed |
+| FRG-H26 | fully-connected stream (every non-root fragment appended) | `toString()` = `stylesPrefix + htmlOf(root)` exactly — no floating fragments leak (guard, §4.6) |
 | FRG-F1 | `appendChild(voidOwner, child)` | child serialization ignored in output (void html = openTag only) |
 | FRG-F2 | `setProp(unknownWire, 'text', 'x')` (also unknown composite key) | silent no-op |
 | FRG-F3 | duplicate `createEl` for the **same `(wire, forkKey)`** | mapping overwritten (last-write-wins); different forkKeys keep distinct entries (FRG-H23) |
@@ -575,6 +595,7 @@ and `render-helpers.ts` need no DOM.
 | HLP-H13 | `minimalFromState(cs)` with `css.cssDef` present | `cssDef` is **not** mapped to a `css:cssDef` prop — no styles reach the adapter via `set` (R6) |
 | HLP-H14 | `treeFromOps` on a forked stream (two `create`s for one wire, distinct `forkKey`s) | two **distinct** `RenderTree` entries keyed by `wireKey(wire, forkKey)`; `treeSig` keeps them distinct — arms never collapse (R11) |
 | HLP-H15 | `wireKey('w')` / `wireKey('w', 'fk')` | `'w'` / `'w\x00fk'` — the shared composite key both adapters and `applyOps` use (R2/R12) |
+| HLP-H16 | a compiled fork (`Node.compile` → `minimalFromState` → `diffMinimal`) | ops carry **distinct `forkKey`s** per arm (S-R3.10): one `create` per arm with a distinct `forkKey`, and each arm's `set` ops forward the same `forkKey` as its `create` |
 | HLP-F1 | `applyOps` `remove` for a wire never created | no `removeEl` call |
 | HLP-F2 | `treeFromOps` with a `styles` op | ignored; no effect on the tree |
 

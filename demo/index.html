@@ -46,14 +46,44 @@
           click <em>Log in</em> (mock login showing the predefined user) or
           <em>Log out</em>.
         </li>
+        <li>
+          <a class="back" href="mode-toggle.html"><strong>Mode toggle — SSR / client / markdown adapters</strong></a>
+          — the same feature-matrix document rendered through three adapter modes
+          (toggle bar). <strong>SSR</strong>: the server sends the full
+          <code>&lt;app&gt;…&lt;/app&gt;</code> HTML it rendered through the real
+          <code>SSRFragmentAdapter</code> — inspect it in the devtools Response tab,
+          then compare with the raw received string and the parsed mount on the page.
+          <strong>Client</strong>: the browser re-resolves the serialized document
+          (S4.2) with no server payload. <strong>Markdown</strong>: the raw editor
+          source is embedded verbatim for manual inspection alongside the live
+          parsed display. Every mode runs the identical shared feature-matrix checks
+          plus its mode-specific ones. Served dynamically per <code>?mode=</code> by
+          <code>scripts/serve-demo.mjs</code>.
+        </li>
+        <li>
+          <a class="back" href="fork-stress-d8.html"><strong>Fork stress — layered child-creation stress test</strong></a>
+          (<a class="back" href="fork-stress-d2.html">d2</a> ·
+          <a class="back" href="fork-stress-d4.html">d4</a> ·
+          <a class="back" href="fork-stress-d6.html">d6</a> ·
+          <a class="back" href="fork-stress-d8.html">d8</a>)
+          — a demo-only stress test of the forking render system. A binary tree
+          is built layer by layer, each layer adding 2 children per node through
+          one of the four runtime child-creation mechanisms, cycling: placement →
+          component values → component link → idempotent handler → repeats with
+          different placement/component names. Depth dN has 2<sup>N</sup> − 1 nodes.
+          Every node renders its <code>stress:layers</code> chain (depth +
+          tree-back-to-root). The page uses ONLY core (<code>dist/core/*</code>) and
+          handler code — no demo-side render machinery.
+        </li>
       </ul>
     </section>
 
     <section>
       <h2>Run</h2>
-      <pre>npm run demo        # builds dist/core + generates demo/ssr-render.html & demo/components.html,
-                    # serves http://localhost:4173/demo/
-npm run demo:smoke   # headless: runs all three pages' checks against a DOM shim, asserts all pass</pre>
+      <pre>npm run demo        # builds dist/core + generates demo/ssr-render.html, demo/components.html,
+                    # demo/feature-matrix.html & demo/mode-toggle.html, then serves
+                    # http://localhost:4173/demo/
+npm run demo:smoke   # headless: runs all pages' checks against a DOM shim, asserts all pass</pre>
     </section>
   </main>
 </body>

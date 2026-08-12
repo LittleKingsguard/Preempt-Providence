@@ -8,16 +8,15 @@
  * assertions — including PAR-5 parity against the server-side reference that
  * was embedded alongside the data.
  */
-import { Node, reconcileParentTargets } from '../dist/core/node.js'
+import { Node, reconcileParentTargets, Supervisor } from '../dist/core/node.js'
 import { diffMinimal } from '../dist/core/render.js'
 import { loadState } from '../dist/core/serialize.js'
 import { createClient } from '../dist/core/client.js'
 import { EventBridge } from '../dist/core/events.js'
-import { Supervisor } from '../dist/core/node.js'
+import { DomAdapter } from '../dist/core/adapters.js'
+import { minimalFromState, applyOps, treeFromOps, treeSig, jsonClone } from '../dist/core/render-helpers.js'
 import { hub } from './demo-fixtures.js'
 import { makeRunner } from './lib/runner.js'
-import { DomAdapter } from './lib/dom-adapter.js'
-import { minimalFromState, applyOps, treeFromOps, treeSig, jsonClone } from './lib/render-ops.js'
 
 const runner = makeRunner()
 document.getElementById('results').appendChild(runner.el)
@@ -126,10 +125,13 @@ async function main() {
   for (const el of adapter.wires.values()) mount.appendChild(el)
 
   await runner.check('HTML rendering succeeds: dock, nested badge and zone elements exist in the DOM', () => {
-    // app (root) is a consumed provider — a fork candidate, not a standalone wire
+    // app (root) is a consumed provider — a fork candidate, not a standalone wire.
+    // Fork arms are (wire, forkKey) entries in the adapter's wire table (PAR-6,
+    // core wireKey) — never bare wires — so match bare-or-`wire\x00forkKey`.
     const renderWires = Object.keys(labels).filter((w) => labels[w].name !== 'app')
     for (const wire of renderWires) {
-      if (!adapter.wires.has(wire)) throw new Error(`wire ${wire} not created in DOM`)
+      const present = [...adapter.wires.keys()].some((k) => k === wire || k.startsWith(`${wire}\u0000`))
+      if (!present) throw new Error(`wire ${wire} not created in DOM`)
     }
   })
 

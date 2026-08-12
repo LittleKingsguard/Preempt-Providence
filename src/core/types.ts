@@ -119,6 +119,7 @@ export interface CompiledState {
   anchors: readonly Anchor[]; parent: NodeRef | null; children: NodeRef[]
   bindings: Record<string, unknown>; unresolved: UnresolvedRef[]
   trace?: NodeRef[]
+  forkKey?: PathKey
 }
 export interface CompileResult {
   actionable: CompiledState[]

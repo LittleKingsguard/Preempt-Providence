@@ -37,14 +37,16 @@ export const demoData = {
               // user pane — consumes the 'session' component (target anchor).
               // The pane's after-compile handler (installed at runtime; bodies
               // are not serializable) populates the username descendant from
-              // the resolved session record.
+              // the resolved session record. Classes match demo.css's
+              // `.user-pane` styles (same convention as the components demo).
               type: 'div',
               props: { id: 'user-pane' },
+              css: { classes: ['user-pane'] },
               component: { reference: 'session' },
               children: [
-                { type: 'span', props: { id: 'username' }, content: 'anonymous' },
-                { type: 'button', props: { id: 'login-btn' }, content: 'Login' },
-                { type: 'button', props: { id: 'logout-btn' }, content: 'Logout' },
+                { type: 'span', props: { id: 'username' }, css: { classes: ['username'] }, content: 'anonymous' },
+                { type: 'button', props: { id: 'login-btn' }, css: { classes: ['login-btn'] }, content: 'Login' },
+                { type: 'button', props: { id: 'logout-btn' }, css: { classes: ['logout-btn'] }, content: 'Logout' },
               ],
             },
           ],
@@ -57,11 +59,11 @@ export const demoData = {
           type: 'section',
           props: { id: 'editor-block' },
           children: [
-            { type: 'textarea', props: { id: 'md-editor', value: 'Type **bold** here' } },
+            { type: 'textarea', props: { id: 'md-editor', value: 'Type **bold** here' }, css: { classes: ['editor'] } },
             {
               type: 'div',
               props: { id: 'md-display' },
-              content: 'Type **bold** here',
+              css: { classes: ['display'] },
               children: [
                 { type: 'span', props: { id: 'md-prefix' }, content: '' },
                 { type: 'strong', props: { id: 'md-bold' }, content: '' },
@@ -80,28 +82,49 @@ export const demoData = {
         },
         {
           // comments zone — receives the 'comments' payload roots; the page
-          // then exercises append / drop against this zone.
+          // then exercises append / drop against this zone. Dropping is
+          // USER-TRIGGERED via the "Drop comments" button below (P-4 drop
+          // semantics), not automatic.
           type: 'aside',
           props: { id: 'comments-zone' },
           css: { classes: ['zone'] },
           children: [],
         },
         {
+          // payload controls — the drop button drives dropPayload on click
+          // (handler wired client-side, like the session buttons).
+          type: 'section',
+          props: { id: 'payload-controls' },
+          children: [
+            {
+              type: 'button',
+              props: { id: 'drop-comments-btn' },
+              css: { classes: ['drop-comments-btn'] },
+              content: 'Drop comments',
+            },
+          ],
+        },
+        {
           // fork demo — fork-a and fork-b both consume 'theme'; root provides
           // it twice ⇒ each consumer resolves TWO actionable arms (FRK-H2).
+          // Classes match demo.css: the section is the flex row, each consumer
+          // (and therefore each of its arms) is a styled arm card.
           type: 'section',
           props: { id: 'fork-demo' },
+          css: { classes: ['fork-arms'] },
           children: [
-            { type: 'div', component: { reference: 'theme' }, props: { id: 'fork-a' } },
-            { type: 'div', component: { reference: 'theme' }, props: { id: 'fork-b' } },
+            { type: 'div', component: { reference: 'theme' }, props: { id: 'fork-a' }, css: { classes: ['arm-card'] } },
+            { type: 'div', component: { reference: 'theme' }, props: { id: 'fork-b' }, css: { classes: ['arm-card'] } },
           ],
         },
         {
           // loop probe — an ANCESTRY resolution cycle (loop-cycle ⇄ loop-nest
           // each source the name the other targets): the borrow walk revisits
           // a node ⇒ the arm is dropped with reason 'loop' + a
-          // 'circular-source' warning (S-R2.5 / F11). The section and its
-          // sibling note still render (pipeline survives).
+          // 'circular-source' warning (S-R2.5 / F11). The section, its sibling
+          // note, and the plain survivor below still render (pipeline survives;
+          // the looped arm is the only thing dropped — FRK-F3 sibling arms
+          // unaffected).
           type: 'section',
           props: { id: 'loop-probe' },
           children: [
@@ -122,6 +145,7 @@ export const demoData = {
                 { type: 'span', props: { id: 'loop-b' }, component: { reference: 'circ-b' }, content: 'b' },
               ],
             },
+            { type: 'p', props: { id: 'loop-survivor' }, content: 'Survivor: a plain sibling with no component reference — it renders while the looped arm above is dropped.' },
           ],
         },
       ],

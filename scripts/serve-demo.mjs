@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { buildModeTogglePage } from './mode-toggle-page.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PORT = Number(process.env.PORT ?? 4173)
@@ -22,7 +23,16 @@ const MIME = {
 
 const server = createServer(async (req, res) => {
   try {
-    let path = decodeURIComponent(new URL(req.url ?? '/', `http://${req.headers.host}`).pathname)
+    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
+    let path = decodeURIComponent(url.pathname)
+    // The mode-toggle page is rendered per-?mode= (SSR / client / markdown).
+    if (path === '/demo/mode-toggle' || path === '/demo/mode-toggle.html') {
+      const mode = url.searchParams.get('mode') ?? 'client'
+      const body = await buildModeTogglePage(mode)
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(body)
+      return
+    }
     if (path.endsWith('/')) path += 'index.html'
     const file = normalize(join(ROOT, path))
     if (!file.startsWith(ROOT)) {

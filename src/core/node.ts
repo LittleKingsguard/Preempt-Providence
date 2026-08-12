@@ -579,6 +579,11 @@ export class Node {
         if (arm.trace.length > 0) cs.trace = arm.trace
         if (arm.keys.length > 0) {
           cs.pathKey = `${node.pathKey}${arm.keys.join('')}`
+          // actionable fork-arm emit: carry the arm's distinct path material as
+          // the forkKey (S-R3.10), so minimalFromState/diffMinimal forward it and
+          // fork arms stay distinct (wire, forkKey) entries at the adapter boundary
+          // (adapters.md §2/R2; render.md §3.2).
+          cs.forkKey = cs.pathKey
         }
         if (cs.unresolved.length > 0 && !warnedUnresolved) {
           warnedUnresolved = true

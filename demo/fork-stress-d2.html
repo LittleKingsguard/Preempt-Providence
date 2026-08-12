@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Fork Stress (depth 2)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body data-depth="2">
+  <!--
+    ============================================================================
+    FORK STRESS DEMO — layered stress test of the forking render system.
+
+    ⚠ DEMO-PAGE TEST CASE — NOT expected real-world behavior. No production
+    app builds a binary tree by switching child-creation mechanism every
+    layer; the page exists to stress-test the four valid ways to add children
+    at runtime and to verify they compose in one deep tree.
+
+    Layer cycle (2 children per node per layer, depth doubles each layer):
+      L1  placement  — zone filled with 2 placed content nodes
+      L2  values     — component provides values for 2 authored children
+      L3  link       — component links a prototype as 2 children
+      L4  handler    — after-compile handler creates 2 children (idempotent)
+      L5..           — repeats L1..L4 with different placement/component names
+
+    Every node carries `stress:layers` (the chain of layer mechanisms from
+    root to it) rendered as a label — depth + tree-back-to-root per node.
+
+    The page uses ONLY core (dist/core/*) and handler code — no demo-side
+    render machinery. Static part (L1..L3) is serialized into
+    `preempt-initial-data`; the browser module drives the runtime layers.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>Fork Stress — depth 2 (<code>2<sup>2</sup> − 1 = 3</code> layer nodes + 1 placement zone)</h1>
+    <p class="goals">
+      Layer cycle: placement → component values → component link → handler
+      (repeats with different placement/component names). Each layer doubles
+      the node count. The shared harness asserts per-layer node counts, method
+      correctness, handler idempotency, ancestry labels, and the incremental
+      render contract (no render-side compile after bootstrap).
+    </p>
+
+    <!-- Framework input: the SSR snapshot document (render.md §5). -->
+    <script id="preempt-initial-data" type="application/json">{"template":{"id":"fs-root","state":"in-tree","type":"app","props":{"id":"stress-root"},"css":{},"children":["fs-zone"],"anchors":[{"role":"child","target":"fs-root","options":{"priority":0},"link":"link-97","parent":"rootNode"},{"role":"parent","target":"fs-root","options":{},"link":"link-98"}]},"content":[{"id":"fs-root","state":"in-tree","type":"app","props":{"id":"stress-root"},"css":{},"children":["fs-zone"],"anchors":[{"role":"child","target":"fs-root","options":{"priority":0},"link":"link-97","parent":"rootNode"},{"role":"parent","target":"fs-root","options":{},"link":"link-98"}]},{"id":"fs-zone","state":"in-tree","type":"section","props":{"id":"stress-zone"},"css":{},"children":["fs-l1-0","fs-l1-1"],"anchors":[{"role":"child","target":"fs-zone","options":{"priority":0},"link":"link-98","parent":"fs-root"},{"role":"parent","target":"fs-zone","options":{},"link":"link-100"},{"role":"placement","target":"stress-1","options":{},"link":"link-99"}]},{"id":"fs-l1-0","state":"in-tree","type":"div","props":{"id":"l1-0","stress:layers":"L1:placement"},"css":{},"children":[],"anchors":[{"role":"child","target":"fs-l1-0","options":{"priority":0},"link":"link-100","parent":"fs-zone"},{"role":"placement","target":"stress-1","options":{},"link":"link-99"}]},{"id":"fs-l1-1","state":"in-tree","type":"div","props":{"id":"l1-1","stress:layers":"L1:placement"},"css":{},"children":[],"anchors":[{"role":"child","target":"fs-l1-1","options":{"priority":1},"link":"link-100","parent":"fs-zone"},{"role":"placement","target":"stress-1","options":{},"link":"link-99"}]}],"clientConfig":{"adapter":"dom","persistence":false}}</script>
+    <script id="server-data" type="application/json">{"depth":2,"layerMethods":["placement","values","link","handler"],"layerNames":["placement-1"],"placementNames":["stress-1","stress-5"],"expected":{"perLayer":[2],"total":3},"serverTreeSig":"[{\"children\":\"[{\\\"children\\\":\\\"[{\\\\\\\"children\\\\\\\":\\\\\\\"[]\\\\\\\",\\\\\\\"props\\\\\\\":{\\\\\\\"prop:id\\\\\\\":\\\\\\\"l1-0\\\\\\\",\\\\\\\"prop:stress:layers\\\\\\\":\\\\\\\"L1:placement\\\\\\\"},\\\\\\\"type\\\\\\\":\\\\\\\"div\\\\\\\"},{\\\\\\\"children\\\\\\\":\\\\\\\"[]\\\\\\\",\\\\\\\"props\\\\\\\":{\\\\\\\"prop:id\\\\\\\":\\\\\\\"l1-1\\\\\\\",\\\\\\\"prop:stress:layers\\\\\\\":\\\\\\\"L1:placement\\\\\\\"},\\\\\\\"type\\\\\\\":\\\\\\\"div\\\\\\\"}]\\\",\\\"props\\\":{\\\"prop:id\\\":\\\"stress-zone\\\"},\\\"type\\\":\\\"section\\\"}]\",\"props\":{\"prop:id\":\"stress-root\"},\"type\":\"app\"}]","nodeLabels":{"fs-root":{"name":"stress-root","type":"app"},"fs-zone":{"name":"stress-zone","type":"section"},"fs-l1-0":{"name":"l1-0","type":"div"},"fs-l1-1":{"name":"l1-1","type":"div"}}}</script>
+
+    <section>
+      <h2>Layered stress tree (live DOM)</h2>
+      <p class="expect">
+        Every element is framework-rendered. Each node shows its
+        <code>stress:layers</code> chain (layer mechanisms from root to it).
+      </p>
+      <div id="app"></div>
+    </section>
+
+    <section>
+      <h2>Layer plan (embedded)</h2>
+      <pre id="layer-plan" class="doc"></pre>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="fork-stress.js"></script>
+</body>
+</html>

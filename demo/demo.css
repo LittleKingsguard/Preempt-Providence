@@ -197,6 +197,49 @@ a.back {
   text-decoration: none;
 }
 
+/* -------- mode-toggle page (SSR / client / markdown adapters) -------- */
+
+#mode-toggle {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 20px;
+  padding: 6px;
+  background: #0b0d12;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+#mode-toggle a {
+  font: 600 13px/1 system-ui, sans-serif;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  background: #11141d;
+}
+
+#mode-toggle a:hover {
+  color: var(--ink);
+  border-color: #3b4d7a;
+}
+
+#mode-toggle a.active {
+  color: #cfe0ff;
+  background: #1a2030;
+  border-color: var(--accent);
+}
+
+#ssr-received,
+#markdown-raw {
+  border-left: 4px solid var(--accent);
+}
+
+#markdown-source {
+  white-space: pre-wrap;
+}
+
 /* -------- document tree structure (sections 3/4) -------- */
 
 .expect {
@@ -474,6 +517,27 @@ ul.doc-tree > li::after {
 }
 
 .user-pane .logout-btn:hover {
+  background: rgba(255, 93, 93, 0.12);
+}
+
+/* -------- payload controls (manual comments drop) -------- */
+
+#payload-controls {
+  border-left: 4px solid var(--warn);
+}
+
+.drop-comments-btn {
+  font: 600 12.5px/1 system-ui, sans-serif;
+  border: 1px solid var(--fail);
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  color: var(--fail);
+  background: #1a2030;
+  transition: background 0.15s ease;
+}
+
+.drop-comments-btn:hover {
   background: rgba(255, 93, 93, 0.12);
 }
 

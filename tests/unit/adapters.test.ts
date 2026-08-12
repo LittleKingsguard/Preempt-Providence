@@ -14,7 +14,9 @@ import {
   wireKey,
 } from '../../src/core/render-helpers.js'
 import type { RenderTree } from '../../src/core/render-helpers.js'
-import { MockAdapter, type RenderOp } from '../../src/core/render.js'
+import { MockAdapter, diffMinimal, type RenderOp } from '../../src/core/render.js'
+import { Node } from '../../src/core/node.js'
+import { makeRoot, makeNode, childOf, addComponentSource, targetAnchor } from '../helpers/fixtures.js'
 
 // ---------------------------------------------------------------------------
 // DOM shim (SDED: replicate demo-smoke.mjs's El and extend it): a satisfiable
@@ -31,7 +33,13 @@ class El {
   textContent = ''
   className = ''
   id = ''
-  value = ''
+  private _value = ''
+  get value(): string {
+    return this._value
+  }
+  set value(v: string) {
+    this._value = v
+  }
   parent: El | null = null
   removed = false
   constructor(tag: string) {
@@ -119,7 +127,11 @@ function makeMount(): Mount {
 }
 
 function elOf(adapter: DomAdapter, w: string, fk?: string): El | undefined {
-  return adapter.wires.get(wireKey(w, fk))
+  return adapter.wires.get(wireKey(w, fk)) as El | undefined
+}
+
+function mountEl(m: Mount): HTMLElement {
+  return m as unknown as HTMLElement
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +142,13 @@ function elOf(adapter: DomAdapter, w: string, fk?: string): El | undefined {
 // ---------------------------------------------------------------------------
 
 describe('HLP-* render helpers (adapter-neutral)', () => {
+  beforeEach(() => {
+    installDom()
+  })
+  afterEach(() => {
+    uninstallDom()
+  })
+
   describe('minimalFromState (HLP-H1..H3, H13)', () => {
     it('HLP-H1 maps props→prop:* css→css:* content→text childOrder (excluding cssDef)', () => {
       const out = minimalFromState({
@@ -177,7 +196,7 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
 
     it('HLP-H5 append/remove from a previous batch resolves via the persistent wires map', () => {
       const mount = makeMount()
-      const a = new DomAdapter(mount)
+      const a = new DomAdapter(mountEl(mount))
       applyOps(a, [{ kind: 'create', wire: 'owner', type: 'div' }])
       applyOps(a, [{ kind: 'create', wire: 'child', type: 'span' }])
       applyOps(a, [{ kind: 'append', owner: 'owner', child: 'child' }])
@@ -193,7 +212,7 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
 
     it('HLP-H7 styles op invokes adapter.styles?.() when exposed; skipped otherwise', () => {
       const mount = makeMount()
-      const a = new DomAdapter(mount)
+      const a = new DomAdapter(mountEl(mount))
       applyOps(a, [{ kind: 'styles', cssDefs: ['.a{}'] }])
       const styleEl = doc.head.children[0]
       expect(styleEl?.tagName).toBe('STYLE')
@@ -211,9 +230,9 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
       ]
       const trees = treeFromOps(ops)
       expect(trees).toHaveLength(1)
-      expect(trees[0].type).toBe('div')
-      expect(trees[0].props['prop:title']).toBe('t')
-      expect(trees[0].children).toHaveLength(1)
+      expect(trees[0]!.type).toBe('div')
+      expect(trees[0]!.props['prop:title']).toBe('t')
+      expect(trees[0]!.children).toHaveLength(1)
     })
     it('HLP-H9 skip option excludes matching names', () => {
       const ops: RenderOp[] = [
@@ -221,7 +240,7 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
         { kind: 'set', wire: 'r', name: 'on:click', value: '{}' },
       ]
       const trees = treeFromOps(ops, { skip: (n) => n.startsWith('on:') })
-      expect(Object.keys(trees[0].props)).not.toContain('on:click')
+      expect(Object.keys(trees[0]!.props)).not.toContain('on:click')
     })
     it('HLP-H10 treeSig sorted-key canonical signature stable under set-op order', () => {
       const a: RenderTree = { wire: 'r', type: 'div', props: { a: '1', z: '2' }, children: [] }
@@ -240,7 +259,7 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
         { kind: 'create', wire: 'r', type: 'div' },
       ]
       const trees = treeFromOps(ops)
-      expect(trees[0].props['prop:title']).toBe('late')
+      expect(trees[0]!.props['prop:title']).toBe('late')
     })
     it('HLP-H14 forked stream keeps two distinct entries keyed by wireKey', () => {
       const ops: RenderOp[] = [
@@ -261,6 +280,32 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
       expect(wireKey('w')).toBe('w')
       expect(wireKey('w', 'fk')).toBe('w\x00fk')
     })
+    it('HLP-H16 a compiled fork (Node.compile → minimalFromState → diffMinimal) emits ops with distinct forkKeys', () => {
+      const root = makeRoot({ type: 'app' })
+      const leaf = childOf(root, makeNode({ type: 'leaf' }))
+      addComponentSource(root, 'feed', { label: 'A' })
+      addComponentSource(root, 'feed', { label: 'B' })
+      targetAnchor(leaf, 'feed')
+      const cr = root.compile([root, leaf])
+      const arms = cr.actionable.filter((s) => s.nodeId === leaf.id)
+      expect(arms).toHaveLength(2)
+      expect(new Set(arms.map((a) => a.forkKey)).size).toBe(2)
+      const ops = diffMinimal(null, cr.actionable.map(minimalFromState))
+      const creates = ops.filter(
+        (o): o is Extract<RenderOp, { kind: 'create' }> => o.kind === 'create' && o.wire === leaf.id,
+      )
+      expect(creates).toHaveLength(2)
+      // both arms forward a forkKey, and the two keys are distinct (S-R3.10)
+      expect(creates.every((o) => o.forkKey !== undefined)).toBe(true)
+      expect(new Set(creates.map((o) => o.forkKey)).size).toBe(2)
+      // set ops for each arm carry the same forkKey as its create (arm-targeted)
+      for (const create of creates) {
+        const armSets = ops.filter(
+          (o) => o.kind === 'set' && o.wire === leaf.id && o.forkKey === create.forkKey,
+        )
+        expect(armSets.length).toBeGreaterThan(0)
+      }
+    })
   })
 })
 
@@ -271,7 +316,7 @@ describe('DOM-* DomAdapter', () => {
   beforeEach(() => {
     installDom()
     mount = makeMount()
-    adapter = new DomAdapter(mount)
+    adapter = new DomAdapter(mountEl(mount))
   })
   afterEach(() => {
     uninstallDom()
@@ -313,7 +358,7 @@ describe('DOM-* DomAdapter', () => {
       expect(elOf(adapter, 'w')!.textContent).toBe('hi')
     })
     it('DOM-H3 text on TEXTAREA → value, node identity preserved', () => {
-      const el = adapter.createEl('textarea', 'w')
+      const el = adapter.createEl('textarea', 'w') as unknown as El
       adapter.setProp('w', 'text', 'hi')
       expect(el.value).toBe('hi')
       expect(elOf(adapter, 'w')).toBe(el)
@@ -392,7 +437,7 @@ describe('DOM-* DomAdapter', () => {
   describe('on: bindings (DOM-H15, H16, F5)', () => {
     it('DOM-H15 on:click with onEvent injects and dispatches (wire, domEvent)', () => {
       const received: Array<[string, unknown]> = []
-      adapter = new DomAdapter(mount, {
+      adapter = new DomAdapter(mountEl(mount), {
         onEvent: (wire, ev) => received.push([wire, ev]),
       })
       adapter.createEl('button', 'w')
@@ -486,10 +531,10 @@ describe('DOM-* DomAdapter', () => {
       adapter.createEl('div', 'p')
       const c1 = adapter.createEl('span', 'c1')
       const c2 = adapter.createEl('span', 'c2')
-      mount.appendChild(c1)
-      adapter.appendChild(elOf(adapter, 'p')!, c1)
-      adapter.appendChild(elOf(adapter, 'p')!, c2)
-      adapter.appendChild(elOf(adapter, 'p')!, c1)
+      mount.appendChild(c1 as unknown as El)
+      adapter.appendChild(elOf(adapter, 'p')! as unknown as HTMLElement, c1 as unknown as HTMLElement)
+      adapter.appendChild(elOf(adapter, 'p')! as unknown as HTMLElement, c2 as unknown as HTMLElement)
+      adapter.appendChild(elOf(adapter, 'p')! as unknown as HTMLElement, c1 as unknown as HTMLElement)
       expect(elOf(adapter, 'p')!.children.map((c) => c.tagName)).toEqual(['SPAN', 'SPAN'])
     })
     it('DOM-H23 removeEl removes and drops from wires', () => {
@@ -527,7 +572,7 @@ describe('DOM-F2 no-document constructor throw (stubbed-global, isolated)', () =
     installDom()
     const mount = makeMount()
     uninstallDom()
-    expect(() => new DomAdapter(mount)).toThrow(/DOM/)
+    expect(() => new DomAdapter(mountEl(mount))).toThrow(/DOM/)
   })
 })
 
@@ -598,6 +643,12 @@ describe('FRG-* SSRFragmentAdapter', () => {
       adapter.createEl('div', 'w')
       adapter.setProp('w', 'on:click', 'alert(1)')
       expect(adapter.fragments.get('w')!.openTag).toContain('onclick="alert(1)"')
+    })
+    it('FRG-H8b on:<event> attr values escaped per §4.2 (escapeAttr on handler strings)', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'on:click', 'a&b "c" <d>')
+      expect(adapter.fragments.get('w')!.openTag).toContain('onclick="a&amp;b &quot;c&quot; &lt;d&gt;"')
+      expect(adapter.fragments.get('w')!.openTag).not.toContain('a&b "c" <d>')
     })
     it('FRG-H9 prop:title → title attr, prefix stripped', () => {
       adapter.createEl('div', 'w')
@@ -699,17 +750,37 @@ describe('FRG-* SSRFragmentAdapter', () => {
     it('FRG-F2 setProp unknown wire → no-op', () => {
       expect(() => adapter.setProp('ghost', 'text', 'x')).not.toThrow()
     })
-    it('FRG-F4 on:click non-string coerced via String()', () => {
+    it('FRG-F4 on:click non-string coerced via String() (then §4.2 escapeAttr)', () => {
       adapter.createEl('div', 'w')
       const fn = () => {}
       adapter.setProp('w', 'on:click', fn as never)
-      expect(adapter.fragments.get('w')!.openTag).toContain(`onclick="${String(fn)}"`)
+      // escapeAttr(String(fn)): the arrow's `>` is entity-escaped (&gt;) per §4.2
+      const expected = String(fn).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      expect(adapter.fragments.get('w')!.openTag).toContain(`onclick="${expected}"`)
     })
     it('FRG-H24 removeEl(root) then toString → styles prefix only', () => {
       adapter.createEl('div', 'root')
       adapter.removeEl('root')
       adapter.styles(['.x{}'])
       expect(adapter.toString()).toBe('<style id="preempt-dynamic-styles">\n.x{}</style>')
+    })
+    it('FRG-H25 created-but-never-appended fragment serializes after the root subtree (DomAdapter mount-parity)', () => {
+      const rootFd = adapter.createEl('div', 'root')
+      const child = adapter.createEl('span', 'child')
+      adapter.setProp('child', 'text', 'hi')
+      adapter.appendChild(rootFd, child)
+      adapter.createEl('section', 'float')
+      adapter.setProp('float', 'text', 'orphan')
+      // root html first, then the never-appended fragment in creation order
+      expect(adapter.toString()).toBe('<div><span>hi</span></div><section>orphan</section>')
+    })
+    it('FRG-H26 fully-connected streams are unchanged: appended fragments never leak as top-level', () => {
+      const rootFd = adapter.createEl('div', 'root')
+      const a = adapter.createEl('div', 'a')
+      const b = adapter.createEl('div', 'b')
+      adapter.appendChild(rootFd, a)
+      adapter.appendChild(a, b)
+      expect(adapter.toString()).toBe('<div><div><div></div></div></div>')
     })
   })
 
@@ -728,7 +799,7 @@ describe('PARS-* parity & hydration', () => {
   beforeEach(() => {
     installDom()
     mount = makeMount()
-    dom = new DomAdapter(mount)
+    dom = new DomAdapter(mountEl(mount))
   })
   afterEach(() => {
     uninstallDom()

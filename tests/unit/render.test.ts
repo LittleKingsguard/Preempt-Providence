@@ -42,8 +42,13 @@ type CompiledState = ReturnType<Node['compile']>['actionable'][number]
  *                                  versus prev (D4, removed props re-`set`,
  *                                  added props `set`, unchanged names silent).
  *    3. structure pass: for each element in `next` order, for each child in its
- *       `childOrder` whose wire is present in `next`, emit `append(owner, child)` —
- *       this doubles as D1's append and D5's re-append in compiled order.
+ *       `childOrder` whose wire is present in `next`, emit `append(owner, child)`
+ *       ONLY when the child order changed (vs the previous render's `childOrder`,
+ *       D5) or the child was created/re-created this pass — this doubles as D1's
+ *       append and D5's re-append in compiled order. Re-appending an UNCHANGED
+ *       order is deliberately skipped: in a real DOM, `appendChild` on an
+ *       already-attached element detaches + re-inserts it, which would blur a
+ *       focused form element (e.g. a markdown editor) on every keystroke.
  *    `styles` ops are never synthesized by the tree diff; the sweep coalescer
  *    owns them (R-ORD-6) and coalesces to one per batch.
  *
@@ -630,5 +635,63 @@ describe('§10.2 Fork keys & non-actionable dropping (FRK-H1..H3, FRK-F1..F6)', 
 
     const options = arms.map((a) => (a.bindings['refX'] as { what: string }).what).sort()
     expect(options).toEqual(['A', 'B'])
+  })
+})
+
+describe('§10.5 tree diff contract (D1–D5, render.md §3.2)', () => {
+  it('D1 — new wires get create + one set per prop, object order; children attach via append', () => {
+    const root = el('root', 'div', { 'prop:id': 'root' }, ['kid'])
+    const kid = el('kid', 'span', { text: 'x' })
+    const ops = diffMinimal(null, [root, kid])
+    const kinds = ops.map((o) => o.kind)
+    expect(kinds).toEqual(['create', 'set', 'create', 'set', 'append'])
+    expect(ops[0]).toMatchObject({ kind: 'create', wire: 'root', type: 'div' })
+    expect(ops[4]).toMatchObject({ kind: 'append', owner: 'root', child: 'kid' })
+  })
+
+  it('D3 — a type change is remove + create, never a morph', () => {
+    const prev = [el('w', 'span', { text: 'a' })]
+    const next = [el('w', 'strong', { text: 'a' })]
+    const ops = diffMinimal(elMap(prev), next)
+    expect(ops.map((o) => o.kind)).toEqual(['remove', 'create', 'set'])
+  })
+
+  it('D4 — unchanged props are silent; changed props emit set only', () => {
+    const prev = [el('w', 'div', { 'prop:id': 'x', text: 'a' })]
+    const next = [el('w', 'div', { 'prop:id': 'x', text: 'b' })]
+    const ops = diffMinimal(elMap(prev), next)
+    expect(ops).toEqual([{ kind: 'set', wire: 'w', name: 'text', value: 'b' }])
+  })
+
+  it('D5 — unchanged child order re-emits NO append (focused-editor blur guard)', () => {
+    const root = el('root', 'div', {}, ['kid'])
+    const kid = el('kid', 'div', { text: 'a' })
+    const first = diffMinimal(null, [root, kid])
+    expect(first.filter((o) => o.kind === 'append')).toHaveLength(1)
+    // same order, only the kid's text changes
+    const next = [root, el('kid', 'div', { text: 'b' })]
+    const ops = diffMinimal(elMap([root, kid]), next)
+    expect(ops.filter((o) => o.kind === 'append')).toHaveLength(0)
+    expect(ops).toEqual([{ kind: 'set', wire: 'kid', name: 'text', value: 'b' }])
+  })
+
+  it('D5 — a changed child order re-appends in compiled order', () => {
+    const root = el('root', 'div', {}, ['a', 'b'])
+    const a = el('a', 'div', {})
+    const b = el('b', 'div', {})
+    const prevMap = elMap([root, a, b])
+    // b moved before a
+    const next = [el('root', 'div', {}, ['b', 'a']), b, a]
+    const ops = diffMinimal(prevMap, next)
+    expect(ops.filter((o) => o.kind === 'append').map((o) => o.child)).toEqual(['b', 'a'])
+  })
+
+  it('D5 — a newly created child appends even when the order string is unchanged', () => {
+    // root order is ['a'] before and after; 'b' is brand new and shares no slot
+    const root = el('root', 'div', {}, ['a', 'b'])
+    const a = el('a', 'div', {})
+    const b = el('b', 'div', {})
+    const ops = diffMinimal(elMap([root, a]), [root, a, b])
+    expect(ops.filter((o) => o.kind === 'append').map((o) => o.child)).toEqual(['b'])
   })
 })

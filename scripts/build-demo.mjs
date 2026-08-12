@@ -21,9 +21,10 @@ import { diffMinimal } from '../dist/core/render.js'
 import { serializeSlice } from '../dist/core/serialize.js'
 import { buildNestedPane, nodeLabelsFor } from '../demo/pane-fixture.js'
 import { buildComponentTree, componentLabelsFor, testGoals } from '../demo/component-fixture.js'
-import { buildFeatureMatrix } from '../demo/feature-matrix-fixture.js'
-import { emitElements } from '../demo/lib/feature-matrix-emit.js'
-import { minimalFromState, treeFromOps, treeSig } from '../demo/lib/render-ops.js'
+import { minimalFromState, treeFromOps, treeSig } from '../dist/core/render-helpers.js'
+import { buildFeatureMatrixPage } from './feature-matrix-server.mjs'
+import { buildModeTogglePage } from './mode-toggle-page.mjs'
+import { buildForkStressPage } from './fork-stress-page.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -82,63 +83,37 @@ async function emitPage(templateName, outName, doc, serverData) {
 }
 
 // ---- page 3: feature matrix (one document, every framework surface) ----------
+// The build + server reference are shared with serve-demo.mjs (mode-toggle
+// page) via scripts/feature-matrix-server.mjs.
 {
-  const fm = buildFeatureMatrix()
-  const { root, nodes } = fm
-  const slice = nodes
-  const nodeById = new Map(nodes.map((n) => [n.id, n]))
-  const cr = root.compile(slice)
-
-  // fork arms: each 'theme' consumer resolves 2 arms (FRK-H2)
-  const forkArms = ['fork-a', 'fork-b'].map((name) => {
-    const id = fm.byId.get(name).id
-    const arms = cr.actionable.filter((s) => s.nodeId === id)
-    if (arms.length !== 2) throw new Error(`${name}: expected 2 theme arms, got ${arms.length}`)
-    return { name, arms: arms.map((a) => ({ pathKey: a.pathKey, theme: a.bindings['theme'], trace: a.trace ?? [] })) }
-  })
-
-  // loop-safety: the ancestry resolution cycle drops as 'loop' + circular-source
-  const loopWires = ['loop-cycle', 'loop-nest', 'loop-a', 'loop-b'].map((n) => fm.byId.get(n).id)
-  const loopDrops = cr.dropped.filter((d) => loopWires.includes(d.arm[0]))
-  if (loopDrops.length !== 4) throw new Error(`expected 4 loop drops, got ${loopDrops.length}`)
-  if (!loopDrops.every((d) => d.reason === 'loop')) throw new Error(`loop drops not reason 'loop': ${JSON.stringify(cr.dropped)}`)
-  if (!cr.warnings.some((w) => w.code === 'circular-source')) throw new Error('expected a circular-source warning')
-
-  // session component resolution + placement attachment server-side contract
-  const paneStates = cr.actionable.filter((s) => s.nodeId === fm.byId.get('user-pane').id)
-  if (!paneStates[0]?.bindings['session']) throw new Error('session must resolve on the user pane')
-  if (fm.byId.get('content-zone').children.length !== 2) throw new Error('content zone should carry 2 attached roots')
-  if (fm.byId.get('comments-zone').children.length !== 1) throw new Error('comments zone should carry 1 attached root')
-  if (loopDrops.some((d) => cr.actionable.some((s) => s.nodeId === d.arm[0]))) throw new Error('dropped loop arms must not be actionable')
-
-  // PAR-5 parity reference (runtime on:* handler bindings excluded — compare render data)
-  const parityEls = emitElements(cr.actionable, nodeById).map((e) => {
-    const props = {}
-    for (const [k, v] of Object.entries(e.props)) if (!k.startsWith('on:')) props[k] = v
-    return { ...e, props }
-  })
-  const serverOps = diffMinimal(null, parityEls)
-
-  const expected = {
-    nodeCount: nodes.length,
-    forkCount: forkArms.length,
-    armsPerConsumer: 2,
-    loopDropped: true,
-    contentAttached: 2,
-    commentsAttached: 1,
-    paneHasSession: true,
-  }
-  const doc = serializeSlice(root, nodes, fm.clientConfig)
-  const serverData = {
-    serverTreeSig: treeSig(treeFromOps(serverOps)),
-    nodeLabels: fm.labels,
-    expected,
-    forkArms,
-    loopDroppedWires: loopWires,
-    payloadGroups: {
-      article: fm.payloadGroups.article.map((n) => n.id),
-      comments: fm.payloadGroups.comments.map((n) => n.id),
-    },
-  }
+  const { doc, serverData } = buildFeatureMatrixPage()
   await emitPage('feature-matrix.template.html', 'feature-matrix.html', doc, serverData)
+}
+
+// ---- page 4: mode toggle (SSR / client / markdown) — static client default ---
+// serve-demo.mjs re-serves this page dynamically per ?mode=; the emitted static
+// client-mode page is what demo-smoke.mjs seeds and what visitors see when they
+// open the file directly.
+{
+  const html = await buildModeTogglePage('client')
+  await writeFile(join(ROOT, 'demo', 'mode-toggle.html'), html)
+  console.log('built demo/mode-toggle.html (client mode default)')
+}
+
+// ---- pages 5-8: fork stress (layered runtime child-creation stress test) ----
+// Depths 2..12 (even + 9..12) — each doubles the node count per layer (2^depth − 1).
+// The four child-creation mechanisms cycle: placement → values → link →
+// handler → repeats with different placement/component names.
+{
+  for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
+    const { doc, serverData } = buildForkStressPage(depth)
+    const template = await readFile(join(ROOT, 'demo', 'fork-stress.template.html'), 'utf8')
+    const out = template
+      .replaceAll('__DEPTH__', String(depth))
+      .replaceAll('__TOTAL__', String(2 ** depth - 1))
+      .replace('__PREEMPT_INITIAL_DATA__', () => JSON.stringify(doc))
+      .replace('__SERVER_DATA__', () => JSON.stringify(serverData))
+    await writeFile(join(ROOT, 'demo', `fork-stress-d${depth}.html`), out)
+    console.log(`built demo/fork-stress-d${depth}.html (${2 ** depth - 1} nodes)`)
+  }
 }

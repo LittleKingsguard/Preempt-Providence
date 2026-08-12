@@ -1,8 +1,13 @@
 # Feature-Matrix Demo — Implementation Review & Hand-off
 
 Status of the feature-matrix work (`demo/feature-matrix*.js/html`,
-`demo/lib/feature-matrix-emit.js`, `scripts/build-demo.mjs` §page 3,
-`scripts/demo-smoke.mjs`): **complete**, all checks green.
+`scripts/build-demo.mjs` §page 3, `scripts/demo-smoke.mjs`): **complete**, all
+checks green. NOTE: since this review, the demo-side render machinery
+(`demo/lib/dom-adapter.js`, `demo/lib/render-ops.js`, `demo/lib/feature-matrix-emit.js`)
+was removed — the demos now import the canonical implementations from
+`dist/core/*` (`DomAdapter` in `src/core/adapters.ts`; `minimalFromState`/
+`applyOps`/`treeFromOps`/`treeSig`/`jsonClone`/`emitElements` in
+`src/core/render-helpers.ts`).
 
 ## What was reviewed
 
@@ -29,8 +34,8 @@ document built from the real legacy boundary:
    (`content` is `undefined` until first input). Fix: read
    `content ?? props.value` (feature-matrix.js `render-markdown`).
 
-2. **`append did not attach comment-2`** — `demo/lib/render-ops.js`
-   `applyOps` built a **batch-local** `els` map, so `append`/`remove` ops
+2. **`append did not attach comment-2`** — the original `applyOps` (now
+   `src/core/render-helpers.ts`) built a **batch-local** `els` map, so `append`/`remove` ops
    whose owner was created in an *earlier* diff silently no-op'd. Fix:
    resolve owner/child (and removals) from the adapter's persistent `wires`
    map when not in the batch. The headless smoke `El` shim also needed

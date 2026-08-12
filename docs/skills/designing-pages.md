@@ -98,9 +98,16 @@ const badge = childOf(panel, makeNode({ type: 'span', content: 'hi' }), 0)
   never emits create/remove for it — only `set`. Form elements take `text`
   through `.value`. Identity across renders ⇒ no focus loss (markdown
   editor e2e/demo, T8).
+- **No redundant re-appends (focus guard)**: `diffMinimal` re-appends a
+  child ONLY when its order changed or it was created this pass. Re-appending
+  an unchanged order would, in a real DOM, detach+re-insert the element —
+  which blurs a focused editor on every keystroke even though the element
+  object survives (ORD-H6).
 - **Bootstrap vs incremental**: one full-depth compile at bootstrap; every
   subsequent render consumes the supervisor's pass-2 compiled states
-  (`takePass2States`) — no render-side compile.
+  (`takePass2States`) — no render-side compile. Direct payload mutations
+  (append/refresh/drop) recompile only the changed zone's focused slice
+  (`focusedSliceFor`).
 - **Hydrate**: `css.id` seam reuses SSR DOM (SSR-H2).
 - **Parity**: same input ⇒ server and client render trees are structurally
   equal (PAR-5, SSR-H1).
@@ -207,7 +214,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/unit/pipeline.test.ts` | registry/workers, slice lock, microtask queue, V/F matrix |
 | `tests/unit/validation.test.ts` | tag schemas, LinkConfigError catalog, timing, clone |
 | `tests/unit/render.test.ts` | serialization round-trip, fork keys, drop dispositions, SSR/ORD |
-| `tests/unit/adapters.test.ts` | concrete adapter layer: `DomAdapter`/`SSRFragmentAdapter`/render-helpers — §10 DOM/FRG/HLP/PARS matrices of `docs/specs/adapters.md` (fork-arm `wireKey` targeting, D4 undefined-drop, styles coalescing, hydrate seam, parity) |
+| `tests/unit/adapters.test.ts` | concrete adapter layer: `DomAdapter`/`SSRFragmentAdapter`/render-helpers — §10 DOM/FRG/HLP/PARS matrices of `docs/specs/adapters.md` (fork-arm `wireKey` targeting, D4 undefined-drop, styles coalescing, hydrate seam, parity, compiled-fork `forkKey` ops, `on:*` `escapeAttr`, floating-fragment `toString`) |
 | `tests/unit/handlers.test.ts` / `phases.test.ts` | handler ctx/dispatch; phase ordering |
 | `tests/unit/translate.test.ts` | legacy schema → graph (in) |
 | `tests/unit/payload.test.ts` / `reverse.test.ts` | payload drop/refresh/append; reverse translation (out) |
@@ -217,11 +224,15 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/integration/supervisor.test.ts` | journal replay/undo-redo, coalesced sweep |
 | `tests/integration/handlers-flow.test.ts` | handler→journal→events; phase hooks; focused warnings |
 | `tests/e2e/ssr-render.test.ts` | SSR→client complete render, parity, hydrate |
+| `tests/e2e/ssr-html-validity.test.ts` | emitted-SSR-HTML validity through the **real** `SSRFragmentAdapter` (well-formedness, escaping, root-first, styles prefix; fork arms with distinct `forkKey` + floating-fragment top-level serialization) |
+| `tests/e2e/markdown-html-validity.test.ts` | markdown render through the real SSR adapter — structured `<strong>`/`<textarea>` serialization, escaping, well-formedness |
 | `tests/e2e/loop-safety.test.ts` | infinite-circle probes |
 | `tests/e2e/legacy-bootstrap.test.ts` | legacy JSON → full render |
 | `tests/e2e/component-handler.test.ts` | component-provided after-compile handler |
 | `tests/e2e/markdown-display.test.ts` | in-place render, focus retention, parent changes |
 | `demo/feature-matrix.js` (smoke) | one page exercising every surface: placements, components/forks, handlers, payload lifecycle (append/refresh/drop), managed updates, reverse translation, loop-safety, PAR-5 parity, SSR hydrate seam |
+| `demo/mode-toggle.js` (smoke) | same feature-matrix document driven through the three adapter modes — `?mode=ssr|client|markdown` (every build embeds both payloads, so static serves work; `scripts/serve-demo.mjs` serves per-mode too). **Demo-page test case — NOT expected real-world behavior.** SSR asserts the full well-formed server HTML was received (root-first, presentation ids present, balanced tags — the `validateHtmlShape` scan mirrors the e2e stack validator); markdown asserts the raw editor source is embedded verbatim for inspection alongside the live parsed display; client runs the shared harness with no mode-specific payload |
+| `demo/fork-stress.js` (smoke, ×4 depths) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Checks: per-layer node counts, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
 
 ## 12. Demo pages (`npm run demo` → http://localhost:4173/demo/)
 
@@ -238,9 +249,53 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   loop-safety drops, reverse translation round-trip, and PAR-5 parity
   against the server-embedded render signature + SSR hydrate seam check.
   Its smoke mirrors the vitest surface in the browser (`runner` list).
-  The concrete DOM adapter exercised here is `demo/lib/dom-adapter.js`
-  (canonicalized by `docs/specs/adapters.md` §3); the SSR fragment adapter's
-  `toString()` parity is checked by `tests/e2e/ssr-render.test.ts`.
+  The concrete DOM adapter exercised here is `src/core/adapters.ts`
+  `DomAdapter` (canonicalized by `docs/specs/adapters.md` §3) imported from
+  `dist/core/*` — the demos carry NO render machinery of their own; only
+  handlers, fixtures, and the shared harness live in `demo/`. The SSR
+  fragment adapter's `toString()` parity is checked by
+  `tests/e2e/ssr-render.test.ts`.
+- `mode-toggle.html` — the same feature-matrix document, rendered through
+  three adapter modes chosen by a toggle bar. **Demo-page test case — NOT
+  expected real-world behavior**: no production app switches one document
+  between SSR/client/markdown adapters on a single URL; the page is a
+  comparative test fixture for the three adapter surfaces and their harness
+  checks. Every build embeds BOTH mode payloads (the SSR html string + the
+  raw markdown source), so `?mode=` switching works under any static serve;
+  `data-mode` + section `hidden` state control which is revealed:
+  - **SSR adapter** (`?mode=ssr`) — the page embeds the FULL HTML the
+    server rendered through the real `SSRFragmentAdapter` (raw string in
+    `received-html-data` + a parsed mount). Open devtools → Network → the
+    mode-toggle request → Response to see the whole `<app>…</app>`
+    document. The harness asserts the received HTML begins with the app
+    root, contains every key presentation id, and is well-formed (balanced
+    non-void tags).
+  - **Client render** (`?mode=client`) — the browser re-resolves
+    `preempt-initial-data` and renders directly; the SSR/markdown payloads
+    stay embedded but hidden.
+  - **Markdown mode** (`?mode=markdown`) — the RAW markdown editor source is
+    embedded verbatim for manual inspection, alongside the live parsed
+    display (`#markdown-live`) the harness restores from the shipped source;
+    the harness asserts the raw source is embedded and the live display
+    re-parsed it.
+  `scripts/serve-demo.mjs` still serves the page per-`?mode=` (and
+  `scripts/build-demo.mjs` emits the static default); every mode drives the
+  same shared harness (`demo/lib/feature-matrix-tests.js`) that
+  `feature-matrix.js` uses. Session lessons: `docs/session-defect-review.md`.
+- `fork-stress-d{2,4,6,8}.html` — layered stress test of the forking render
+  system. **Demo-page test case — NOT expected real-world behavior.** A binary
+  tree built layer by layer; each layer adds exactly 2 children per node
+  through one of the four runtime child-creation mechanisms, cycling:
+  placement → component values → component link → idempotent handler → repeats
+  with different placement/component names. Depth d has layers 1..d−1
+  (layer k has 2^k nodes), total 2^d − 1. Every node renders its
+  `stress:layers` chain (depth + tree-back-to-root). The page uses ONLY core
+  (`dist/core/*`) and handler code — the serializable part (L1 placement, L2
+  values, L3 link) is shipped in `preempt-initial-data`; the browser module
+  drives the runtime layers (L4 handler, L5 placement, L6 values, L7 link)
+  via the `attach` op, component sources/targets, and idempotent
+  `after-compile` handlers (guarded by their layer marker — the default guard
+  against after-assembly loops). Spec: `docs/specs/fork-stress.md`.
 
 ## 13. Running checks
 
@@ -250,3 +305,55 @@ npm run typecheck  # tsc --noEmit
 npm run demo:smoke # headless run of all demo checks
 npm run build      # tsc emit
 ```
+
+## 14. Authoring rules & browser realism (learned from session defects)
+
+Full defect-by-defect analysis: `docs/session-defect-review.md`. The rules:
+
+### 14.1 Authoring data (fixtures / copy / expected strings)
+
+1. **Node refs ≠ presentation ids.** `byName[x]` gives the *node ref*
+   (`node-85`); rendered HTML/DOM carry `props.id` (`user-pane`). Assert on
+   `props.id` when matching HTML/DOM; use node refs only for graph access.
+2. **`css.classes` are data — styling is never inferred.** A node only gets
+   its demo.css look if the fixture declares `css: { classes: [...] }`
+   naming the selectors. Check demo.css first, then the fixture. (Hit twice:
+   user-pane buttons, fork arms.)
+3. **`content` + children both render** (no shadowing). A node with parsed
+   children must NOT also carry base `content` — the concatenated result is
+   the bug. Parsed-display containers have children only.
+4. **Copy must match the DOM the fixture+harness produce.** If a section's
+   text promises surviving siblings / a live display / N comments, the
+   fixture must contain them and the harness must assert them. DOM-first,
+   copy second.
+5. **End-of-run checks assert the LIVE end-state**, not the shipped initial
+   value — earlier checks mutate the graph (e.g. the markdown typing test).
+   Order-dependent assertions must state their ordering in the harness.
+6. **Pages advertising `?mode=` switching must embed every mode's payload in
+   every build**, so any static serve works; `data-mode`/`hidden` only control
+   reveal state. A "falling back to client" path means server-coupling.
+7. **Restore steps restore the narrative state** (the data the copy
+   describes), never a throwaway node.
+
+### 14.2 Browser realism (why the headless shim can mislead)
+
+1. **Real DOM `children` is an HTMLCollection** — indexable + `.length` +
+   `.item()`, NO `.map`/`.filter`. Harness code must always
+   `Array.from(el.children ?? [])`. The smoke shim supports
+   `REAL_DOM_CHILDREN=1` to emulate this and fail array-method misuse.
+2. **Re-appending an attached element blurs it.** `diffMinimal` emits
+   `append` only when the child order changed or the child was created this
+   pass (ORD-H6). Focus-safety assertions must target the *mechanism* — no
+   `append`/`remove` op on the focused wire — not just object identity
+   (object survives while the DOM relocates it).
+3. **Assert compile scope, not just output.** A harness for a focused-pass
+   framework must verify updates stay bounded (3–8-node focused passes via
+   `supervisor.takePass2States()`), or a whole-graph recompile slips through
+   green. Bootstrap = the only full compile.
+4. **Scope assertion inputs to the system under test.** In-process demos
+   share `console.warn` / global counters — count diagnostics on the system's
+   OWN `EventBridge`, never a process-global sink. Visible diagnostics (e.g.
+   loop warnings) must be re-emitted through `console.warn`, and the smoke
+   should grep for them.
+5. **`REAL_DOM_CHILDREN=1` is the browser-realism gate** — run the smoke
+   with it to catch HTMLCollection misuse before opening a browser.

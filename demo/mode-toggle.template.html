@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Mode Toggle (SSR / client / markdown)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body data-mode="__MODE__">
+  <!--
+    ============================================================================
+    MODE TOGGLE DEMO — the same feature-matrix document, rendered through three
+    adapter modes:
+
+    ⚠ DEMO-PAGE TEST CASE — NOT expected real-world behavior. No production app
+    switches the same document between SSR/client/markdown adapters on one URL;
+    the page is a comparative test fixture for the three adapter surfaces and
+    their harness checks.
+
+      · SSR       — the server renders the FULL HTML through the real
+                    SSRFragmentAdapter; the response body carries it (open
+                    devtools → Network → the mode-toggle request → Response and
+                    you see the whole `<app>…</app>` document). The page embeds
+                    it below for inspection and re-resolves the serialized
+                    document client-side (S4.2).
+      · client    — no server-rendered payload; the browser re-resolves the
+                    serialized `preempt-initial-data` and renders it directly.
+      · markdown  — the server embeds the RAW markdown editor source verbatim
+                    for manual inspection (see the "markdown mode" section),
+                    alongside the live rendered display.
+
+    Every mode drives the SAME shared harness (demo/lib/feature-matrix-tests.js)
+    — the identical feature-matrix checks, plus mode-specific assertions
+    (SSR: full well-formed HTML received; markdown: raw source embedded).
+
+    HOW THE PAGE IS SERVED: scripts/serve-demo.mjs intercepts
+    /demo/mode-toggle.html?mode=ssr|client|markdown and renders the page
+    dynamically via scripts/mode-toggle-page.mjs (shared page builder used by
+    build-demo.mjs too, which emits the static client-mode demo/mode-toggle.html).
+    Every build embeds BOTH payloads so ?mode= switching works under any static
+    serve as well.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>Mode Toggle — one document, three adapters</h1>
+    <p class="goals">
+      <strong>Demo-page test case — NOT expected real-world behavior.</strong>
+      No production app would serve the same document through three switchable
+      adapter modes on one URL. This page exists to exercise and compare the
+      three adapter surfaces (SSR / client / markdown) against the SAME
+      feature-matrix document and the SAME shared harness, so their contracts
+      can be inspected side by side in one place.
+    </p>
+    <p class="goals">
+      The same feature-matrix document rendered through the SSR, client, and
+      markdown adapter modes. Click a mode — the server reloads the page for
+      that mode (full SSR HTML in the response body in <strong>SSR</strong> mode;
+      raw source embedded in <strong>markdown</strong> mode). The shared harness
+      below asserts the exact feature-matrix checks in every mode, plus the
+      mode-specific ones.
+    </p>
+
+    <nav id="mode-toggle" aria-label="adapter mode">
+      <a data-mode="ssr" href="mode-toggle.html?mode=ssr">SSR adapter</a>
+      <a data-mode="client" href="mode-toggle.html?mode=client">Client render</a>
+      <a data-mode="markdown" href="mode-toggle.html?mode=markdown">Markdown mode</a>
+    </nav>
+
+    <!-- Framework input: the SSR snapshot document (render.md §5). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section id="ssr-received" __SSR_HIDDEN__>
+      <h2>SSR mode · full HTML received from the server</h2>
+      <p class="expect">
+        This is the HTML the server sent in the response body — render it with
+        devtools: Network → the <code>mode-toggle.html</code> request →
+        Response. The raw string is below; the parsed version renders next to it.
+        The shared harness asserts it begins with the app root, contains every
+        key wire, and is well-formed.
+      </p>
+      <script id="received-html-data" type="text/plain">__SSR_HTML_RAW__</script>
+      <div id="received-mount" class="mount">__SSR_HTML__</div>
+      <pre id="received-html" class="doc"></pre>
+    </section>
+
+    <section id="markdown-raw" __MD_HIDDEN__>
+      <h2>Markdown mode · raw editor source embedded for inspection</h2>
+      <p class="expect">
+        The raw markdown the <code>md-editor</code> textarea ships, embedded
+        verbatim by the server for manual inspection — alongside the live
+        parsed display the after-compile handler renders from it:
+      </p>
+      <pre id="markdown-source" class="doc">__MARKDOWN_RAW__</pre>
+      <div id="markdown-live" class="display">
+        <span id="md-live-prefix" class="md-part"></span>
+        <strong id="md-live-bold" class="md-part md-bold"></strong>
+        <span id="md-live-suffix" class="md-part"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Rendered feature matrix (live DOM)</h2>
+      <p class="expect">
+        Every element below is framework-rendered: placements, the session pane
+        (component + after-compile handler + click events), the markdown editor
+        → display (in-place), the two theme fork consumers (2 arms each), and
+        the loop probe (circular-source arm dropped, siblings survive).
+      </p>
+      <div id="app"></div>
+    </section>
+
+    <section>
+      <h2>Server reference document embedded with the page</h2>
+      <pre id="server-doc" class="doc"></pre>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="mode-toggle.js"></script>
+</body>
+</html>

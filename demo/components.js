@@ -9,17 +9,16 @@
  * placeholder. Each test is a content node in the tree; its result is written
  * back through the framework (ClientAPI.apply) and re-rendered via a diff.
  */
-import { Node, reconcileParentTargets } from '../dist/core/node.js'
+import { Node, reconcileParentTargets, Supervisor } from '../dist/core/node.js'
 import { diffMinimal } from '../dist/core/render.js'
 import { loadState } from '../dist/core/serialize.js'
 import { createClient } from '../dist/core/client.js'
 import { EventBridge } from '../dist/core/events.js'
-import { Supervisor } from '../dist/core/node.js'
 import { dispatchEvent } from '../dist/core/handlers.js'
 import { setCompilePassLogging } from '../dist/core/debug.js'
+import { DomAdapter } from '../dist/core/adapters.js'
+import { applyOps, jsonClone } from '../dist/core/render-helpers.js'
 import { hub } from './demo-fixtures.js'
-import { DomAdapter } from './lib/dom-adapter.js'
-import { applyOps, jsonClone } from './lib/render-ops.js'
 
 // dev aid: log every compile pass (node ids + states) so dirty-node
 // isolation is verifiable in the console — incremental pass-2s list only the

@@ -15,8 +15,13 @@ import type { NodeRef } from './types.js'
  *                                  versus prev (D4, removed props re-`set`,
  *                                  added props `set`, unchanged names silent).
  *    3. structure pass: for each element in `next` order, for each child in its
- *       `childOrder` whose wire is present in `next`, emit `append(owner, child)` —
- *       this doubles as D1's append and D5's re-append in compiled order.
+ *       `childOrder` whose wire is present in `next`, emit `append(owner, child)`
+ *       ONLY when the child order changed (vs the previous render's `childOrder`,
+ *       D5) or the child was created/re-created this pass — this doubles as D1's
+ *       append and D5's re-append in compiled order. Re-appending an UNCHANGED
+ *       order is deliberately skipped: in a real DOM, `appendChild` on an
+ *       already-attached element detaches + re-inserts it, which would blur a
+ *       focused form element (e.g. a markdown editor) on every keystroke.
  *    `styles` ops are never synthesized by the tree diff; the sweep coalescer
  *    owns them (R-ORD-6) and coalesces to one per batch.
  *
@@ -25,11 +30,13 @@ import type { NodeRef } from './types.js'
  *   `minimalFromState` below.
  */
 
+export type ForkPathKey = string
+
 export type RenderOp =
-  | { kind: 'create'; wire: NodeRef; type: string }
-  | { kind: 'set'; wire: NodeRef; name: string; value: unknown }
+  | { kind: 'create'; wire: NodeRef; type: string; forkKey?: ForkPathKey }
+  | { kind: 'set'; wire: NodeRef; name: string; value: unknown; forkKey?: ForkPathKey }
   | { kind: 'append'; owner: NodeRef; child: NodeRef }
-  | { kind: 'remove'; wire: NodeRef }
+  | { kind: 'remove'; wire: NodeRef; forkKey?: ForkPathKey }
   | { kind: 'styles'; cssDefs: unknown[] }
 
 export interface MinimalElement {
@@ -37,41 +44,64 @@ export interface MinimalElement {
   type: string
   props: Record<string, unknown>
   childOrder: NodeRef[]
+  forkKey?: ForkPathKey
 }
 
 export function diffMinimal(prev: Map<NodeRef, MinimalElement> | null, next: MinimalElement[]): RenderOp[] {
   const ops: RenderOp[] = []
+  const created = new Set<NodeRef>()
   if (prev) {
-    for (const [wire] of prev) {
-      if (!next.some((el) => el.wire === wire)) ops.push({ kind: 'remove', wire })
+    for (const [wire, el] of prev) {
+      if (!next.some((n) => n.wire === wire)) {
+        ops.push({ kind: 'remove', wire, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+      }
     }
   }
   for (const el of next) {
     const before = prev ? prev.get(el.wire) : undefined
     if (!before) {
-      ops.push({ kind: 'create', wire: el.wire, type: el.type })
-      for (const [name, value] of Object.entries(el.props)) ops.push({ kind: 'set', wire: el.wire, name, value })
+      created.add(el.wire)
+      ops.push({ kind: 'create', wire: el.wire, type: el.type, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+      for (const [name, value] of Object.entries(el.props)) {
+        ops.push({ kind: 'set', wire: el.wire, name, value, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+      }
     } else if (before.type !== el.type) {
-      ops.push({ kind: 'remove', wire: el.wire })
-      ops.push({ kind: 'create', wire: el.wire, type: el.type })
-      for (const [name, value] of Object.entries(el.props)) ops.push({ kind: 'set', wire: el.wire, name, value })
+      created.add(el.wire)
+      ops.push({ kind: 'remove', wire: el.wire, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+      ops.push({ kind: 'create', wire: el.wire, type: el.type, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+      for (const [name, value] of Object.entries(el.props)) {
+        ops.push({ kind: 'set', wire: el.wire, name, value, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+      }
     } else {
       const hasPrev = new Set(Object.keys(before.props))
       const hasNext = new Set(Object.keys(el.props))
       for (const name of hasNext) {
         if (!hasPrev.has(name) || before.props[name] !== el.props[name]) {
-          ops.push({ kind: 'set', wire: el.wire, name, value: el.props[name] })
+          ops.push({ kind: 'set', wire: el.wire, name, value: el.props[name], ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
         }
       }
       for (const name of hasPrev) {
-        if (!hasNext.has(name)) ops.push({ kind: 'set', wire: el.wire, name, value: undefined })
+        if (!hasNext.has(name)) {
+          ops.push({ kind: 'set', wire: el.wire, name, value: undefined, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
+        }
       }
     }
   }
   const present = new Set(next.map((el) => el.wire))
+  const orderOf = (els: Map<NodeRef, MinimalElement>, wire: NodeRef): string => {
+    const order = els.get(wire)?.childOrder ?? []
+    return order.filter((c) => present.has(c)).join('\u0000')
+  }
   for (const el of next) {
+    // D5 "re-append in compiled order" only needs to fire when the child
+    // ORDER actually changed (or a child is new / re-created this pass).
+    // Re-appending an unchanged order would, in a real DOM, detach + re-insert
+    // every already-attached child — which blurs a focused element (e.g. the
+    // markdown editor) on every keystroke.
+    const orderChanged = !prev || orderOf(prev, el.wire) !== orderOf(new Map(next.map((e) => [e.wire, e])), el.wire)
     for (const child of el.childOrder) {
-      if (present.has(child)) ops.push({ kind: 'append', owner: el.wire, child })
+      if (!present.has(child)) continue
+      if (orderChanged || created.has(child)) ops.push({ kind: 'append', owner: el.wire, child })
     }
   }
   return ops

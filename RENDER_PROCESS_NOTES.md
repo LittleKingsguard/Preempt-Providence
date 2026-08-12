@@ -709,7 +709,20 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   compile has resolved — the renderer merges the fresh states into a
   per-node cache and diffs the element set, without a single render-side
   compile. The only full-depth compile is the bootstrap pass; every update
-  is a 3–7-node focused pass, each node compiled exactly once.
+  is a 3–7-node focused pass, each node compiled exactly once. Direct
+  payload mutations (append/refresh/drop attach anchors outside the
+  supervisor's dirty set) recompile only the changed zone's focused slice
+  (`focusedSliceFor`) and prune departed states. (The feature-matrix page
+  previously deviated by recompiling the whole graph per update — its TODO
+  is now resolved to this contract.)
+- **DECIDED (no redundant re-appends, focus guard, ORD-H6):** `diffMinimal`
+  emits `append(owner, child)` only when the child's order changed versus the
+  previous render (D5) or the child was created/re-created this pass. The old
+  "re-append every child in order" behavior made a real DOM detach+re-insert
+  every already-attached child on every keystroke — the focused markdown
+  editor was physically relocated and blurred even though the element object
+  survived (the headless shim's wire-identity check never saw it). Reorders
+  still re-append in compiled order; unchanged orders emit no appends.
 - **DECIDED (in-place render, focus retention):** updates to a rendered
   element never destroy/replace it — `diffMinimal` emits only `set` ops for
   changed props on existing wires (D4), never `create`/`remove`. The
@@ -723,7 +736,8 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   event OBJECT was passed as the event name, so real typing/clicks never
   matched a handler).
 - **DECIDED (feature-matrix emission, PAR-5 shared emit):** the feature-matrix
-  page and the server builder share ONE emitter (`demo/lib/feature-matrix-emit.js`)
+  page and the server builder share ONE emitter (`src/core/render-helpers.ts`
+  `emitElements` — canonical home, imported from `dist/core/*`)
   so in-browser render data ≡ server render data. Fork arms are wired
   `<nodeId>#<i>`; a parent whose `childOrder` references a forked node id
   adopts the arm wires (in arm order) so `diffMinimal` attaches every arm.
@@ -741,11 +755,65 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   process-global counter, so in the headless smoke (all demo modules in one
   process) it could collide with seeded serialized wires (uniqueness scope
   verified + documented in node.md §4.1).
-- **DECIDED (demo applyOps is cross-batch):** `demo/lib/render-ops.js`
+- **DECIDED (core applyOps is cross-batch):** `src/core/render-helpers.ts`
   `applyOps` resolves an append's owner/child (and removes) from the
   adapter's persistent `wires` map when not created in the current op batch —
   incremental diffs re-append to elements created in earlier renders, and the
   headless `El` shim mirrors real-DOM move semantics + parent detach on
   `remove()` so dropped payload wires leave the DOM.
+- **DECIDED (SSR floating fragments + forkKey, adapters.md §4.6):** actionable
+  fork-arm `CompiledState`s carry a distinct `forkKey` (= the arm's materialized
+  `pathKey`, S-R3.10) forwarded by `minimalFromState`/`diffMinimal` onto
+  `create`/`set`/`remove` ops, so fork arms stay distinct `(wire, forkKey)`
+  entries at both adapters (PAR-6) — no last-write-wins clobber, no duplicated
+  children. `SSRFragmentAdapter.toString()` additionally serializes created-but-
+  never-appended fragments (creation order) after the root subtree, matching
+  `DomAdapter`'s mount-top-level surface for the SAME op stream (PAR-5, SSR-F4
+  class) — e.g. actionable descendants of consumed providers, or fork arms whose
+  parent wire is not actionable. Fully-connected streams are unchanged (FRG-H26).
+- **DECIDED (mode-toggle demo page, adapter modes):** `demo/mode-toggle.html`
+  serves the SAME feature-matrix document through three adapter modes selected
+  by a toggle bar (`?mode=ssr|client|markdown`). **This is a demo-page TEST
+  CASE, NOT expected real-world behavior** — no production app switches one
+  document between adapters on a single URL; the page is a comparative test
+  fixture for the three adapter surfaces. `scripts/mode-toggle-page.mjs`
+  (shared by build-demo.mjs static default + serve-demo.mjs per-mode) embeds
+  BOTH mode payloads in EVERY build — the FULL html from the real
+  `SSRFragmentAdapter` (raw string in a `text/plain` script for inspection +
+  a parsed mount) and the RAW markdown editor source — so `?mode=` switching
+  works under any static serve; `data-mode` + section `hidden` state control
+  which is revealed. All three modes drive the identical shared harness
+  `demo/lib/feature-matrix-tests.js` (the feature-matrix page's checks), plus
+  mode-specific assertions: SSR verifies root-first full html + every key
+  PRESENTATION id (props.id — not node refs) + well-formedness via a
+  stack-based `validateHtmlShape` scan mirroring the e2e validator
+  (tests/e2e/ssr-html-validity-helpers.ts); markdown verifies the raw source
+  is embedded AND the live display re-parsed the (by-then-edited) content,
+  then restores the editor to the shipped source so the section's live
+  display matches its raw source. Headless coverage: `scripts/demo-smoke.mjs`
+  imports `demo/mode-toggle.js?mode=…` as three cache-busted module instances,
+  asserting a zero-failure banner per mode. Session defect review + the
+  authoring/browser-realism rules derived from it: `docs/session-defect-review.md`,
+  folded into `docs/skills/designing-pages.md` §14.
+- **DECIDED (fork-stress demo, runtime child-creation stress test):**
+  `demo/fork-stress-d{2,4,6,8}.html` stress-tests the forking render system by
+  building a binary tree layer by layer, each layer adding exactly 2 children
+  per node through one of the four runtime child-creation mechanisms, cycling:
+  placement → component values → component link → idempotent handler → repeats
+  with different placement/component names. Depth d has layers 1..d−1 (layer k
+  has 2^k nodes, total 2^d − 1). The page uses ONLY core (`dist/core/*`) and
+  handler code — the serializable part (L1 placement, L2 values, L3 link) is
+  shipped in `preempt-initial-data`; the browser module drives runtime layers
+  (L4 handler, L5 placement, L6 values, L7 link) via the `attach` op,
+  component sources/targets, and idempotent `after-compile` handlers. The
+  handler layer is guarded by its layer marker (`stress:handler`): it only
+  adds children when no child with that marker exists — the default guard
+  against after-assembly loops. Core `emitElements` gained the two component
+  binding interpretations this needs: scalar resolved bindings render as
+  element content (values layer) and a definition-object binding
+  (`{type, children:[{bind,type}]}`) re-types a slice of the consumer's real
+  children (prototype-as-child link layer, `childOffset`). Every node renders
+  its `stress:layers` chain (depth + tree-back-to-root). Spec:
+  `docs/specs/fork-stress.md`; harness checks in `demo/fork-stress.js`.
 
 (TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)

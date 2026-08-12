@@ -178,20 +178,23 @@ async function main() {
     register(proto, holder)
 
     const seen = []
+    const diagnostics = []
     events.subscribe('state', (env) => {
       for (const e of env.events) if (e.type === 'state') seen.push(e)
     })
-    let warns = 0
-    const origWarn = console.warn
-    console.warn = () => {
-      warns++
-    }
+    events.subscribe('diagnostic', (env) => {
+      for (const e of env.events) if (e.type === 'diagnostic') diagnostics.push(e)
+    })
+    // NOTE: count this system's OWN diagnostics (events bridge), not global
+    // console.warn — the headless smoke runs every demo module in one process,
+    // and other pages' compiles (feature-matrix loop arms, mode-toggle) emit
+    // their own `circular-source` warnings; wrapping console.warn would count
+    // those unrelated async flushes (load-dependent flake).
     clientAPI.apply(consumer.id, [{ targetProp: 'content', mode: 'replace', value: 'u' }])
     await flushTicks()
-    console.warn = origWarn
 
     if (seen.filter((e) => e.nodeId === consumer.id).length !== 0) throw new Error('expected silent drop')
-    if (warns !== 0) throw new Error('expected zero warnings')
+    if (diagnostics.length !== 0) throw new Error('expected zero warnings but saw: ' + JSON.stringify(diagnostics))
 
     probe(
       'p5',

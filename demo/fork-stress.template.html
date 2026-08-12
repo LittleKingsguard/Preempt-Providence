@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Fork Stress (depth __DEPTH__)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body data-depth="__DEPTH__">
+  <!--
+    ============================================================================
+    FORK STRESS DEMO — layered stress test of the forking render system.
+
+    ⚠ DEMO-PAGE TEST CASE — NOT expected real-world behavior. No production
+    app builds a binary tree by switching child-creation mechanism every
+    layer; the page exists to stress-test the four valid ways to add children
+    at runtime and to verify they compose in one deep tree.
+
+    Layer cycle (2 children per node per layer, depth doubles each layer):
+      L1  placement  — zone filled with 2 placed content nodes
+      L2  values     — component provides values for 2 authored children
+      L3  link       — component links a prototype as 2 children
+      L4  handler    — after-compile handler creates 2 children (idempotent)
+      L5..           — repeats L1..L4 with different placement/component names
+
+    Every node carries `stress:layers` (the chain of layer mechanisms from
+    root to it) rendered as a label — depth + tree-back-to-root per node.
+
+    The page uses ONLY core (dist/core/*) and handler code — no demo-side
+    render machinery. Static part (L1..L3) is serialized into
+    `preempt-initial-data`; the browser module drives the runtime layers.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>Fork Stress — depth __DEPTH__ (<code>2<sup>__DEPTH__</sup> − 1 = __TOTAL__</code> layer nodes + 1 placement zone)</h1>
+    <p class="goals">
+      Layer cycle: placement → component values → component link → handler
+      (repeats with different placement/component names). Each layer doubles
+      the node count. The shared harness asserts per-layer node counts, method
+      correctness, handler idempotency, ancestry labels, and the incremental
+      render contract (no render-side compile after bootstrap).
+    </p>
+
+    <!-- Framework input: the SSR snapshot document (render.md §5). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section>
+      <h2>Layered stress tree (live DOM)</h2>
+      <p class="expect">
+        Every element is framework-rendered. Each node shows its
+        <code>stress:layers</code> chain (layer mechanisms from root to it).
+      </p>
+      <div id="app"></div>
+    </section>
+
+    <section>
+      <h2>Layer plan (embedded)</h2>
+      <pre id="layer-plan" class="doc"></pre>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="fork-stress.js"></script>
+</body>
+</html>

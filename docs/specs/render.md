@@ -307,6 +307,7 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | ORD-H3 | anchor-adding effect / new layer mid-batch | anchors populated in the sweep, idempotently (R-ORD-4, S-R3.12) |
 | ORD-H4 | node-local update, unchanged props | no `set` ops for unchanged names (D4) |
 | ORD-H5 | one emit batch with nested nodes | actionable `next` is root-first — every node's `create` precedes its descendants' `create` (R-ORD-8) |
+| ORD-H6 | node-local update, unchanged child order | NO `append` ops — re-appending an unchanged order would detach+re-insert already-attached elements in a real DOM (blurring a focused editor). `append` fires only when the child order changed (D5) or the child was created/re-created this pass. |
 | ORD-F1 | emit attempted before sweep completion | impossible; slice locked until final resolution (R-ORD-3/5) |
 | ORD-F2 | nested emission on active slice | deferred to microtask; depth cap trips loops (R-ORD-7) |
 | ORD-F3 | `append` before `create` of same child | never emitted (R-ORD-6) |
