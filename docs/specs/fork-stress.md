@@ -92,7 +92,11 @@ the **value differs by sibling slot** (first vs second child of the parent):
    component-link emitter re-types real children (their standalone emission
    is skipped via `defCovered`), so it must preserve each real child's own
    css/props — the def's css/props are a fallback for synthetic
-   `${wire}:${bind}` children only.
+   `${wire}:${bind}` children only. A def-covered consumer that is ITSELF a
+   def consumer (the data-driven link-only chains, fork-stress-data §4)
+   still emits its own `defChildren` — the covered-skip suppresses only the
+   standalone element (render-helpers `emitElements`, recursive def
+   chains).
 4. **Runtime nodes must be registered in the page's own `wireToNode` map**
    for emitter lookups to find them — `supervisor.registerNode` alone is not
    enough.

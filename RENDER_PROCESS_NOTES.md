@@ -686,6 +686,22 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   neither recompiled nor re-flagged; `compile(slice, { focusNodeId })`
   additionally scopes console warnings to the changed node, so a dangling
   reference elsewhere in the tree is never re-logged by unrelated updates.
+- **DECIDED (the per-name Link is the provider registry — no universe sweep):**
+  arm-termination consults the per-name component Link DIRECTLY: anchors
+  carry an `owner` backref (Node.addAnchor), so the link enumerates the
+  provider NODES relevant for a target (§10.8.2's "plain graph query"), and
+  each provider's chain kind is classified on demand (resolve.ts
+  `chainKindOf`, mirroring chainRoot's termination rules). Shared-hub trees
+  therefore never sweep providers into the pass-2 slice — `focusedSliceFor`
+  is the walk path only (target-gated). The source/duplex-bearing universe
+  sweep survives ONLY for hub-less trees (same-name anchors on private
+  links — the fixture/fresh-hub case), still target-gated + lazily
+  materialized. Measured: the earlier values/link-only d12 O(n²) (4094
+  dirty nodes × 4095-node slices, ~137s browser / ~13s shim) is structurally
+  gone — d12 link ~8.7s shim, all pages 0 failed. Pinned by
+  tests/unit/node.test.ts C7b (prototype-terminated found through the Link
+  with the provider OUTSIDE the slice) + tests/unit/phases.test.ts
+  (shared-hub slice = walk path only; hub-less sweep preserved).
 - **DECIDED (payload drop semantics, origin-aware):** the root node and the
   content/component arrays are the SOURCES OF TRUTH for graph access.
   Payload-owned nodes are registered (`registerContentNode` in registry.ts);
@@ -710,7 +726,46 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   per-node cache and diffs the element set, without a single render-side
   compile. The only full-depth compile is the bootstrap pass; every update
   is a 3–7-node focused pass, each node compiled exactly once. Direct
-  payload mutations (append/refresh/drop attach anchors outside the
+
+### 10.10.5 Single-method fork-stress-data variants + recursive def chains (DECIDED)
+
+- **DECIDED:** the data-driven fork-stress pages gain SINGLE-METHOD d12
+  variants (`fork-stress-data-{placement,values,link}-d12.html`, spec
+  `docs/specs/fork-stress-data.md` §4): `forkStressLegacyData(depth, method)`
+  emits the same two-prototypes-per-layer envelope with `stress:kind` =
+  method for EVERY layer, and the component SOURCES the two component
+  methods need AS DATA — `component: { reference: 'values-<layer>.<slot>',
+  value: 'value-<SLOT>-<layer>' }` (values) or `component: { reference:
+  'link-<layer>', value: <def> }` (link). The page adapts chain naming
+  (`L<k>:<method>`), layer-plan, `stress:kind` checks, and banner
+  (`Fork Stress (data: <method>) — depth 12`). The default (no method)
+  keeps the four-mechanism cycle-label pages byte-for-byte.
+- **DECIDED (legacy source attachment — translate.md §2):** a legacy
+  component binding that carries a VALUE is a PROVIDER, not a parked
+  binding hint: `component: { reference, value }` (no `target`) translates
+  to a `source` anchor; `{ reference, value, target }` is the DUPLEX combo
+  (source for `reference` + target anchor for `target`); plain `reference`
+  stays a `target` consumer. `reverseTranslate` emits providers back
+  (`{ reference, value }` / `{ reference, value, target }`), and
+  `Node.clone` carries provider VALUES onto the clone (same convention as
+  `hydrateAnchor`), so a cloned data-declared provider resolves depth-0 at
+  itself (S-R2.6) — the fork-stress-data pages rely on this: the page
+  never attaches a single anchor (core-only + legacy data, as intended).
+- **DECIDED (emitter recursion):** `emitElements` (render-helpers) emits a
+  def-covered consumer's `defChildren` UNCONDITIONALLY — the covered-skip
+  only suppresses the consumer's STANDALONE element. A def-covered consumer
+  that is itself a def consumer (link-only chains — every level re-types
+  the next) must still emit its own re-typed children, or the whole subtree
+  below layer 2 vanishes from the element set. Pinned by
+  `tests/unit/render.test.ts` (recursive link-only chain); single-level
+  def coverage (no double-emit) is unchanged.
+- **DECIDED:** with all sources declared on the PROTOTYPES, the root of
+  every data-driven fork-stress page carries no anchors and is emitted like
+  any other node — the nesting check walks from the root element and
+  expects 2^depth − 1 elements for every variant (no provider-root
+  carve-out needed).
+- **DECIDED (incremental render, direct mutations):** Direct payload
+  mutations (append/refresh/drop attach anchors outside the
   supervisor's dirty set) recompile only the changed zone's focused slice
   (`focusedSliceFor`) and prune departed states. (The feature-matrix page
   previously deviated by recompiling the whole graph per update — its TODO
@@ -850,6 +905,15 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   bootstrap-compile-once + `takePass2States` consumption (the incremental
   contract). Spec: `docs/specs/fork-stress-data.md`; harness checks in
   `demo/fork-stress-data.js` (self-verifying: 8 checks, zero-failure banner).
+- **DECIDED (diffMinimal is O(N), never O(N²) — ORD-P1):** the tree diff
+  must not scan `next` per prev wire (remove pass) nor rebuild the D5
+  order-signature map per element. Both are now hoisted: `present` (Set of
+  next wires) for removes, and one order-signature map per side built once.
+  A quadratic `diffMinimal` made the 4095-node stress render spend ~900ms in
+  diff (scaling 3.5→32→546ms for 255/1023/4095); the O(N) form is 0.6→1.3→
+  9.9ms — ~90× at depth 12, and total render dropped 2634→1493ms (imperative)
+  / 558→3.6ms diff (data-driven). Guarded by `tests/unit/render.test.ts`
+  ORD-P1 (4× input must cost < 8× time — quadratic measured 17×).
 - **DECIDED (memoized root-first chainRoot, compile-horizon):** the
   parent-chain classification in `compile(slice)` is memoized and
   order-independent (three phases: A — unconditional local kinds; B —

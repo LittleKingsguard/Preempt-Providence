@@ -74,6 +74,13 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 > is a `TranslatedTree` (no `.template`). The feature-matrix check that once
 > read `.template` now asserts the round-tripped `target === 'session'` anchor
 > on the re-translated root.
+>
+> **Source attachment in the legacy format** (per §10.8.2): a node that
+> contains a component VALUE is a provider — a `source` when it names no
+> `target`, a `duplex` (source + target combo) when it does. `reverseTranslate`
+> emits providers back (`{ reference, value }` / `{ reference, value, target }`),
+> and `Node.clone` carries provider values onto the clone, so a cloned
+> data-declared provider resolves depth-0 at itself (S-R2.6).
 
 ## 2. Mapping rules
 
@@ -85,7 +92,9 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 | `template.children` | UNPLACED content nodes — translated, NO parent anchor, returned in `TranslatedTree.content`; **registered as payload-owned content** (persist in the background; dropped with their payload — see payload.md §1/§3) | user decision, §10.10.1, §10.10.4 |
 | `ContentPayload.content[]` | UNPLACED content nodes (same as above) | user decision, §10.10.1 |
 | `NodeData.placement.placementName` | `placement` anchor (`{role:'placement', target: name}`) on a shared per-name placement Link | §10.8.3 |
-| `NodeData.component.reference` | `target` anchor on a shared per-name component Link; `component.value` parked on the anchor (binding hint, not a provider — unresolved until a source exists) | §10.8.2 |
+| `NodeData.component.reference` | `target` anchor on a shared per-name component Link (consumer) | §10.8.2 |
+| `NodeData.component.reference` + `value` (no `target`) | **`source` anchor** on the shared per-name component Link — the node PROVIDES `value` for `reference` (legacy source attachment) | §10.8.2 |
+| `NodeData.component.reference` + `value` + `target` | DUPLEX shape: `source` anchor for `reference` (provides `value`) + `target` anchor for `target` (the self-providing-consumer combo) | §10.8.2 |
 | `NodeData.handlers` | carried on the node's base data → compiled `handlers` (runtime-only: function bodies are NOT serializable, see SER-F1; lost at the JSON boundary by design) | §10.10.2 |
 | `ContentPayload.metadata/userData` | surfaced on `TranslatedTree` (first payload wins) | §10.10.1 |
 | `clientConfig.runInstantiation` | `adapter: 'ssr'` when `true`, else `'dom'` | §10.10.1 |
@@ -122,7 +131,7 @@ depth-0 (S-R2.6).
 | ID | State | Expected |
 | --- | --- | --- |
 | TR-H1 | template root + its own nested children | root in-tree; default children attached, array-order priorities |
-| TR-H2 | component binding (reference + value) on node/template | `target` anchor (+ parked value) |
+| TR-H2 | component binding (reference + value) on node/template | value-bearing binding → `source` anchor (provider); + `target` → duplex (source + target combo); plain reference → `target` anchor. Cloned providers keep their value |
 | TR-H3 | placement config | `placement` anchor |
 | TR-H4 | handlers on legacy nodes | carried to compiled `handlers` (live tree; not serialized) |
 | TR-H5 | template.children + content payloads | unplaced content nodes in `TranslatedTree.content`; metadata/userData surfaced |

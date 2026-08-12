@@ -21,11 +21,23 @@ let journalSeq = 0
 
 /**
  * Bounded pass-2 slice for one changed node: the node itself, its ancestor
- * chain, its subtree, plus every source/duplex-bearing node (the fallback
- * universe — prototype/contentNodes-owned providers must stay discoverable
- * so their arms still terminate with the right drop reason).
+ * chain and its subtree — the walk path. PLUS, only when the walk path
+ * carries a target AND the tree cannot answer from its per-name component
+ * Links, the source/duplex-bearing universe (the fallback — prototype/
+ * contentNodes-owned providers must stay discoverable so arms terminate
+ * with the right drop reason).
+ *
+ * The per-name component Link IS the registry of nodes relevant for a
+ * target (anchors carry their owner backref — resolve.ts reads providers
+ * straight off the Link). A shared-hub tree therefore needs NO universe in
+ * the slice at all — sweeping every provider in the graph into every dirty
+ * node's slice is pure O(n) overhead per pass, pathological when every node
+ * is a self-providing provider (values/link-only stress pages: 4094 dirty
+ * nodes × 4095-node slices). Hub-less trees (same-name anchors on private
+ * links) keep the status-quo sweep, still gated on targets + lazily
+ * materialized.
  */
-export function focusedSliceFor(node: Node, all: Node[]): Node[] {
+export function focusedSliceFor(node: Node, all: Node[] | (() => Node[])): Node[] {
   const set = new Map<NodeId, Node>()
   for (let cur: Node | null = node; cur; cur = cur.parent) set.set(cur.id, cur)
   const stack: Node[] = [...node.children]
@@ -34,10 +46,33 @@ export function focusedSliceFor(node: Node, all: Node[]): Node[] {
     set.set(d.id, d)
     stack.push(...d.children)
   }
-  for (const n of all) {
-    if (set.has(n.id)) continue
-    if (n.anchors.some(a => (a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string')) {
-      set.set(n.id, n)
+  const pathHasTarget = [...set.values()].some(n =>
+    n.anchors.some(a => a.role === 'target' && typeof a.target === 'string'),
+  )
+  if (pathHasTarget) {
+    const names = new Set<string>()
+    for (const n of set.values()) {
+      for (const a of n.anchors) {
+        if (a.role === 'target' && typeof a.target === 'string') names.add(a.target)
+      }
+    }
+    let hubAnswers = false
+    const hub = node.hubFor
+    if (hub) {
+      for (const name of names) {
+        if (hub.linkFor(name, 'component').anchors.length > 0) hubAnswers = true
+      }
+    }
+    if (!hubAnswers) {
+      // hub-less / unshared-link trees: the fallback can only answer from
+      // the slice — sweep the providers in (status quo, target-gated)
+      const universe = typeof all === 'function' ? all() : all
+      for (const n of universe) {
+        if (set.has(n.id)) continue
+        if (n.anchors.some(a => (a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string')) {
+          set.set(n.id, n)
+        }
+      }
     }
   }
   return [...set.values()]
@@ -123,13 +158,11 @@ export class Supervisor {
   }
 
   /**
-   * Bounded pass-2 slice for one changed node: the node itself, its ancestor
-   * chain, its subtree, plus every source/duplex-bearing node (the fallback
-   * universe — prototype/contentNodes-owned providers must stay discoverable
-   * so their arms still terminate with the right drop reason).
+   * Bounded pass-2 slice: the changed node's walk path + (only when the path
+   * carries a target) the lazily-materialized provider universe.
    */
   private focusedSlice(node: Node): Node[] {
-    return focusedSliceFor(node, this.allNodes())
+    return focusedSliceFor(node, () => this.allNodes())
   }
 
   /** Compiled states produced by pass-2 since the last take — the renderer

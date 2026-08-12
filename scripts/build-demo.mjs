@@ -129,4 +129,11 @@ async function emitPage(templateName, outName, doc, serverData) {
     await writeFile(join(ROOT, 'demo', `fork-stress-data-d${depth}.html`), html)
     console.log(`built demo/fork-stress-data-d${depth}.html (${2 ** depth - 1} nodes, legacy envelope)`)
   }
+  // single-method d12 variants: the whole tree relies on ONE mechanism
+  // (placement-only / values-only / link-only — spec §4).
+  for (const method of ['placement', 'values', 'link']) {
+    const { html } = await buildForkStressDataPage(12, method)
+    await writeFile(join(ROOT, 'demo', `fork-stress-data-${method}-d12.html`), html)
+    console.log(`built demo/fork-stress-data-${method}-d12.html (${2 ** 12 - 1} nodes, ${method}-only legacy envelope)`)
+  }
 }

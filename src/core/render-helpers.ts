@@ -227,22 +227,28 @@ export function emitElements(
     }
   }
   for (const [, states] of groups) {
-    if (states.length === 1 && defCovered.has(states[0]!.nodeId)) continue
     const multi = states.length > 1
     const base = states[0]!
     const emitted = emitOne(base, multi ? 0 : undefined, nodeById)
-    const el = emitted.el
-    if (multi) {
-      el.childOrder = []
-      // one element per arm; the first arm carries the full el, the rest are leaf dupes
-      els.push(el)
-      for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nodeById).el)
-    } else {
-      // remap any forked child references to their arm wires in arm order
-      el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])
-      els.push(el)
+    const covered = states.length === 1 && defCovered.has(base.nodeId)
+    if (!covered) {
+      const el = emitted.el
+      if (multi) {
+        el.childOrder = []
+        // one element per arm; the first arm carries the full el, the rest are leaf dupes
+        els.push(el)
+        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nodeById).el)
+      } else {
+        // remap any forked child references to their arm wires in arm order
+        el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])
+        els.push(el)
+      }
     }
-    // component-link: the def re-typed child elements join the emitted set
+    // component-link: the def re-typed child elements join the emitted set —
+    // even for def-covered consumers: a covered consumer that is ITSELF a def
+    // consumer (link-only chains — every level re-types the next) must still
+    // emit its own defChildren, else the whole subtree below the covered node
+    // vanishes from the element set.
     for (const c of emitted.defChildren ?? []) els.push(c)
   }
   return els

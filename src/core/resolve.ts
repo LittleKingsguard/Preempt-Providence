@@ -39,6 +39,98 @@ function providersOn(owner: Node, name: string): ProviderHit[] {
   return out
 }
 
+/** Token chain-kind for a string parent target (mirrors compile's
+ *  chainTokenKind — kept local to avoid a node.ts import cycle). */
+function chainTokenKind(target: string): ChainKind {
+  if (target === 'rootNode') return { kind: 'token', token: 'rootNode' }
+  if (target === 'component') return { kind: 'token', token: 'component' }
+  if (target === 'contentNodes') return { kind: 'token', token: 'contentNodes' }
+  return { kind: 'token', token: 'other' }
+}
+
+/** On-demand chain classification of an OUT-OF-SLICE node, mirroring the
+ *  compile's chainRoot termination rules (string token → its kind; childless
+ *  / absent parent anchor → unplaced; destroyed owner → destroyed-owner;
+ *  revisit → loop). Only needs the FAMILY side — no slice, no memo. */
+function chainKindOf(owner: Node): ChainKind | undefined {
+  const seen = new Set<NodeId>()
+  let cur: Node | null = owner
+  while (cur !== null && !seen.has(cur.id)) {
+    seen.add(cur.id)
+    const child = cur.childAnchor()
+    if (!child) return { kind: 'unplaced' }
+    const parentAnchor = child.link.anchorsOf('parent')[0]
+    if (!parentAnchor) return { kind: 'unplaced' }
+    const target = parentAnchor.target
+    if (typeof target === 'string') return chainTokenKind(target)
+    if (target === null) return { kind: 'unplaced' }
+    const ownerNode = target as Node
+    if (ownerNode.destroyed) return { kind: 'destroyed-owner' }
+    cur = ownerNode
+  }
+  return { kind: 'loop' }
+}
+
+/** Whether an owner can itself RESOLVE (mirrors compile's `viable` rules):
+ *  in-tree (token rootNode) or an unplaced SELF-provider (S-R2.6). Only
+ *  NON-viable providers terminate a consumer's arm. */
+function isViable(kind: ChainKind | undefined, owner: Node): boolean {
+  if (!kind) return false
+  if (kind.kind === 'token' && kind.token === 'rootNode') return true
+  if (kind.kind === 'token') return false // component / contentNodes / other
+  if (kind.kind === 'unplaced') {
+    return owner.anchors.some(a => (a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string')
+  }
+  return false // loop / destroyed-owner
+}
+
+/**
+ * Arm-termination fallback: does a NON-viable provider for `name` exist?
+ *
+ * The per-name component Link IS the registry of nodes relevant for the
+ * target (anchors carry their owner backref) — a shared-hub tree answers
+ * here directly, with NO full-graph sweep: the compile slice never needs
+ * the provider universe. Hub-less trees (same-name anchors on private
+ * links) fall back to the status-quo slice scan.
+ */
+function fallbackTermination(
+  node: Node,
+  name: string,
+  slice: Node[],
+  viable: ReadonlySet<NodeId>,
+  kinds: ReadonlyMap<NodeId, ChainKind>,
+): FitResult {
+  const hub = node.hubFor
+  if (hub) {
+    const link = hub.linkFor(name, 'component')
+    const providers: ProviderHit[] = []
+    for (const a of link.anchors) {
+      if (a.role !== 'source' && a.role !== 'duplex') continue
+      if (typeof a.target !== 'string' || a.target !== name) continue
+      const owner = a.owner
+      if (!owner) continue
+      const kind = chainKindOf(owner)
+      if (isViable(kind, owner)) continue
+      providers.push({ anchor: a, owner })
+    }
+    if (providers.length > 0) {
+      const reason = kindDropReason(chainKindOf(providers[0]!.owner))
+      return reason ? { kind: 'term', reason } : { kind: 'none' }
+    }
+  }
+  const fallback: ProviderHit[] = []
+  for (const s of slice) {
+    if (viable.has(s.id)) continue
+    for (const p of providersOn(s, name)) fallback.push(p)
+  }
+  if (fallback.length > 0) {
+    const first = fallback[0]
+    const reason = first && kindDropReason(kinds.get(first.owner.id))
+    return reason ? { kind: 'term', reason } : { kind: 'none' }
+  }
+  return { kind: 'none' }
+}
+
 function fitReference(node: Node, name: string, slice: Node[], viable: ReadonlySet<NodeId>, kinds: ReadonlyMap<NodeId, ChainKind>): FitResult {
   const fit = (hits: ProviderHit[]): FitResult =>
     hits.length === 0
@@ -63,17 +155,7 @@ function fitReference(node: Node, name: string, slice: Node[], viable: ReadonlyS
     if (up.length > 0) return fit(up)
   }
 
-  const fallback: ProviderHit[] = []
-  for (const s of slice) {
-    if (viable.has(s.id)) continue
-    for (const p of providersOn(s, name)) fallback.push(p)
-  }
-  if (fallback.length > 0) {
-    const first = fallback[0]
-    const reason = first && kindDropReason(kinds.get(first.owner.id))
-    return reason ? { kind: 'term', reason } : { kind: 'none' }
-  }
-  return { kind: 'none' }
+  return fallbackTermination(node, name, slice, viable, kinds)
 }
 
 export function kindDropReason(kind: ChainKind | undefined): 'prototype-terminated' | 'owner-terminated' | undefined {

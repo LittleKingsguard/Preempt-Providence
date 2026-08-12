@@ -197,6 +197,12 @@ interface ComponentAnchorDecl {
 | `target` | **consumes** a value for `referenceName`; waits until a source is present | notes §10.8.2 |
 | `duplex` | **one anchor carrying BOTH a target and a value** — a self-providing consumer | S-R2.6 |
 
+The shared per-name `Link` is the provider registry: anchors carry an
+`owner` backref (set by `Node.addAnchor`), so resolution enumerates the
+provider NODES for a referenceName directly off the Link — arm-termination
+and the pass-2 slice never sweep the graph for providers (render.md §4;
+hub-less graphs fall back to slice scans).
+
 ### 4.1 Resolution algorithm (compileRemote, per target anchor)
 
 Ordered; first matching rule wins:

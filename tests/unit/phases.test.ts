@@ -4,9 +4,10 @@
  *   before-compile → after-compile (before render) → after-render
  */
 import { describe, it, expect } from 'vitest'
-import { Supervisor } from '../../src/core/node.js'
+import { Supervisor, focusedSliceFor } from '../../src/core/node.js'
 import { EventBridge } from '../../src/core/events.js'
-import { makeRoot, makeNode, childOf, hub } from '../helpers/fixtures.js'
+import { Node } from '../../src/core/node.js'
+import { makeRoot, makeNode, childOf, hub, addComponentSource, targetAnchor, familyLink } from '../helpers/fixtures.js'
 import type { HandlerPhase } from '../../src/core/handlers.js'
 
 function newSystem() {
@@ -115,5 +116,49 @@ describe('Supervisor phase hooks (stub contract)', () => {
 
     expect(order).toEqual(['before-compile', 'after-compile', 'after-render'])
     void (null as unknown as HandlerPhase)
+  })
+})
+
+describe('focusedSliceFor — bounded pass-2 slices stay bounded (no all-tree scans per pass)', () => {
+  it('excludes the source-bearing universe when the walk path has NO targets (no resolution can run, so the fallback is dead weight)', () => {
+    const root = makeRoot()
+    const child = makeNode({ type: 'div' })
+    childOf(root, child)
+    // every node is a source PROVIDER (values-style page): providers on the
+    // walk path resolve depth-0 at themselves and never need the universe
+    addComponentSource(child, 'values-1.a', 'value-A-1')
+    addComponentSource(root, 'values-0.a', 'value-A-0')
+    // an OFF-PATH provider must NOT be swept into the slice
+    const offPath = makeNode({ type: 'div' })
+    addComponentSource(offPath, 'values-9.b', 'value-B-9')
+    const slice = focusedSliceFor(child, [root, child, offPath])
+    expect(slice.map((n) => n.id).sort()).toEqual([root.id, child.id].sort())
+  })
+
+  it('keeps the universe when the walk path carries a target (arm termination needs the fallback)', () => {
+    const root = makeRoot()
+    const child = makeNode({ type: 'div' })
+    childOf(root, child)
+    targetAnchor(child, 'theme')
+    const provider = makeNode({ type: 'div' })
+    addComponentSource(provider, 'ghost', 'x')
+    const slice = focusedSliceFor(child, [root, child, provider])
+    expect(slice.map((n) => n.id).sort()).toEqual([root.id, child.id, provider.id].sort())
+  })
+
+  it('shared-hub trees: the per-name component Link provides the providers — NO full-graph sweep (slice = walk path only)', () => {
+    const h = hub()
+    const root = new Node({ type: 'app' }, h)
+    familyLink(root, 'rootNode')
+    const child = new Node({ type: 'div' }, h)
+    childOf(root, child)
+    child.addAnchor('target', 'theme', {}, h.linkFor('theme', 'component'))
+    // an off-path prototype provider sharing the SAME hub: the link knows it
+    const provider = new Node({ type: 'section' }, h)
+    familyLink(provider, 'component')
+    const src = provider.addAnchor('source', 'theme', {}, h.linkFor('theme', 'component'))
+    src.value = 'dark'
+    const slice = focusedSliceFor(child, [root, child, provider])
+    expect(slice.map((n) => n.id).sort()).toEqual([root.id, child.id].sort())
   })
 })

@@ -124,6 +124,13 @@ export class Node {
     return this._anchors
   }
 
+  /** The tree's shared component/placement link hub (may be null for
+   *  hub-less graphs — same-name anchors then do NOT share links and
+   *  resolution falls back to graph scans). */
+  get hubFor(): LinkConfigNameHub | null {
+    return this.hub
+  }
+
   get dirty(): Set<DirtyScope> {
     return this._dirty
   }
@@ -354,7 +361,10 @@ export class Node {
       if (a.role === 'parent' && a.target instanceof Node) continue
       const fresh = new Link({ name: linkOf(a).config.name })
       try {
-        copy.addAnchor(a.role, a.target as AnchorTarget, { ...a.options }, fresh)
+        const copyAnchor = copy.addAnchor(a.role, a.target as AnchorTarget, { ...a.options }, fresh)
+        // provider values ride along (a clone of a data-declared provider is
+        // itself a provider — same convention as hydrateAnchor)
+        if (a.value !== undefined) copyAnchor.value = a.value
       } catch {
         // unmaterializable profile entries are skipped
       }
@@ -388,7 +398,7 @@ export class Node {
 
   addAnchor(role: Role, target: AnchorTarget | string, options: Anchor['options'], link: Link): Anchor {
     this.ensureWritable()
-    const anchor: Anchor = { role, target: target as AnchorTarget, options: { ...options }, link }
+    const anchor: Anchor = { role, target: target as AnchorTarget, options: { ...options }, link, owner: this }
     if (role === 'child') {
       const existing = this.childAnchor()
       if (existing) throw new SingleParentError(this.id)

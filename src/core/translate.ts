@@ -160,12 +160,27 @@ function translateNodeData(
     node.addAnchor('placement', placement.placementName, {}, plink)
   }
 
-  // component binding (ComponentBinding.reference) → target anchor
+  // component binding (ComponentBinding) → provider/consumer anchors.
+  // A binding that carries a VALUE is a PROVIDER (translate.md §2): the node
+  // provides `reference` = value as a `source` anchor — or, when it also
+  // names a `target`, as a DUPLEX combo (source for `reference` + a `target`
+  // anchor for `target`, the self-providing-consumer shape). A binding with
+  // NO value is a plain `target` consumer.
   const component = data.component
   if (component && typeof component.reference === 'string') {
-    const clink = hub.linkFor(component.reference, 'component')
-    const a = node.addAnchor('target', component.reference, {}, clink)
-    if (component.value !== undefined) a.value = component.value
+    const consumed = typeof component.target === 'string' && component.target.length > 0 ? component.target : undefined
+    if (component.value !== undefined) {
+      const clink = hub.linkFor(component.reference, 'component')
+      const a = node.addAnchor('source', component.reference, {}, clink)
+      a.value = component.value
+      if (consumed) {
+        const tlink = hub.linkFor(consumed, 'component')
+        node.addAnchor('target', consumed, {}, tlink)
+      }
+    } else {
+      const clink = hub.linkFor(component.reference, 'component')
+      node.addAnchor('target', component.reference, {}, clink)
+    }
   }
 
   // children (NodeData[]) → parent-child anchors in array order (priority)
@@ -273,11 +288,23 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   if (node.css && Object.keys(node.css).length > 0) data.css = { ...node.css }
   const rawHandlers = node.handlers as unknown as LegacyHandlerDef[] | undefined
   if (rawHandlers && rawHandlers.length > 0) data.handlers = rawHandlers.map((h) => ({ name: h.name, ...(h.event ? { event: h.event } : {}), ...(h.phase ? { phase: h.phase } : {}), ...(h.body ? { body: h.body } : {}) }))
-  const target = node.anchors.find((a) => a.role === 'target' && typeof a.target === 'string')
-  if (target) {
-    const binding: LegacyComponentBinding = { reference: target.target as string }
-    if (target.value !== undefined) binding.value = target.value
+  // component bindings back: a PROVIDER (source/duplex anchor with a value)
+  // emits `reference` + `value` (+ `target` for the consumed name when the
+  // node also consumes — the duplex shape); a plain consumer emits
+  // `{ reference }` (translate.md §2 mapping).
+  const compAnchors = node.anchors.filter(
+    a => (a.role === 'target' || a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string',
+  )
+  const provider = compAnchors.find(a => a.role === 'source' || a.role === 'duplex')
+  const consumer = compAnchors.find(a => a.role === 'target')
+  if (provider) {
+    const binding: LegacyComponentBinding = { reference: provider.target as string }
+    if (provider.value !== undefined) binding.value = provider.value
+    if (consumer) binding.target = consumer.target as string
+    else if (provider.role === 'duplex') binding.target = provider.target as string
     data.component = binding
+  } else if (consumer) {
+    data.component = { reference: consumer.target as string }
   }
   const placement = node.anchors.find((a) => a.role === 'placement' && typeof a.target === 'string')
   if (placement) data.placement = { placementName: placement.target as string }

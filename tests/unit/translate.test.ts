@@ -8,7 +8,7 @@
  * `TranslatedTree.content`, awaiting placement.
  */
 import { describe, it, expect } from 'vitest'
-import { translateLegacy, type LegacyInitialData } from '../../src/core/translate.js'
+import { translateLegacy, reverseTranslate, type LegacyInitialData } from '../../src/core/translate.js'
 import { serializeSlice, loadState } from '../../src/core/serialize.js'
 import { Node, reconcileParentTargets } from '../../src/core/node.js'
 import { hub } from '../helpers/fixtures.js'
@@ -86,15 +86,46 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(t.content[1]!.children.map((c: NodeType) => c.type)).toEqual(['title'])
   })
 
-  it('materializes component bindings as target anchors (reference + value)', () => {
+  it('materializes component bindings: plain reference → target; reference+value → SOURCE provider', () => {
     const t = translateLegacy(legacyDoc())
+    // plain reference (no value, no target) → target consumer
     const targets = t.root.anchors.filter((a) => a.role === 'target' && typeof a.target === 'string')
     expect(targets.map((a) => a.target)).toContain('shell')
 
+    // value + NO target field → SOURCE anchor: the node PROVIDES `reference` = value
     const pane = t.root.children[1]!
-    const paneTarget = pane.anchors.find((a) => a.role === 'target' && a.target === 'panel')!
-    expect(paneTarget).toBeDefined()
-    expect(paneTarget.value).toEqual({ variant: 'a' })
+    const paneSource = pane.anchors.find((a) => a.role === 'source' && a.target === 'panel')!
+    expect(paneSource).toBeDefined()
+    expect(paneSource.value).toEqual({ variant: 'a' })
+    expect(pane.anchors.find((a) => a.role === 'target' && a.target === 'panel')).toBeUndefined()
+  })
+
+  it('component reference+value+target → duplex: source for `reference` + target for `target`', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', component: { reference: 'val', value: 42, target: 'theme' } } },
+      content: [],
+    })
+    const root = t.root
+    const src = root.anchors.find((a) => a.role === 'source' && a.target === 'val')!
+    expect(src.value).toBe(42)
+    const tg = root.anchors.find((a) => a.role === 'target' && a.target === 'theme')!
+    expect(tg).toBeDefined()
+  })
+
+  it('reverseTranslate round-trips providers: source → { reference, value }; duplex → { reference, value, target }', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: { reference: 'val', value: 42, target: 'theme' },
+          children: [{ type: 'pane', component: { reference: 'panel', value: { variant: 'a' } } }],
+        },
+      },
+      content: [],
+    })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template?.component).toEqual({ reference: 'val', value: 42, target: 'theme' })
+    expect(out.template?.root.children?.[0]?.component).toEqual({ reference: 'panel', value: { variant: 'a' } })
   })
 
   it('materializes placement configs as placement anchors', () => {

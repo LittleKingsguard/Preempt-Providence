@@ -3,13 +3,39 @@
  *
  * One module, two roles:
  *
- *  1. DATA (`forkStressLegacyData(depth)`, exported): the LEGACY envelope
- *     (`LegacyInitialData`) carrying the root and, per layer 1..depth−1, TWO
- *     prototype nodes (one per sibling slot). The prototypes declare their
- *     `after-compile` handler BY NAME (`handlers: [{ name: 'stress-expand',
- *     phase: 'after-compile' }]` — the BODY cannot be JSON-serialized). The
- *     page module supplies the body for that name. This export is used by
- *     scripts/fork-stress-data-page.mjs (Node) to embed the envelope.
+ *  1. DATA (`forkStressLegacyData(depth, method)`, exported): the LEGACY
+ *     envelope (`LegacyInitialData`) carrying the root and, per layer
+ *     1..depth−1, TWO prototype nodes (one per sibling slot). The prototypes
+ *     declare their `after-compile` handler BY NAME (`handlers: [{ name:
+ *     'stress-expand', phase: 'after-compile' }]` — the BODY cannot be
+ *     JSON-serialized). The page module supplies the body for that name.
+ *     This export is used by scripts/fork-stress-data-page.mjs (Node) to
+ *     embed the envelope.
+ *
+ *     `method` selects WHICH child-creation mechanism the whole tree relies on
+ *     (the "single-method" pages — spec: docs/specs/fork-stress-data.md §4):
+ *       - undefined (default): the FOUR-mechanism cycle label per layer
+ *         (placement → values → link → handler, repeated) — the original
+ *         multi-method pages, where the labels document the mechanism that
+ *         the IMPERATIVE page drives for that layer;
+ *       - 'placement': the tree is pure clone-instance structure — every
+ *         node's `stress:kind` is `placement`, no component refs;
+ *       - 'values': every prototype carries `component: { reference:
+ *         'values-<layer>.<slot>', value: 'value-<SLOT>-<layer>' }` — a
+ *         value-bearing binding translates to a SOURCE anchor (translate.md
+ *         §2), the clone-instance op inherits it WITH its value, and every
+ *         clone resolves its own provider depth-0 and renders it as text;
+ *       - 'link': every prototype carries `component: { reference:
+ *         'link-<layer>', value: <def> }` — each clone's inherited source is
+ *         a component DEF (prototype-as-child link) whose EMISSION re-types
+ *         the clone's children per the def. This exercises the recursive def
+ *         chain: every level is a def consumer whose children are themselves
+ *         def consumers, so the emitter must emit defChildren for covered
+ *         consumers too (render-helpers emitElements).
+ *
+ *     All sources are DECLARED IN THE DATA (the envelope) — the page module
+ *     itself never attaches a single anchor: it stays core-only + legacy
+ *     data (translateLegacy → Supervisor → clone-instance → render).
  *
  *  2. PAGE (browser, guarded by `typeof document !== 'undefined'` so the
  *     builder can import the data without a DOM): CORE-ONLY imports
@@ -47,32 +73,67 @@ import { LAYER_METHODS, layerName, levelCss, cssPropForLevel } from './fork-stre
  * LegacyInitialData for a fork-stress page of the given depth: the root plus
  * TWO prototype nodes per layer 1..depth−1 (slot 'a' = div, slot 'b' = span).
  * The prototypes are content-payload items (unplaced); the tree assembles at
- * runtime via `clone-instance`. `stress:kind` cycles the four mechanisms
- * (placement|values|link|handler) every 4 layers; `levelCss(layer, slot)`
- * supplies the per-level property + per-slot value css stressor (shared pure
- * helper from fork-stress-fixture.js — demo-only, NOT a core API).
+ * runtime via `clone-instance`. `levelCss(layer, slot)` supplies the per-level
+ * property + per-slot value css stressor (shared pure helper from
+ * fork-stress-fixture.js — demo-only, NOT a core API).
+ *
+ * `method` picks the single mechanism the whole tree relies on (see header):
+ * 'values'/'link' declare the component SOURCE the mechanism needs ON THE
+ * PROTOTYPE (a value-bearing `component` binding translates to a `source`
+ * anchor — translate.md §2 — and the clone-instance op inherits the anchor
+ * WITH its value, so every clone resolves its own provider depth-0 and
+ * renders it); the default keeps the four-mechanism cycle LABELS
+ * (placement|values|link|handler) that the multi-method pages document per
+ * layer.
  */
-export function forkStressLegacyData(depth) {
+export function forkStressLegacyData(depth, method) {
   const prototypes = []
   for (let layer = 1; layer <= depth - 1; layer += 1) {
     for (const slot of ['a', 'b']) {
-      prototypes.push({
+      const kind = method ?? LAYER_METHODS[(layer - 1) % LAYER_METHODS.length]
+      const proto = {
         type: slot === 'a' ? 'div' : 'span',
         props: {
           'stress:layer': layer,
           'stress:slot': slot,
-          'stress:kind': LAYER_METHODS[(layer - 1) % LAYER_METHODS.length],
+          'stress:kind': kind,
           'stress:handler': 'stress-expand',
         },
         css: levelCss(layer, slot),
         handlers: [{ name: 'stress-expand', phase: 'after-compile' }],
-      })
+      }
+      if (method === 'values') {
+        // every clone provides (and renders) its own scalar value
+        proto.component = { reference: `values-${layer}.${slot}`, value: `value-${slot.toUpperCase()}-${layer}` }
+      }
+      if (method === 'link') {
+        // every clone provides the component DEF that re-types its children
+        proto.component = { reference: `link-${layer}`, value: linkDefForLevel(layer) }
+      }
+      prototypes.push(proto)
     }
   }
   return {
     template: { root: { type: 'app', props: { id: 'stress-root' } } },
     content: [{ metadata: { title: 'fork-stress prototypes' }, content: prototypes }],
     clientConfig: { runInstantiation: false, runMonitoring: true },
+  }
+}
+
+/** The component-def (prototype-as-child link) for a link-only layer: the
+ *  consumer's OWN children ARE the next layer's clones, and the def re-types
+ *  them (type div, def content) at emit time. Pure JSON data — rides in the
+ *  envelope as the prototype's `component.value`. */
+function linkDefForLevel(layer) {
+  return {
+    type: 'div',
+    label: `component: link-${layer} — prototype linked as children`,
+    childLayersSuffix: `L${layer}:link`,
+    childOffset: 0,
+    children: [
+      { bind: 'a', type: 'div', content: `link-${layer}.a`, css: levelCss(layer, 'a'), props: { 'stress:kind': `link:${layer}`, 'data-depth': String(layer) } },
+      { bind: 'b', type: 'div', content: `link-${layer}.b`, css: levelCss(layer, 'b'), props: { 'stress:kind': `link:${layer}`, 'data-depth': String(layer) } },
+    ],
   }
 }
 
@@ -91,6 +152,7 @@ if (typeof document !== 'undefined') {
   const envelope = JSON.parse(document.getElementById('preempt-initial-data').textContent)
   const serverData = JSON.parse(document.getElementById('server-data').textContent)
   const depth = serverData.depth
+  const method = serverData.method
 
   const adapter = new DomAdapter(document.getElementById('app'))
 
@@ -124,11 +186,13 @@ if (typeof document !== 'undefined') {
   const protoByKey = new Map()
   for (const p of prototypes) protoByKey.set(`${p.props['stress:layer']}:${p.props['stress:slot']}`, p)
 
-  /** Chain segment for a layer, matching the imperative page's format
+  /** Chain segment for a layer. Single-method pages: `L<k>:<method>` for every
+   *  layer. Multi-method (cycle) pages keep the imperative page's format
    *  (L1:placement, L2:values-1, L3:link-1, L4:handler-1, L5:placement, …). */
   function chainSegment(layer) {
-    const method = LAYER_METHODS[(layer - 1) % LAYER_METHODS.length]
-    return method === 'placement' ? `L${layer}:placement` : `L${layer}:${layerName(layer)}`
+    if (method) return `L${layer}:${method}`
+    const m = LAYER_METHODS[(layer - 1) % LAYER_METHODS.length]
+    return m === 'placement' ? `L${layer}:placement` : `L${layer}:${layerName(layer)}`
   }
 
   /** Pending (created-but-not-yet-expanded) clones per `layer:slot` — filled
@@ -249,8 +313,8 @@ if (typeof document !== 'undefined') {
   }
 
   document.getElementById('layer-plan').textContent =
-    'depth ' + depth + '\n' +
-    serverData.layerNames.map((n, i) => `L${i + 1}  ${LAYER_METHODS[i % 4]}  ${n}`).join('\n')
+    'depth ' + depth + (method ? ` (single method: ${method})` : '') + '\n' +
+    serverData.layerNames.map((n, i) => `L${i + 1}  ${method ?? LAYER_METHODS[i % 4]}  ${n}`).join('\n')
 
   // ---- helpers for the runner checks ---------------------------------------
   function allNodes() {
@@ -259,6 +323,9 @@ if (typeof document !== 'undefined') {
   function wireOf(el) {
     if (!el) return ''
     return el.getAttribute?.('data-wire') ?? el.dataset?.wire ?? ''
+  }
+  function elText(el) {
+    return el.textContent ?? ''
   }
 
   // --------------------------------------------------------------------------
@@ -341,7 +408,7 @@ if (typeof document !== 'undefined') {
     await runner.check('stress:kind on every node matches its layer mechanism', () => {
       for (const n of allNodes()) {
         const k = n.props?.['stress:layer']
-        const expected = LAYER_METHODS[(k - 1) % LAYER_METHODS.length]
+        const expected = method ?? LAYER_METHODS[(k - 1) % LAYER_METHODS.length]
         if (n.props?.['stress:kind'] !== expected) {
           throw new Error(`node ${n.id} (L${k}): stress:kind "${n.props?.['stress:kind']}" ≠ "${expected}"`)
         }
@@ -350,11 +417,45 @@ if (typeof document !== 'undefined') {
         const attr = el.getAttribute?.('stress:layer') ?? ''
         if (!attr) continue
         const k = Number(attr)
-        const expected = LAYER_METHODS[(k - 1) % LAYER_METHODS.length]
+        const expected = method ?? LAYER_METHODS[(k - 1) % LAYER_METHODS.length]
         const kind = el.getAttribute?.('stress:kind') ?? ''
         if (kind !== expected) throw new Error(`element wire ${wireOf(el)} (L${k}): stress:kind "${kind}" ≠ "${expected}"`)
       }
     })
+
+    if (method === 'values') {
+      await runner.check('values-only: every node renders its component-provided value as text', () => {
+        for (const n of allNodes()) {
+          const el = adapter.wires.get(n.id)
+          if (!el) throw new Error(`no element for ${n.id}`)
+          const k = n.props['stress:layer']
+          const slot = n.props['stress:slot']
+          const expected = `value-${slot.toUpperCase()}-${k}`
+          if (!elText(el).includes(expected)) {
+            throw new Error(`node ${n.id} (L${k}${slot}): text "${elText(el)}" lacks "${expected}"`)
+          }
+        }
+      })
+    }
+
+    if (method === 'link') {
+      await runner.check('link-only: every node renders via its parent def (div type, def content)', () => {
+        for (const n of allNodes()) {
+          const el = adapter.wires.get(n.id)
+          if (!el) throw new Error(`no element for ${n.id}`)
+          const k = n.props['stress:layer']
+          if ((el.tagName ?? '').toLowerCase() !== 'div') {
+            throw new Error(`node ${n.id} (L${k}): expected div (def type), got ${el.tagName}`)
+          }
+          if (k > 1) {
+            const expected = `link-${k - 1}.${n.props['stress:slot']}`
+            if (!elText(el).includes(expected)) {
+              throw new Error(`node ${n.id} (L${k}): text "${elText(el)}" lacks def content "${expected}"`)
+            }
+          }
+        }
+      })
+    }
 
     await runner.check('DOM nesting: every element\'s direct children are exactly its graph node\'s children', () => {
       const rootEl = adapter.wires.get(rootNode.id)
@@ -411,12 +512,12 @@ if (typeof document !== 'undefined') {
       if (PROFILE.renderCount < 2) throw new Error(`expected incremental renders after bootstrap, got ${PROFILE.renderCount}`)
     })
 
-    runner.summary(`Fork Stress (data) — depth ${depth}`)
+    runner.summary(`Fork Stress (data${method ? `: ${method}` : ''}) — depth ${depth}`)
 
     PROFILE.totalMs = now() - tStart
     const f = (v) => v.toFixed(1)
     console.log(
-      `[fork-stress-data:profile] depth=${depth} nodes=${2 ** depth - 1} ` +
+      `[fork-stress-data:profile] depth=${depth} method=${method ?? 'cycle'} nodes=${2 ** depth - 1} ` +
       `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
       `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms ` +
       `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls} total=${f(PROFILE.totalMs)}ms`,

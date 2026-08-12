@@ -58,9 +58,11 @@ interface Link {
   destroy(): void
 }
 export interface AnchorOptions { priority?: number; order?: number }
-export interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link; value?: unknown }
+export interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link; value?: unknown; owner?: import('./node.js').Node }
 // `value` is the provided/deployed cell for `source`/`duplex` anchors (api.md §4.1: source provides
 // its resolved value; duplex carries BOTH target and value). Resolvers read `anchor.value`.
+// `owner` is the node that holds the anchor (set by Node.addAnchor) — the per-name component Link
+// can therefore enumerate the PROVIDER NODES relevant for a reference (the link registry query).
 export type NodeState = 'prototype'|'unplaced'|'in-tree'|'destroyed'
 export type LinkConfigErrorCode = 'unique-order'|'count-exceeded'|'count-underflow'|'role-mismatch'
 export interface LinkConfig {

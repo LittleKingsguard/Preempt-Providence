@@ -285,13 +285,24 @@ test rather than a review finding.
 
 ## Where the rules live now
 
+- `docs/specs/render.md` — **ORD-P1** (diff must be O(N), never O(N²)):
+  remove-pass uses a `Set` of next wires (no `next.some` per prev wire); the
+  D5 order-signature map is built ONCE per side, never per element. A
+  quadratic `diffMinimal` made a 4095-element stress render spend 900ms+ in
+  diff; the O(N) form is ~10ms (90×). Pinned by `tests/unit/render.test.ts`
+  ORD-P1 (4× size must cost < 8× time; quadratic measured 17×).
 - `docs/skills/designing-pages.md` — authoring rules (A-1..A-8) + rendering
   rules (B-1..B-5) added: css classes are data, content+children don't
   shadow, copy must match DOM, node-ref vs presentation id, HTMLCollection
   handling, no-redundant-reappend focus guard, bootstrap-vs-incremental.
   §14.3 (demo-only helpers stay out of core docs) + §14.4 (css-stress
   lessons: guaranteed-not-hashed uniqueness, closed css serialization
-  schema, def-retyped children keep own css, wireToNode registration).
+  schema, def-retyped children keep own css, wireToNode registration) +
+  §14.5 (data-driven assembly lessons: two-arg apply, no current-node in
+  HandlerContext, pending-queue not graph scans, clone inherits layers not
+  chains, flat legacy css, banner-as-gate).
+- `docs/specs/fork-stress-data.md` — data-driven completion-test spec +
+  implementation lessons.
 - `docs/specs/render.md` — ORD-H6 (no re-append on unchanged order) added.
 - `docs/specs/fork-stress.md` — layered stress-test spec (four runtime
   child-creation mechanisms cycling per layer; only core + handler code;

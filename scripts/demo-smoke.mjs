@@ -183,6 +183,20 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
     new Promise((r) => setTimeout(r, 30000)),
   ]).catch(() => {})
 }
+// ---- single-method d12 variants (placement-only / values-only / link-only) --
+// The whole tree relies on ONE mechanism; the module re-instantiates per page.
+for (const method of ['placement', 'values', 'link']) {
+  const pageHtml = await readFile(`${base}demo/fork-stress-data-${method}-d12.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/fork-stress-data.js?method=${method}`).catch((e) => {
+    console.error(`fork-stress-data (${method}-only d12) failed:`, e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__forkStressDataDone,
+    new Promise((r) => setTimeout(r, 60000)),
+  ]).catch(() => {})
+}
 
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
@@ -237,6 +251,12 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
 for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
   if (!banners.some((b) => b.includes(`Fork Stress (data) — depth ${depth}`) && /0 failed/.test(b))) {
     console.error(`fork-stress-data (depth ${depth}) page did not complete its checks (banner missing)`)
+    process.exit(1)
+  }
+}
+for (const method of ['placement', 'values', 'link']) {
+  if (!banners.some((b) => b.includes(`Fork Stress (data: ${method}) — depth 12`) && /0 failed/.test(b))) {
+    console.error(`fork-stress-data (${method}-only d12) page did not complete its checks (banner missing)`)
     process.exit(1)
   }
 }

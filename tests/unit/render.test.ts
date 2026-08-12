@@ -6,6 +6,7 @@ import {
   type MinimalElement,
   type RenderAdapter,
 } from '../../src/core/render.js'
+import { emitElements } from '../../src/core/render-helpers.js'
 import {
   serializeNode,
   serializeSlice,
@@ -693,5 +694,95 @@ describe('§10.5 tree diff contract (D1–D5, render.md §3.2)', () => {
     const b = el('b', 'div', {})
     const ops = diffMinimal(elMap([root, a]), [root, a, b])
     expect(ops.filter((o) => o.kind === 'append').map((o) => o.child)).toEqual(['b'])
+  })
+
+  it('ORD-P1 — diff scales sub-quadratically (no per-wire next.some, no per-element map rebuild)', () => {
+    // Guard against the O(N²) regressions: a 4× input must NOT cost ~16×
+    // (quadratic). Threshold is deliberately loose (8×) to stay CI-safe while
+    // still catching a quadratic implementation (which measured 17× at n=4095).
+    const tree = (depth: number): MinimalElement[] => {
+      const els: MinimalElement[] = []
+      let id = 0
+      const add = (layer: number): string => {
+        const wire = 'n' + ++id
+        const e = el(wire, 'div', { 'prop:id': wire, text: 'x' + id })
+        els.push(e)
+        if (layer < depth) {
+          const a = add(layer + 1)
+          const b = add(layer + 1)
+          e.childOrder = [a, b]
+        }
+        return wire
+      }
+      add(1)
+      return els
+    }
+    const run = (n: MinimalElement[]): number => {
+      const prev = new Map(n.map((e) => [e.wire, { ...e, props: { ...e.props } }]))
+      const next = n.map((e) => (e.wire === 'n1' ? { ...e, props: { ...e.props, text: 'changed' } } : { ...e, props: { ...e.props } }))
+      const t0 = performance.now()
+      diffMinimal(prev, next)
+      return performance.now() - t0
+    }
+    const small = run(tree(10)) // 1023 wires
+    const big = run(tree(12)) // 4095 wires
+    // linear would be ~4×; quadratic was ~17×. Assert clearly sub-quadratic.
+    expect(big).toBeLessThan(small * 8)
+  })
+})
+
+describe('emitElements — component-link (prototype-as-child) def chains', () => {
+  const def = (n: string) => ({
+    type: 'div',
+    label: `link-${n}`,
+    childOffset: 0,
+    children: [
+      { bind: 'a', type: 'div', content: `${n}.a` },
+      { bind: 'b', type: 'div', content: `${n}.b` },
+    ],
+  })
+
+  it('single link layer: def-covered children emit ONLY through the def (no standalone double-emit)', () => {
+    const els = emitElements([
+      { nodeId: 'a', type: 'span', children: ['b1', 'b2'], bindings: { 'link-1': def('1') } },
+      { nodeId: 'b1', type: 'div' },
+      { nodeId: 'b2', type: 'div' },
+    ])
+    const wires = els.map((e) => e.wire).sort()
+    expect(wires).toEqual(['a', 'b1', 'b2'])
+    const a = els.find((e) => e.wire === 'a')!
+    expect(a.type).toBe('div') // pure link consumer takes the def type
+    expect(a.childOrder).toEqual(['b1', 'b2'])
+    expect(els.find((e) => e.wire === 'b1')!.props['text']).toBe('1.a')
+    expect(els.find((e) => e.wire === 'b2')!.props['text']).toBe('1.b')
+  })
+
+  it('recursive link-only chain: every def consumer emits its OWN defChildren even when covered (no subtree loss below layer 2)', () => {
+    const nodeById = new Map([
+      ['b1', { children: [{ id: 'c1' }, { id: 'c2' }] }],
+      ['b2', { children: [{ id: 'c3' }, { id: 'c4' }] }],
+    ]) as unknown as Map<string, { handlers?: Array<{ event?: string; name?: string; body?: unknown }> }>
+    const els = emitElements(
+      [
+        { nodeId: 'a', type: 'span', children: ['b1', 'b2'], bindings: { 'link-1': def('1') } },
+        { nodeId: 'b1', type: 'span', children: ['c1', 'c2'], bindings: { 'link-2': def('2') } },
+        { nodeId: 'b2', type: 'span', children: ['c3', 'c4'], bindings: { 'link-2': def('2') } },
+        { nodeId: 'c1', type: 'div' },
+        { nodeId: 'c2', type: 'div' },
+        { nodeId: 'c3', type: 'div' },
+        { nodeId: 'c4', type: 'div' },
+      ],
+      nodeById,
+    )
+    const wires = els.map((e) => e.wire).sort()
+    expect(wires).toEqual(['a', 'b1', 'b2', 'c1', 'c2', 'c3', 'c4'])
+    // b1 is covered (re-typed by a's def) but is ITSELF a def consumer: its
+    // re-typed children (c1/c2) must still join the emitted set exactly once.
+    const b1 = els.filter((e) => e.wire === 'b1')
+    expect(b1).toHaveLength(1)
+    expect(b1[0]!.props['text']).toBe('1.a')
+    expect(b1[0]!.childOrder).toEqual(['c1', 'c2'])
+    expect(els.find((e) => e.wire === 'c1')!.props['text']).toBe('2.a')
+    expect(els.find((e) => e.wire === 'c1')!.childOrder).toEqual([])
   })
 })

@@ -21,6 +21,7 @@ import {
   anchorsOf,
   addComponentSource,
   targetAnchor,
+  familyLink,
 } from '../helpers/fixtures.js'
 
 /** Drain the render-microtask sweep (cascade-destroy + pass-2) to completion. */
@@ -281,6 +282,12 @@ describe('methods — mutating surface inside an op (§6.1–§6.5)', () => {
     const srcLinks = new Set(src.anchors.map(a => a.link))
     for (const a of copy.anchors) expect(srcLinks.has(a.link)).toBe(false)
     expect(copy.anchors.map(a => a.role)).toEqual(src.anchors.map(a => a.role))
+    // provider values ride along: a cloned source anchor keeps its value
+    // (a clone of a data-declared provider is itself a provider)
+    const srcSource = src.anchors.find(a => a.role === 'source' && a.target === 'persona')!
+    const copySource = copy.anchors.find(a => a.role === 'source' && a.target === 'persona')!
+    expect(copySource).toBeDefined()
+    expect(copySource.value).toEqual(srcSource.value)
   })
 
   it('M-7 clone supports an ignore list for layer deviations (S1.4)', () => {
@@ -568,6 +575,28 @@ describe('two-pass compile — §8.1–§8.4', () => {
     addComponentSource(src, 'viz', { from: 'proto' })
 
     const res = root.compile([root, consumer, proto, src])
+    expect(res.dropped.some(d => d.reason === 'prototype-terminated')).toBe(true)
+    expect(res.warnings.some(w => w.code === 'unresolved-reference')).toBe(false)
+    expect(res.actionable.find(s => s.nodeId === consumer.id)).toBeUndefined()
+  })
+
+  it('C7b fork-arm: prototype-terminated found through the per-name component LINK (provider NOT in the slice)', () => {
+    // shared hub: same-name anchors share one component Link — the link IS
+    // the registry of nodes relevant for the target, so the provider never
+    // needs to be swept into the compile slice (no full-graph universe)
+    const h = hub()
+    const root = new Node({ type: 'app' }, h)
+    familyLink(root, 'rootNode')
+    const consumer = new Node({ type: 'div' }, h)
+    childOf(root, consumer)
+    consumer.addAnchor('target', 'ghost', {}, h.linkFor('ghost', 'component'))
+    const proto = new Node({ type: 'section' }, h)
+    familyLink(proto, 'component')
+    const src = proto.addAnchor('source', 'ghost', {}, h.linkFor('ghost', 'component'))
+    src.value = { from: 'proto' }
+
+    // the slice deliberately EXCLUDES the provider (walk path only)
+    const res = root.compile([root, consumer])
     expect(res.dropped.some(d => d.reason === 'prototype-terminated')).toBe(true)
     expect(res.warnings.some(w => w.code === 'unresolved-reference')).toBe(false)
     expect(res.actionable.find(s => s.nodeId === consumer.id)).toBeUndefined()

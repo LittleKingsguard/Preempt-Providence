@@ -50,9 +50,10 @@ export interface MinimalElement {
 export function diffMinimal(prev: Map<NodeRef, MinimalElement> | null, next: MinimalElement[]): RenderOp[] {
   const ops: RenderOp[] = []
   const created = new Set<NodeRef>()
+  const present = new Set(next.map((el) => el.wire))
   if (prev) {
     for (const [wire, el] of prev) {
-      if (!next.some((n) => n.wire === wire)) {
+      if (!present.has(wire)) {
         ops.push({ kind: 'remove', wire, ...(el.forkKey !== undefined ? { forkKey: el.forkKey } : {}) })
       }
     }
@@ -87,18 +88,24 @@ export function diffMinimal(prev: Map<NodeRef, MinimalElement> | null, next: Min
       }
     }
   }
-  const present = new Set(next.map((el) => el.wire))
-  const orderOf = (els: Map<NodeRef, MinimalElement>, wire: NodeRef): string => {
-    const order = els.get(wire)?.childOrder ?? []
-    return order.filter((c) => present.has(c)).join('\u0000')
+  // order signatures are computed ONCE per map (not per element) — the
+  // structure pass below compares them per wire (D5 re-append guard, ORD-H6).
+  const orderSig = (els: Map<NodeRef, MinimalElement>): Map<NodeRef, string> => {
+    const out = new Map<NodeRef, string>()
+    for (const [wire, el] of els) {
+      out.set(wire, (el.childOrder ?? []).filter((c) => present.has(c)).join('\u0000'))
+    }
+    return out
   }
+  const prevOrder = prev ? orderSig(prev) : null
+  const nextOrder = orderSig(new Map(next.map((e) => [e.wire, e])))
   for (const el of next) {
     // D5 "re-append in compiled order" only needs to fire when the child
     // ORDER actually changed (or a child is new / re-created this pass).
     // Re-appending an unchanged order would, in a real DOM, detach + re-insert
     // every already-attached child — which blurs a focused element (e.g. the
     // markdown editor) on every keystroke.
-    const orderChanged = !prev || orderOf(prev, el.wire) !== orderOf(new Map(next.map((e) => [e.wire, e])), el.wire)
+    const orderChanged = !prev || prevOrder!.get(el.wire) !== nextOrder.get(el.wire)
     for (const child of el.childOrder) {
       if (!present.has(child)) continue
       if (orderChanged || created.has(child)) ops.push({ kind: 'append', owner: el.wire, child })

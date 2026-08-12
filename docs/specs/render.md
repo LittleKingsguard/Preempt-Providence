@@ -128,6 +128,17 @@ Same `compile(slice)` primitive, parameterized by entry point:
 
 Handler-caused re-render MUST NOT trigger a full supervisor walk (notes §10.6).
 
+The pass-2 slice is the walk path only (supervisor `focusedSliceFor`): the
+per-name component Link IS the provider registry — anchors carry their
+`owner` backref, so arm-termination reads the providers for a target's name
+straight off the Link (resolve.ts, on-demand chain classification) and never
+sweeps providers into the slice. Only hub-less trees (same-name anchors on
+private links) fall back to sweeping the source/duplex-bearing universe into
+the slice — still gated on the walk path carrying a `target` and lazily
+materialized. This keeps pass-2 O(walk path) even when every node is a
+self-providing provider (the values/link-only fork-stress-data pages: 4094
+dirty nodes × 4095-node slices would be O(n²)).
+
 ---
 
 ## 5. JSON-schema serialization contract (notes §10.6, `arch_review.md` D4 — DECIDED)
@@ -314,6 +325,7 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | ORD-F4 | `remove` + re-`create` of one wire in a batch | `remove` strictly precedes `create` (R-ORD-6) |
 | ORD-F5 | `unlock` before all forks emitted/dropped | rejected (S2.3) |
 | ORD-F6 | more than one `styles` op per sweep | coalesced to one (R-ORD-6) |
+| ORD-P1 | diff over N wires | **O(N) — never O(N²).** The remove pass must use a `Set` of next wires, not `next.some(...)` per prev wire; the D5 order-signature map must be built ONCE per side, never per element. (A quadratic `diffMinimal` made a 4095-element stress render spend 900ms+ in diff; the O(N) form is ~10ms — 90×.) |
 
 ### 10.5 Two-scope + renderer-never-sees assertions
 
