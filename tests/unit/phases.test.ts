@@ -8,7 +8,7 @@ import { Supervisor, focusedSliceFor } from '../../src/core/node.js'
 import { EventBridge } from '../../src/core/events.js'
 import { Node } from '../../src/core/node.js'
 import { makeRoot, makeNode, childOf, hub, addComponentSource, targetAnchor, familyLink } from '../helpers/fixtures.js'
-import type { HandlerPhase } from '../../src/core/handlers.js'
+import type { HandlerContext, HandlerPhase } from '../../src/core/handlers.js'
 
 function newSystem() {
   const events = new EventBridge()
@@ -28,6 +28,64 @@ describe('Supervisor phase hooks (stub contract)', () => {
     expect(typeof supervisor.handlerContext.tree.ancestorsOf).toBe('function')
     expect(typeof supervisor.handlerContext.tree.descendantsOf).toBe('function')
     expect(supervisor.handlerContext.clientAPI).toBe(supervisor.clientAPI)
+  })
+
+  it('after-compile bodies receive ctx.node (the focused node) and ctx.states (THIS pass)', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode({ content: 'orig' }))
+    supervisor.registerNode(n)
+    let seen: { nodeId: string | undefined; contents: unknown[] | undefined } = { nodeId: undefined, contents: undefined }
+    n.addLayer({
+      id: 'h',
+      handlers: [
+        {
+          name: 'self-id',
+          phase: 'after-compile',
+          body: (c: HandlerContext) => { seen = { nodeId: c.node?.id, contents: c.states?.map((s) => s.content) } },
+        },
+      ],
+    })
+
+    const res = supervisor.apply({ kind: 'state-slice', node: n, mutation: [{ targetProp: 'content', mode: 'replace', value: 'x' }] })
+    expect(res.status).toBe('applied')
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+
+    // the body identified ITS OWN node and saw THIS pass's fresh state
+    expect(seen.nodeId).toBe(n.id)
+    expect(seen.contents).toEqual(['x'])
+  })
+
+  it('an after-compile body updates its OWN node via ctx.node (the fork-stress marker pattern)', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let fires = 0
+    n.addLayer({
+      id: 'h',
+      handlers: [
+        {
+          name: 'mark',
+          phase: 'after-compile',
+          body: (c: HandlerContext) => {
+            fires += 1
+            const me = c.node
+            if (!me || me.props?.['mark:done']) return
+            c.clientAPI.apply(me.id, [{ targetProp: 'props.mark:done', mode: 'replace', value: true }])
+          },
+        },
+      ],
+    })
+
+    const res = supervisor.apply({ kind: 'state-slice', node: n, mutation: [{ targetProp: 'content', mode: 'replace', value: 'x' }] })
+    expect(res.status).toBe('applied')
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(n.props['mark:done']).toBe(true)
+    // the marker re-dirties the node → one re-fire that no-ops (idempotent)
+    expect(fires).toBe(2)
   })
 
   it('runPhase dispatches a phase on a single node and on all nodes', () => {

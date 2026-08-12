@@ -28,6 +28,12 @@ arrive via `NodeBaseData.handlers` (incl. legacy translation) or layers.
 interface HandlerContext {
   clientAPI: ClientAPI                       // the ONLY mutation channel
   supervisor: Supervisor
+  node?: Node                                // the node being dispatched — per-dispatch
+                                             // enrichment (variant A); undefined on the
+                                             // shared base context
+  states?: CompiledState[]                   // the dispatched node's last-known pass-2
+                                             // resolved states (read-only); at after-compile
+                                             // this is THIS pass's states
   tree: {
     getNode(id: NodeId): Node | undefined
     allNodes(): Node[]
@@ -42,6 +48,12 @@ Built by `makeHandlerContext(supervisor, clientAPI)`. Mutations from handlers
 flow through `ctx.clientAPI.apply` → `supervisor.apply` → journal (identified
 by `journalId`, replayable via `replay/undo/redo`) — never direct field
 writes.
+
+`dispatchPhase`/`dispatchEvent` enrich the context per dispatch with
+`node` (the node being dispatched — so an after-compile body can identify
+itself) and `states` (the node's last-known resolved states). The shared
+base context is never mutated; each dispatch receives a fresh scoped copy
+(no reentrancy clobbering across nested dispatches).
 
 ### 2.1 Read access: handlers read the node's COMPILED state
 

@@ -27,7 +27,9 @@ export interface LegacyHandlerDef {
   name: string
   event?: string
   phase?: LegacyHandlerPhase
-  body?: (ctx: unknown, ...args: unknown[]) => unknown
+  /** live function OR its source as a string (instantiated at translate —
+   *  legacy loadable handlers, admin-gated at the backend) */
+  body?: ((ctx: unknown, ...args: unknown[]) => unknown) | string
 }
 
 export interface LegacyPlacementConfig {
@@ -135,8 +137,34 @@ function baseFrom(nodeData: LegacyNodeData): NodeBaseData {
   if (nodeData.content !== undefined) base.content = nodeData.content
   if (nodeData.props !== undefined) base.props = nodeData.props
   if (nodeData.css !== undefined) base.css = nodeData.css
-  if (nodeData.handlers !== undefined) base.handlers = nodeData.handlers as unknown as unknown[]
+  if (nodeData.handlers !== undefined) {
+    // legacy handler bodies may arrive as FUNCTION SOURCE (a string) — the
+    // backend stores loadable handler definitions as text and the render
+    // process instantiates them at the translation boundary
+    base.handlers = nodeData.handlers.map(h => (typeof h.body === 'string' ? { ...h, body: instantiateHandlerBody(h.body) } : h))
+  }
   return base
+}
+
+/**
+ * Instantiate a legacy handler body shipped as function source.
+ *
+ * The legacy format lets trusted backends store handler definitions as TEXT
+ * (`body: "function (c) { … }"` / `"(c) => …"`) and load them from the DB
+ * into the envelope; the render process compiles the string back into a live
+ * function here.
+ *
+ * SECURITY: `new Function` executes arbitrary code at translate time. The
+ * renderer performs NO authorization of its own — the backend/DB layer that
+ * accepts loadable handler definitions MUST gate writes to
+ * admin/trusted-developer only.
+ */
+function instantiateHandlerBody(src: string): (...args: unknown[]) => unknown {
+  const fn = new Function(`return (${src})`)()
+  if (typeof fn !== 'function') {
+    throw new Error(`legacy-handler-body: "${src}" does not evaluate to a function`)
+  }
+  return fn
 }
 
 /**
@@ -287,7 +315,19 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   if (node.props && Object.keys(node.props).length > 0) data.props = { ...node.props }
   if (node.css && Object.keys(node.css).length > 0) data.css = { ...node.css }
   const rawHandlers = node.handlers as unknown as LegacyHandlerDef[] | undefined
-  if (rawHandlers && rawHandlers.length > 0) data.handlers = rawHandlers.map((h) => ({ name: h.name, ...(h.event ? { event: h.event } : {}), ...(h.phase ? { phase: h.phase } : {}), ...(h.body ? { body: h.body } : {}) }))
+  if (rawHandlers && rawHandlers.length > 0) {
+    data.handlers = rawHandlers.map((h) => {
+      // live function bodies ship back as their SOURCE (so the doc round-trips
+      // through the string-body instantiation); native/bound code has no
+      // recoverable source and is omitted
+      let body = h.body
+      if (typeof h.body === 'function') {
+        const src = h.body.toString()
+        body = /\{\s*\[native code\]\s*\}/.test(src) ? undefined : src
+      }
+      return { name: h.name, ...(h.event ? { event: h.event } : {}), ...(h.phase ? { phase: h.phase } : {}), ...(body !== undefined ? { body } : {}) }
+    })
+  }
   // component bindings back: a PROVIDER (source/duplex anchor with a value)
   // emits `reference` + `value` (+ `target` for the consumed name when the
   // node also consumes — the duplex shape); a plain consumer emits

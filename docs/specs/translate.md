@@ -95,7 +95,7 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 | `NodeData.component.reference` | `target` anchor on a shared per-name component Link (consumer) | §10.8.2 |
 | `NodeData.component.reference` + `value` (no `target`) | **`source` anchor** on the shared per-name component Link — the node PROVIDES `value` for `reference` (legacy source attachment) | §10.8.2 |
 | `NodeData.component.reference` + `value` + `target` | DUPLEX shape: `source` anchor for `reference` (provides `value`) + `target` anchor for `target` (the self-providing-consumer combo) | §10.8.2 |
-| `NodeData.handlers` | carried on the node's base data → compiled `handlers` (runtime-only: function bodies are NOT serializable, see SER-F1; lost at the JSON boundary by design) | §10.10.2 |
+| `NodeData.handlers` | carried on the node's base data → compiled `handlers`. A `body` shipped as a STRING (function source) is INSTANTIATED into a live function at translate (`new Function` — legacy loadable handlers; **security: `new Function` executes arbitrary code — the backend/DB layer that stores loadable handlers must gate writes to admin/trusted-developer only; the renderer performs no authorization of its own**). `reverseTranslate` ships live bodies back as their source string (native/bound code omitted) | §10.10.2 |
 | `ContentPayload.metadata/userData` | surfaced on `TranslatedTree` (first payload wins) | §10.10.1 |
 | `clientConfig.runInstantiation` | `adapter: 'ssr'` when `true`, else `'dom'` | §10.10.1 |
 | `clientConfig.runMonitoring` | `persistence: true` when `true` | §10.10.1 |
@@ -133,7 +133,7 @@ depth-0 (S-R2.6).
 | TR-H1 | template root + its own nested children | root in-tree; default children attached, array-order priorities |
 | TR-H2 | component binding (reference + value) on node/template | value-bearing binding → `source` anchor (provider); + `target` → duplex (source + target combo); plain reference → `target` anchor. Cloned providers keep their value |
 | TR-H3 | placement config | `placement` anchor |
-| TR-H4 | handlers on legacy nodes | carried to compiled `handlers` (live tree; not serialized) |
+| TR-H4 | handlers on legacy nodes | carried to compiled `handlers`; STRING bodies instantiated into functions at translate; reverse emits live bodies as source strings (round-trips) |
 | TR-H5 | template.children + content payloads | unplaced content nodes in `TranslatedTree.content`; metadata/userData surfaced |
 | TR-H6 | run* gates | adapter/persistence mapping; defaults when absent; preserved by serializeSlice |
 | TR-H7 | shared hub | same-name anchors on shared links |

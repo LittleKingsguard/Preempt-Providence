@@ -19,6 +19,14 @@ export type HandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
 export interface HandlerContext {
   clientAPI: ClientAPI
   supervisor: Supervisor
+  /** The node being dispatched — set on the per-dispatch context only
+   *  (variant A: handler visibility of the node). Undefined on the base
+   *  context. */
+  node?: Node
+  /** The dispatched node's last-known resolved states (read-only — the same
+   *  store as tree.getState; at after-compile this is THIS pass's states,
+   *  since storeResolved runs before the dispatch). */
+  states?: CompiledState[]
   tree: {
     getNode(id: NodeId): Node | undefined
     allNodes(): Node[]
@@ -75,14 +83,25 @@ function handlersOf(node: Node): HandlerDef[] {
 
 export type HandlerResult = unknown
 
+/** Per-dispatch context: enriches the shared base context with the node
+ *  being dispatched + its last-known resolved states. Fresh object per
+ *  dispatch — the shared base context is never mutated (no reentrancy
+ *  clobbering across nested dispatches). Null / supervisor-less contexts
+ *  (hand-rolled test contexts) pass through untouched. */
+function scopedFor(node: Node, ctx: HandlerContext): HandlerContext {
+  if (!ctx || ctx.node === node) return ctx
+  return { ...ctx, node, states: ctx.supervisor?.getResolvedStates(node.id) ?? [] }
+}
+
 /** Run handlers whose `event` (or `name`) matches, with the given args. */
 export function dispatchEvent(node: Node, ctx: HandlerContext, event: string, ...args: unknown[]): HandlerResult[] {
   const results: HandlerResult[] = []
+  const scoped = scopedFor(node, ctx)
   for (const handler of handlersOf(node)) {
     if (handler.event !== event && handler.name !== event) continue
     if (typeof handler.body !== 'function') continue
     try {
-      results.push(handler.body(ctx, ...args))
+      results.push(handler.body(scoped, ...args))
     } catch (e) {
       results.push(e)
     }
@@ -93,11 +112,12 @@ export function dispatchEvent(node: Node, ctx: HandlerContext, event: string, ..
 /** Run handlers whose `phase` matches. */
 export function dispatchPhase(node: Node, ctx: HandlerContext, phase: HandlerPhase): HandlerResult[] {
   const results: HandlerResult[] = []
+  const scoped = scopedFor(node, ctx)
   for (const handler of handlersOf(node)) {
     if (handler.phase !== phase) continue
     if (typeof handler.body !== 'function') continue
     try {
-      results.push(handler.body(ctx))
+      results.push(handler.body(scoped))
     } catch (e) {
       results.push(e)
     }

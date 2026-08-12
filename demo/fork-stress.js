@@ -89,41 +89,37 @@ function addChild(parent, data, priority) {
 
 /** L4/L8: idempotent after-compile handler — creates 2 children only when
  *  its marker child is absent (the default guard against after-assembly
- *  loops). */
+ *  loops). Self-contained via ctx.node (variant A): the body identifies the
+ *  node it runs on directly — no parent-id closure. */
 function installHandlerLayer(parents, cycle) {
   const name = layerName(cycle * 4) // 'handler-1' | 'handler-2'
   const marker = HANDLER_MARKER
+  const body = (c) => {
+    PROFILE.handlerCalls = (PROFILE.handlerCalls ?? 0) + 1
+    const node = c.node
+    if (!node) return
+    // idempotency: already added this layer? (guard against loops)
+    const existing = c.tree.descendantsOf(node).some((d) => d.props?.[marker] === name)
+    if (existing) return
+    for (const [k, tag] of [['a', 'span'], ['b', 'span']]) {
+      const pid = `${node.props.id}-h-${k}`
+      const child = addChild(node, {
+        type: tag,
+        props: {
+          id: pid,
+          'stress:layers': `${node.props['stress:layers'] ?? ''}|L${cycle * 4}:${name}`,
+          [marker]: name,
+          ...layerMarkerProp(cycle * 4, 'handler'),
+        },
+        css: levelCss(cycle * 4, k),
+      }, k === 'a' ? 0 : 1)
+      wireToNode.set(child.id, child)
+    }
+  }
   for (const parent of parents) {
     parent.addLayer({
       id: `fork-stress-${name}`,
-      handlers: [
-        {
-          name: `stress-${name}`,
-          phase: 'after-compile',
-          body: (c) => {
-            PROFILE.handlerCalls = (PROFILE.handlerCalls ?? 0) + 1
-            const node = c.tree.getNode(parent.id)
-            if (!node) return
-            // idempotency: already added this layer? (guard against loops)
-            const existing = c.tree.descendantsOf(node).some((d) => d.props?.[marker] === name)
-            if (existing) return
-            for (const [k, tag] of [['a', 'span'], ['b', 'span']]) {
-              const pid = `${node.props.id}-h-${k}`
-              const child = addChild(node, {
-                type: tag,
-                props: {
-                  id: pid,
-                  'stress:layers': `${node.props['stress:layers'] ?? ''}|L${cycle * 4}:${name}`,
-                  [marker]: name,
-                  ...layerMarkerProp(cycle * 4, 'handler'),
-                },
-                css: levelCss(cycle * 4, k),
-              }, k === 'a' ? 0 : 1)
-              wireToNode.set(child.id, child)
-            }
-          },
-        },
-      ],
+      handlers: [{ name: `stress-${name}`, phase: 'after-compile', body }],
     })
   }
 }

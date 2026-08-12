@@ -195,23 +195,16 @@ if (typeof document !== 'undefined') {
     return m === 'placement' ? `L${layer}:placement` : `L${layer}:${layerName(layer)}`
   }
 
-  /** Pending (created-but-not-yet-expanded) clones per `layer:slot` — filled
-   *  by the PARENT layer's handler from the clone-instance results (the page
-   *  kickoff fills layer 1), consumed by this layer's first handler pass. A
-   *  page-side registry keeps every after-compile call O(1): re-runs pop an
-   *  empty list and return (no graph scan). */
-  const pendingByKey = new Map()
-
   /** Install the `stress-expand` body on a prototype: the data declared the
    *  handler by NAME + phase; here the page supplies the BODY. The clone
    *  inherits the prototype's layer (incl. the body), so the body runs on
-   *  every clone's after-compile. HandlerContext carries no current node, so
-   *  the body (closed over its prototype) expands every pending clone of its
-   *  prototype's (layer, slot) — the first clone's pass expands all of that
-   *  layer's clones, the rest no-op. */
+   *  every clone's after-compile. The body is SELF-CONTAINED: variant A
+   *  (ctx.node) lets it identify the clone it runs on (layer/slot read from
+   *  the clone's own props) and expand THAT clone — no pending registry, no
+   *  closure over (layer, slot). Each firing is O(1): the marker
+   *  `stress:expanded` (applied via the managed channel) makes re-fires
+   *  no-op, so every clone expands exactly once (idempotent). */
   function installStressExpandBody(proto) {
-    const layer = proto.props['stress:layer']
-    const slot = proto.props['stress:slot']
     proto.addLayer({
       id: `stress-expand-${proto.id}`,
       handlers: [
@@ -220,43 +213,32 @@ if (typeof document !== 'undefined') {
           phase: 'after-compile',
           body: (c) => {
             PROFILE.handlerCalls += 1
-            const key = `${layer}:${slot}`
-            const candidates = pendingByKey.get(key) ?? []
-            if (candidates.length === 0) return
-            pendingByKey.set(key, [])
-            const nextKey = `${layer + 1}:`
-            const protoA = protoByKey.get(`${layer + 1}:a`)
-            const protoB = protoByKey.get(`${layer + 1}:b`)
-            for (const n of candidates) {
-              // idempotency guard (defensive — the registry is drained once)
-              if (n.children.length > 0 || n.props?.['stress:expanded']) continue
-              // mark the clone expanded FIRST (its own next after-compile
-              // will no-op) + build its stress:layers chain (parent chain +
-              // `|L<layer>:<kind>`)
-              const parentChain = n.parent?.props?.['stress:layers'] ?? ''
-              const segment = chainSegment(layer)
-              const chain = parentChain ? `${parentChain}|${segment}` : segment
-              c.clientAPI.apply(n.id, [
-                { targetProp: 'props.stress:expanded', mode: 'replace', value: true },
-                { targetProp: 'props.stress:layers', mode: 'replace', value: chain },
-              ])
-              // deepest layer: no children to create
-              if (layer >= depth - 1) continue
-              // clone the NEXT layer's prototypes under this clone — the
-              // supervisor registers + attaches + marks the copies pass-2
-              // dirty, so their own after-compile expands the next layer
-              // (recursive assembly). The fresh copies join the next layer's
-              // pending registry so the next flush expands them.
-              const rA = c.clientAPI.apply(n.id, { kind: 'clone-instance', source: protoA, slot: n, priority: 0 })
-              const rB = c.clientAPI.apply(n.id, { kind: 'clone-instance', source: protoB, slot: n, priority: 1 })
-              if (rA.status === 'applied' && rB.status === 'applied') {
-                const copyA = rA.dirtied?.[0] ? c.tree.getNode(rA.dirtied[0]) : undefined
-                const copyB = rB.dirtied?.[0] ? c.tree.getNode(rB.dirtied[0]) : undefined
-                if (copyA) pendingByKey.set(`${nextKey}a`, [...(pendingByKey.get(`${nextKey}a`) ?? []), copyA])
-                if (copyB) pendingByKey.set(`${nextKey}b`, [...(pendingByKey.get(`${nextKey}b`) ?? []), copyB])
-              } else {
-                throw new Error(`clone-instance rejected: ${rA.status}/${rB.status}`)
-              }
+            const n = c.node
+            if (!n) return
+            // idempotency guard: already expanded (the marker apply re-fires
+            // this body on the clone's next pass — no-op) or has children
+            if (n.children.length > 0 || n.props?.['stress:expanded']) return
+            const layer = n.props['stress:layer']
+            // mark the clone expanded FIRST (its own next after-compile will
+            // no-op) + build its stress:layers chain (parent chain +
+            // `|L<layer>:<kind>`)
+            const parentChain = n.parent?.props?.['stress:layers'] ?? ''
+            const segment = chainSegment(layer)
+            const chain = parentChain ? `${parentChain}|${segment}` : segment
+            c.clientAPI.apply(n.id, [
+              { targetProp: 'props.stress:expanded', mode: 'replace', value: true },
+              { targetProp: 'props.stress:layers', mode: 'replace', value: chain },
+            ])
+            // deepest layer: no children to create
+            if (layer >= depth - 1) return
+            // clone the NEXT layer's prototypes under this clone — the
+            // supervisor registers + attaches + marks the copies pass-2
+            // dirty, so their own after-compile expands the next layer
+            // (recursive assembly — each clone expands itself).
+            const rA = c.clientAPI.apply(n.id, { kind: 'clone-instance', source: protoByKey.get(`${layer + 1}:a`), slot: n, priority: 0 })
+            const rB = c.clientAPI.apply(n.id, { kind: 'clone-instance', source: protoByKey.get(`${layer + 1}:b`), slot: n, priority: 1 })
+            if (rA.status !== 'applied' || rB.status !== 'applied') {
+              throw new Error(`clone-instance rejected: ${rA.status}/${rB.status}`)
             }
           },
         },
@@ -333,17 +315,16 @@ if (typeof document !== 'undefined') {
     // bootstrap render (the ONLY full compile of the page)
     render()
 
-    // kick off the recursion: clone the layer-1 prototypes onto the root and
-    // seed the pending registry from the clone results. The root has no
-    // handler of its own, so it also gets a tick to recompile with the fresh
-    // childOrder.
+    // kick off the recursion: clone the layer-1 prototypes onto the root.
+    // Each clone's inherited after-compile (self-contained via ctx.node)
+    // expands ITSELF, so the kickoff is just the two layer-1 clones. The
+    // root has no handler of its own, so it also gets a tick to recompile
+    // with the fresh childOrder.
     const r1 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:a'), slot: rootNode, priority: 0 })
     const r2 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:b'), slot: rootNode, priority: 1 })
     if (r1.status !== 'applied' || r2.status !== 'applied') {
       throw new Error(`layer-1 clone-instance rejected: ${r1.status}/${r2.status}`)
     }
-    pendingByKey.set('1:a', [supervisor.getNode(r1.dirtied[0])])
-    pendingByKey.set('1:b', [supervisor.getNode(r2.dirtied[0])])
     clientAPI.apply(rootNode.id, [{ targetProp: 'props.stressTick', mode: 'replace', value: 1 }])
 
     // drain the supervisor's pass-2 pipeline (the handler recursion schedules

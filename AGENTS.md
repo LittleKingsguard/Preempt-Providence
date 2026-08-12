@@ -26,6 +26,14 @@ Context management guidelines for agents working in this repository:
    Only report work as complete when all three pass (and `npm run build`
    emits cleanly for the full build).
 
+   **Also watch the profile totals** the smoke prints
+   (`[fork-stress-data:profile] … total=…ms`): the values/link-only d12
+   totals must stay within ~1.5× of the placement d12 total. A blow-up (or
+   `total − Σ(measured sections)` dominating the total) means the supervisor
+   pass-2 pipeline is scaling badly — the page profiler does NOT time
+   pass-2 (RCA: docs/session-defect-review.md, fork-stress-data section).
+   Flag any regression before reporting completion.
+
 5. **Specs and decision records**: behavior contracts live in
    `docs/specs/*.md`; design decisions are recorded in
    `RENDER_PROCESS_NOTES.md` §10.10 as `DECIDED:` entries. Keep both in sync
@@ -52,3 +60,30 @@ Context management guidelines for agents working in this repository:
    written and executed before any implementation exists; a change that adds
    no test is itself a review finding. Reviewer sub-agents stay read-only and
    never edit files to "fix" findings.
+
+8. **User proposal review — three-agent gate (before any spec or code work)**
+   : every user/design proposal goes through three sequential sub-agent
+   review steps first (pattern established by the compile max-depth change,
+   `docs/specs/compile-horizon-review.md`). Never jump from a proposal
+   straight to a spec or implementation unit:
+   a. **Validity agent (step 1)** — analyzes the proposal against the
+      current codebase: can it be implemented as stated? Does it actually
+      solve the stated problem (and only it)? What does it require that does
+      not exist?
+   b. **Critique agent (step 2)** — adversarial pass: does it create
+      externalities? What is the performance impact? Does it violate design
+      paradigms (managed channel, two-scope compile, phase ordering,
+      read-only compiled states)? Is it robust against data/structure
+      changes? Will it break safety checks (loop detection, containment,
+      idempotency guards)? What design overlooks remain?
+   c. **Change-analysis agent (step 3)** — reviews the prior two steps'
+      outputs: is the proposal a good idea? What, if anything, needs to
+      change? If it does not work as written, are there elements that can be
+      adapted into a better solution? What are the costs and benefits? Does
+      a better solution exist?
+   Steps 1 and 2 are independent (may run in parallel); step 3 requires both
+   outputs. All three are read-only — they analyze, never edit files. The
+   step-3 verdict lands as `docs/specs/<proposal>-review.md` (compile-
+   horizon-review.md format: status / what the proposal asks / feasibility
+   verdict / gaps + costs-benefits). Only a passing review plus the user's
+   go-ahead may proceed to the item 6 step gates.

@@ -311,10 +311,10 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   attaches + marks the copy pass-2 dirty); each clone's inherited
   `after-compile` expands the next layer by cloning the layer+1 prototypes
   under it (recursive assembly — depth 12 = 4095 nodes). HandlerContext
-  carries no current node, so the body (closed over its prototype) expands
-  every PENDING clone of its (layer, slot): a page-side registry fed from the
-  clone-instance `dirtied` ids makes re-runs O(1) (idempotent — the first
-  clone's pass expands a whole layer, re-runs no-op). The page uses ONLY core
+  identifies the clone it runs on via `c.node` (variant A — per-dispatch
+  context enrichment), reads its own layer from props, and expands ITSELF
+  exactly once (marker-guarded, O(1) per firing — no page-side queue, no
+  graph scans). The page uses ONLY core
   (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/
   `cssPropForLevel`/`LAYER_METHODS` — demo-only, see §14.3) — no
   demo-fixtures, no demo-side render machinery. Its runner checks mirror the
@@ -442,15 +442,16 @@ From the legacy-envelope completion test (`docs/specs/fork-stress-data.md`):
    single op object. `clone-instance` mints the copy's id and registers +
    attaches + marks it pass-2 dirty, so the copy compiles and its inherited
    after-compile fires automatically.
-2. **HandlerContext has NO "current node".** An after-compile body gets
-   `(c)` only. To act on the node it runs on, close the body over the
-   prototype (capturing layer/slot) and read the node from context — or
-   maintain a page-side pending registry.
-3. **Recursive handler assembly needs a pending QUEUE, not per-call graph
-   scans.** Scanning `supervisor.allNodes()` per after-compile call made
-   depth 12 take 27.9s; a `pendingByKey` registry fed from the
-   clone-instance `dirtied` ids (pop-until-empty = idempotent) cut it to
-   6.5s. Never scan the whole graph inside a handler body.
+2. **HandlerContext carries `c.node` (variant A) — bodies can be
+   self-contained.** `dispatchPhase`/`dispatchEvent` enrich the per-dispatch
+   context with the node being dispatched (+ its last-known states). An
+   after-compile body can read its own layer from `c.node.props` and expand
+   itself — no prototype closure, no pending registry.
+3. **Self-expansion is O(1) per firing — but never scan the graph.** The
+   marker-prop apply re-fires the body on the node's next pass; the marker
+   guard no-ops it, so each node expands exactly once with no queue.
+   Scanning `supervisor.allNodes()` per after-compile call was the original
+   27.9s regression — never scan the whole graph inside a handler body.
 4. **Self-providing trees must not turn pass-2 into O(n²).** Every clone of
    a value/link-only prototype carries a `source` anchor; the pass-2
    focused slice used to sweep ALL source-bearing nodes into every dirty

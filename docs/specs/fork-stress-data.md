@@ -21,8 +21,13 @@ Prove the same deep binary stress tree can be assembled with:
    layer (one per sibling slot). Each prototype declares an `after-compile`
    handler by NAME in the data (`handlers: [{ name: 'stress-expand',
    phase: 'after-compile' }]`); the page supplies the BODY for that name.
-   The handler clones the next layer's prototypes (`clone-instance` op) and
-   attaches them, so the 2^k-per-layer tree grows from the data alone.
+   (Legacy bodies CAN ship as function-source STRINGS — translate.ts
+   instantiates them; this page keeps body-by-name because the body must
+   reach the page-side `protoByKey` registry — see §10.10.2/translate.md
+   §2. The body itself is otherwise fully self-contained: `c.node`
+   identifies the clone it runs on.) The handler clones the next layer's
+   prototypes (`clone-instance` op) and attaches them, so the 2^k-per-layer
+   tree grows from the data alone.
 4. **Single-method variants (§4)** — the whole tree can rely on ONE
    child-creation mechanism instead of the four-mechanism cycle label:
    placement-only (pure clone structure), values-only (every prototype
@@ -179,22 +184,23 @@ expects 2^depth − 1 elements for every variant.
    two-arg form the imperative page uses). The clone mints its own id and is
    registered + attached + marked pass-2 dirty by the supervisor.
 
-2. **HandlerContext carries NO "current node".** An `after-compile` body
-   receives `(c)` but no `this`/node argument. The body must be closed over
-   its prototype and learn the clone from context: read the clone's
-   `stress:layer`/`stress:slot` from `c.tree.getState(id)` or the node's own
-   props. The cleanest pattern: the body is installed per-prototype
-   (capturing `layer`/`slot`), and expands a PENDING registry of clones for
-   that (layer, slot).
+2. **HandlerContext carries the dispatched node (variant A).** Since the
+   variant-A change, `dispatchPhase`/`dispatchEvent` enrich the per-dispatch
+   context with `c.node` (the node the handler runs on) and `c.states` (its
+   last-known resolved states). The `stress-expand` body is now fully
+   SELF-CONTAINED: it reads `stress:layer` from `c.node.props`, expands
+   THAT node, and the `stress:expanded` marker makes re-fires no-op. No
+   closure over the prototype's (layer, slot).
 
-3. **`clone-instance` recursion needs a page-side pending queue, not a
-   per-call graph scan.** The first implementation re-scanned
-   `supervisor.allNodes()` + `isInTree` per after-compile call — depth 12
-   took 27.9s. Feeding a `pendingByKey` registry from the clone-instance
-   `dirtied` ids (kickoff seeds layer 1; each expansion appends the fresh
-   copies to the next layer's list; re-runs pop an empty list and return
-   O(1)) dropped depth 12 to 6.5s. Idempotency = pop-until-empty, not a
-   per-node marker scan.
+3. **Self-expansion needs no page-side queue — but never scan the graph.**
+   Each clone expands itself exactly once (the marker apply re-fires the
+   body on the clone's next pass; the marker guard no-ops it), so every
+   firing is O(1) — no `pendingByKey` registry, no per-call graph scan.
+   The earlier design (a pending queue fed from clone-instance `dirtied`
+   ids) was a workaround for the missing `c.node`; the 27.9s regression it
+   replaced (scanning `supervisor.allNodes()` per after-compile call) is
+   still the cautionary tale: never scan the whole graph inside a handler
+   body.
 
 4. **The clone inherits the prototype's LAYERS, so the handler body rides
    along automatically** — installing the body on the prototype once means

@@ -331,3 +331,97 @@ npm run demo:smoke # SSR 9/9, Loop-safety 7/7, Feature Matrix 12/12,
                    # Mode toggle client 12/12, ssr 14/14, markdown 13/13,
                    # Summary 8/8 — all green
 ```
+
+---
+
+## fork-stress-data session — pass-2 slice O(n²) regression (unnoticed until the browser)
+
+### Symptom (observed)
+
+Browser profile for the d12 values/link-only pages:
+
+```
+method=link   nodes=4095 ... load=1.0ms compile=1.0ms emit=22.0ms diff=7.0ms
+              apply=56.0ms renders=2 handlers=8188 total=137289.0ms
+method=values ... total=142010.0ms      (placement ≈ 6.6s)
+```
+
+Every *measured* section summed to <100ms; ~137s was unaccounted. The page's
+own profiler could not explain its own total.
+
+### Timeline — when each cause entered
+
+1. **Latent (commit 49b8135, the bounded pass-2 "memoization update")**:
+   `focusedSliceFor` = walk path + **every source/duplex-bearing node** (the
+   "fallback universe"), scanned from `allNodes()` on EVERY dirty node's
+   compile. The implicit design assumption — *providers are few* (a
+   root-level source or two) — was never documented or enforced. Zero tests
+   covered `focusedSliceFor`; the suite's only perf-shaped assertion is the
+   sub-quadratic `diffMinimal` test.
+2. **This session, implementation 1** (sources registered on the ROOT):
+   shim totals already ~2× placement (values 12.2s / link 13.2s vs 6.6s) —
+   the per-pass O(n) scan (allNodes() array build + anchor check) alone.
+   Not flagged: smoke asserts correctness only; the profile prints totals
+   but nothing compares them.
+3. **This session, implementation 2** (legacy source attachment moved the
+   providers ONTO THE PROTOTYPES): every one of the 4094 clones now carries
+   a `source` anchor → the universe sweep swallows the ENTIRE tree → each of
+   4094 dirty nodes compiles a ~4095-node slice → ≈16.7M `compileLocal`
+   calls → ~6s in the shim, ~137s in the browser. User-reported.
+
+### Root cause chain
+
+- **Proximate**: the legitimate new capability (every node a self-providing
+  provider, expressed as data-declared legacy sources) silently violated the
+  universe's "providers are few" assumption.
+- **Latent 1 (design)**: the arm-termination fallback classified providers
+  through the slice-memoized `kinds` map → providers were forced INTO the
+  slice → compile cost became O(providers in graph) per dirty node. The
+  "plain graph query" the design promises (§10.8.2) was structurally
+  impossible: `Anchor` had no owner backref, so the per-name Link could not
+  enumerate provider NODES. The sweep was a workaround for a missing backref.
+- **Latent 2 (measurement)**: the page profile times only the render loop
+  (load/compile/emit/diff/apply). The supervisor's pass-2 pipeline
+  (`runPass2AndFlush` — where the O(n²) lived) is never timed, so
+  `total=137s` with all measured sections <100ms read as a contradiction,
+  not a signal.
+- **Latent 3 (gates)**: the validation trio asserts correctness only —
+  vitest (no slice-coverage, no pass-2 cost assertion), typecheck/build
+  (structural), demo:smoke (banners; exit 0 at 12–13s).
+- **Latent 4 (process)**: the change was validated with the trio and the
+  ~2× profile gap was reported without being flagged — no baseline
+  comparison habit, no "watch the totals" checklist item.
+
+### Why the layers each failed to notice
+
+| Detection layer | Would have caught | Why it failed |
+| --- | --- | --- |
+| vitest | slice size / per-pass cost | `focusedSliceFor` had no tests |
+| demo:smoke | elapsed time | asserts correctness only, exit 0 |
+| page profile | where the time goes | pass-2 (the dominant cost) is unmeasured |
+| agent review | the 2× total anomaly | no threshold or baseline comparison |
+
+The browser was the first layer with any sensitivity to wall-clock time —
+which is precisely the wrong place to discover an algorithmic regression.
+
+### Fix (done)
+
+1. `Anchor.owner` backref + per-name-Link fallback (`resolve.ts`) — the Link
+   IS the provider registry; on-demand chain classification replaces the
+   slice memo.
+2. `focusedSliceFor` = walk path only for shared-hub trees; the universe
+   sweep survives only for hub-less trees, target-gated + lazily
+   materialized.
+3. Pinned: `C7b` (prototype-terminated through the Link, provider outside
+   the slice), phases tests (shared-hub slice = walk path only; hub-less
+   sweep preserved). Post-fix: link d12 ≈ 8.7s shim, all pages 0 failed.
+
+### Rule (regression gate for the next session)
+
+- A per-pass cost invariant must be asserted: the pass-2 slice is
+  O(walk path) + O(providers-of-path-targets) — now true by construction and
+  pinned by tests; the smoke should additionally fail if a profile total
+  ever exceeds a small multiple of the cycle-page baseline (or if
+  `total − Σ(measured)` grows past the measured sum).
+- The fork-stress-data profile should time the pass-2 pipeline too, so
+  "total" can never hide an unmeasured pipeline again.

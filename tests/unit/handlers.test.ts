@@ -50,6 +50,48 @@ describe('handlers — HandlerContext', () => {
   })
 })
 
+describe('handlers — ctx.node / ctx.states (variant A: handler visibility of the node)', () => {
+  it('phase dispatch forwards the dispatched node + its last-known resolved states in ctx', () => {
+    const { supervisor, clientAPI, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    const ctx = makeHandlerContext(supervisor, clientAPI)
+    let seen: { nodeId: string | undefined; states: unknown[] | undefined } = { nodeId: undefined, states: undefined }
+    n.addLayer({
+      id: 'h',
+      handlers: [{ name: 'p', phase: 'after-render', body: (c: HandlerContext) => { seen = { nodeId: c.node?.id, states: c.states } } }],
+    })
+
+    const results = dispatchPhase(n, ctx, 'after-render')
+    expect(results).toEqual([undefined])
+    expect(seen.nodeId).toBe(n.id)
+    expect(seen.states).toEqual([]) // no resolved states yet — the store is empty
+  })
+
+  it('event dispatch forwards ctx.node + ctx.states', () => {
+    const { supervisor, clientAPI, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    const ctx = makeHandlerContext(supervisor, clientAPI)
+    let seen: { nodeId: string | undefined; states: unknown[] | undefined } = { nodeId: undefined, states: undefined }
+    n.addLayer({
+      id: 'h',
+      handlers: [{ name: 'click', event: 'click', body: (c: HandlerContext) => { seen = { nodeId: c.node?.id, states: c.states } } }],
+    })
+
+    dispatchEvent(n, ctx, 'click')
+    expect(seen.nodeId).toBe(n.id)
+    expect(seen.states).toEqual([])
+  })
+
+  it('the base context stays node-free; enrichment is per-dispatch', () => {
+    const { supervisor, clientAPI } = newSystem()
+    const ctx = makeHandlerContext(supervisor, clientAPI)
+    expect(ctx.node).toBeUndefined()
+    expect(ctx.states).toBeUndefined()
+  })
+})
+
 describe('handlers — dispatchEvent', () => {
   it('invokes matching event handlers with (ctx, ...args) and returns results', () => {
     const { supervisor, clientAPI, root } = newSystem()
@@ -62,7 +104,10 @@ describe('handlers — dispatchEvent', () => {
     const results = dispatchEvent(n, ctx, 'click', 'x')
     expect(results).toEqual([7])
     expect(seen).toHaveLength(2)
-    expect(seen[0]).toBe(ctx)
+    // the body receives the per-dispatch scoped context (caller's surface +
+    // ctx.node/ctx.states), NOT the shared base object
+    expect((seen[0] as HandlerContext).clientAPI).toBe(ctx.clientAPI)
+    expect((seen[0] as HandlerContext).node).toBe(n)
     expect(seen[1]).toBe('x')
   })
 

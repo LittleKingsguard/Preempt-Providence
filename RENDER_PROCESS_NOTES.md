@@ -641,6 +641,17 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   clientAPI)`) exposes exactly the managed channel `ctx.clientAPI` (apply/
   getState), the supervisor, and tree search: `getNode`, `allNodes`,
   `ancestorsOf`, `descendantsOf`.
+- **DECIDED (variant A — handler visibility of the node):** `dispatchPhase`/
+  `dispatchEvent` enrich the context per dispatch with `node` (the node
+  being dispatched) and `states` (its last-known resolved states — THIS
+  pass's states at after-compile) via a fresh scoped copy; the shared base
+  context is never mutated. An after-compile body can therefore identify
+  and act on ITS OWN node through the managed channel (`ctx.node` +
+  `ctx.clientAPI.apply`). The fork-stress `stress-expand` body became fully
+  self-contained: no (layer, slot) closure, no page-side pending queue —
+  each clone expands itself once, marker-guarded, O(1) per firing (the
+  27.9s scan regression it replaced remains the cautionary tale). Pinned by
+  tests/unit/handlers.test.ts + tests/unit/phases.test.ts.
 - **DECIDED:** handler bodies that throw are CONTAINED — the error is
   returned in the result list, never propagated into compile/render (same
   containment policy as PhaseWorker per-node errors).
@@ -650,6 +661,17 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   dispatches it once the consumer compiles — e.g. a user-info panel whose
   provider resolves a handler that populates its descendants (welcome text /
   login button) from session state.
+- **DECIDED (legacy LOADABLE handlers):** a legacy `handler.body` shipped as
+  a STRING (function source — the backend loads handler definitions from the
+  DB as text) is instantiated into a live function at the translate boundary
+  (`new Function(\`return (${src})\`)`, throws when the source does not
+  evaluate to a function). `reverseTranslate` ships live bodies back as
+  their source string (`fn.toString()`; native/bound code omitted) so the
+  envelope round-trips. **Security: `new Function` executes arbitrary code —
+  the backend/DB layer that stores loadable handlers must gate writes to
+  admin/trusted-developer only; the renderer performs no authorization of
+  its own.** Pinned by tests/unit/translate.test.ts (string → function
+  instantiation, non-function source rejection, reverse source round-trip).
 
 ### 10.10.3 Phase-based handlers (DECIDED)
 
@@ -886,10 +908,16 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   per sibling slot; `preempt-initial-data` carries the legacy format, NOT a
   serialized anchor document; `translateLegacy` parses it). Handlers are
   declared BY NAME in the data (`handlers: [{ name: 'stress-expand',
-  phase: 'after-compile' }]`) because bodies cannot be JSON-serialized; the
-  page module supplies the body per name and installs it on each prototype
-  via `addLayer` (the clone inherits the prototype's layers, so the body runs
-  on every clone's after-compile). The page kicks off layer 1 by cloning the
+  phase: 'after-compile' }]`); the page module supplies the body per name
+  and installs it on each prototype via `addLayer` (the clone inherits the
+  prototype's layers, so the body runs on every clone's after-compile).
+  Since variant A the body is SELF-CONTAINED via `c.node` (reads its own
+  layer, expands itself, marker-guarded — no pending queue, no closure).
+  NOTE: legacy bodies CAN also ship as function-source STRINGS (translate.ts
+  instantiates them) — this page still uses body-by-name because the body
+  must reach the page-side prototype registry; a data-carried string body
+  could not, without falling back to per-call graph scans (the 27.9s
+  regression lesson). The page kicks off layer 1 by cloning the
   prototypes onto the root with the `clone-instance` op
   (`clientAPI.apply(id, { kind: 'clone-instance', source, slot, priority })` —
   the supervisor registers + attaches + marks the copy pass-2 dirty); each

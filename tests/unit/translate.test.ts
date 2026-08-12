@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { translateLegacy, reverseTranslate, type LegacyInitialData } from '../../src/core/translate.js'
+import { dispatchPhase } from '../../src/core/handlers.js'
 import { serializeSlice, loadState } from '../../src/core/serialize.js'
 import { Node, reconcileParentTargets } from '../../src/core/node.js'
 import { hub } from '../helpers/fixtures.js'
@@ -193,6 +194,61 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(() =>
       translateLegacy({ template: { root: { type: 'app' } }, content: [{ content: 'nope' }] } as never),
     ).toThrow()
+  })
+
+  it('instantiates legacy handler bodies shipped as function-source STRINGS (function-expression and arrow)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          handlers: [
+            { name: 'boot', phase: 'after-render', body: 'function (c) { return "booted-from-string" }' },
+            { name: 'click', event: 'click', body: '(c) => 42' },
+          ],
+        },
+      },
+      content: [],
+    })
+    const handlers = t.root.handlers as Array<{ name: string; phase?: string; event?: string; body: unknown }>
+    expect(typeof handlers[0]!.body).toBe('function')
+    expect(typeof handlers[1]!.body).toBe('function')
+    const results = dispatchPhase(t.root, null as never, 'after-render')
+    expect(results).toContain('booted-from-string')
+  })
+
+  it('rejects legacy handler bodies whose string does not evaluate to a function', () => {
+    expect(() =>
+      translateLegacy({
+        template: { root: { type: 'app', handlers: [{ name: 'x', phase: 'after-render', body: '42' }] } },
+        content: [],
+      }),
+    ).toThrow()
+    expect(() =>
+      translateLegacy({
+        template: { root: { type: 'app', handlers: [{ name: 'x', phase: 'after-render', body: 'not-a-function(' }] } },
+        content: [],
+      }),
+    ).toThrow()
+  })
+
+  it('reverseTranslate ships live handler bodies back as function-source strings (round-trip via translate)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          handlers: [{ name: 'boot', phase: 'after-render', body: 'function (c) { return c ? "ok" : "no" }' }],
+        },
+      },
+      content: [],
+    })
+    const out = reverseTranslate(t.root, { content: t.content })
+    const emitted = out.template?.root.handlers?.[0] as { body?: unknown }
+    expect(typeof emitted?.body).toBe('string')
+    expect(emitted!.body).toContain('return c ? "ok" : "no"')
+    // the emitted doc re-translates into a live function again
+    const t2 = translateLegacy(out)
+    const results = dispatchPhase(t2.root, { seed: 'ctx' } as never, 'after-render')
+    expect(results).toContain('ok')
   })
 
   it('a shared hub keeps same-name component/placement anchors on shared links', () => {
