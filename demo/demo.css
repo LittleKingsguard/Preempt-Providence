@@ -114,6 +114,32 @@ ul.tree li {
   margin: 2px 0;
 }
 
+/* -------- fork-stress: hierarchy-visible node boxes (DEMO-ONLY class) ------- */
+
+/* `fs-node` is added by the fork-stress fixture's levelCss (demo-only
+ * helper). It makes the tree structure visible: each node is a container
+ * box, and the `--stress-depth` custom property (set inline per node) drives
+ * left padding so deeper levels indent progressively — the binary hierarchy
+ * reads at a glance. */
+.fs-node {
+  display: inline-block;
+  min-width: 88px;
+  margin: 5px 0 5px calc(var(--stress-depth, 0) * 16px);
+  padding: 6px 10px;
+  border: 1px solid rgba(155, 163, 178, 0.5);
+  border-radius: 8px;
+  background: rgba(91, 140, 255, 0.06);
+  vertical-align: top;
+}
+
+.fs-node::before {
+  content: "L" attr(data-depth);
+  display: block;
+  font: 600 10px/1.6 ui-monospace, Consolas, monospace;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
 .fork-arms {
   display: flex;
   gap: 14px;

@@ -276,7 +276,7 @@ interface LinkDefSpec {
   label?: string
   childLayersSuffix?: string
   childOffset?: number
-  children: Array<{ bind: string; type: string; content?: unknown }>
+  children: Array<{ bind: string; type: string; content?: unknown; css?: Record<string, unknown>; props?: Record<string, unknown> }>
 }
 function isLinkDef(v: unknown): v is LinkDefSpec {
   return typeof v === 'object' && v !== null && typeof (v as { type?: unknown }).type === 'string' &&
@@ -308,7 +308,18 @@ function emitOne(
       const cw = childWires[offset + i] ?? `${wire}:${spec.bind}`
       const cprops: Record<string, unknown> = { text: String(spec.content ?? '') }
       if (def.childLayersSuffix && parentLayers) cprops['prop:stress:layers'] = `${parentLayers}|${def.childLayersSuffix}`
-      return { wire: cw, type: spec.type, props: cprops, childOrder: [] }
+      // a REAL child (covered by the def, standalone emission skipped) keeps
+      // its OWN authored css/props — the def's css/props are a fallback only
+      // for synthetic `${wire}:${bind}` children with no graph node behind
+      // them. (Per-node unique stress css is authored on the child node.)
+      // It ALSO keeps its OWN children: a real child may itself have a child
+      // subtree (the next layer), which the emitted element must adopt so
+      // diffMinimal nests them (the "boxes must nest" contract).
+      const childNode = nodeById?.get(cw) as unknown as { css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> } | undefined
+      for (const [k, v] of Object.entries(childNode?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
+      for (const [k, v] of Object.entries(childNode?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
+      const childOrder = childNode ? (childNode.children ?? []).map((c) => c.id) : []
+      return { wire: cw, type: spec.type, props: cprops, childOrder }
     })
     // full child order: untouched children (before the def slice) + def-typed
     const order = [...childWires.slice(0, offset), ...reTyped.map((c) => c.wire)]

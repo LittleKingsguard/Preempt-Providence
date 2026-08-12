@@ -25,6 +25,7 @@ import { minimalFromState, treeFromOps, treeSig } from '../dist/core/render-help
 import { buildFeatureMatrixPage } from './feature-matrix-server.mjs'
 import { buildModeTogglePage } from './mode-toggle-page.mjs'
 import { buildForkStressPage } from './fork-stress-page.mjs'
+import { buildForkStressDataPage } from './fork-stress-data-page.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -115,5 +116,17 @@ async function emitPage(templateName, outName, doc, serverData) {
       .replace('__SERVER_DATA__', () => JSON.stringify(serverData))
     await writeFile(join(ROOT, 'demo', `fork-stress-d${depth}.html`), out)
     console.log(`built demo/fork-stress-d${depth}.html (${2 ** depth - 1} nodes)`)
+  }
+}
+
+// ---- pages 9-16: fork stress, DATA-DRIVEN variant ---------------------------
+// Same depths; the page input is a LEGACY envelope (root + two prototypes per
+// layer, handlers declared by NAME in the data) — the browser module supplies
+// the handler bodies and assembles the tree via the clone-instance op.
+{
+  for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
+    const { html } = await buildForkStressDataPage(depth)
+    await writeFile(join(ROOT, 'demo', `fork-stress-data-d${depth}.html`), html)
+    console.log(`built demo/fork-stress-data-d${depth}.html (${2 ** depth - 1} nodes, legacy envelope)`)
   }
 }

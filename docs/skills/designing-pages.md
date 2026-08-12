@@ -232,7 +232,9 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/e2e/markdown-display.test.ts` | in-place render, focus retention, parent changes |
 | `demo/feature-matrix.js` (smoke) | one page exercising every surface: placements, components/forks, handlers, payload lifecycle (append/refresh/drop), managed updates, reverse translation, loop-safety, PAR-5 parity, SSR hydrate seam |
 | `demo/mode-toggle.js` (smoke) | same feature-matrix document driven through the three adapter modes — `?mode=ssr|client|markdown` (every build embeds both payloads, so static serves work; `scripts/serve-demo.mjs` serves per-mode too). **Demo-page test case — NOT expected real-world behavior.** SSR asserts the full well-formed server HTML was received (root-first, presentation ids present, balanced tags — the `validateHtmlShape` scan mirrors the e2e stack validator); markdown asserts the raw editor source is embedded verbatim for inspection alongside the live parsed display; client runs the shared harness with no mode-specific payload |
-| `demo/fork-stress.js` (smoke, ×4 depths) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Checks: per-layer node counts, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
+| `demo/fork-stress.js` (smoke, depths 2–12) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Each level changes a different css property (L1 background-color, L2 border-style, L3 border-width, L4 text-decoration, cycling) with a value per sibling slot (demo-only helper `levelCss`, NOT a core API). Checks: per-layer node counts, rendered-count, css per-level property + slot pairs, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
+| `demo/fork-stress-data.js` (smoke, depths 2–12) | data-driven completion test — the SAME stress tree built with a stricter contract: core-only page module (NO demo-fixtures helpers), LEGACY-format data envelope (`translateLegacy` input), and exactly 2 prototypes per layer with everything else assembled dynamically via an `after-compile` handler declared BY NAME in the data (the page maps the name to a body that clones the next layer's prototypes with the `clone-instance` op). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html`. Checks: per-layer counts, css property/slot pairs, `stress:kind`, DOM nesting, incremental render scope. Spec: `docs/specs/fork-stress-data.md` |
+| `demo/fork-stress-data.js` (smoke, depths 2–12) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; page-side pending registry keeps re-runs O(1)). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total, prototypes stay unplaced, css per-level property + slot pairs, `stress:kind` per layer mechanism, DOM nesting vs graph children, `stress:layers` ancestry chains, handler idempotency, incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` |
 
 ## 12. Demo pages (`npm run demo` → http://localhost:4173/demo/)
 
@@ -282,20 +284,45 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   `scripts/build-demo.mjs` emits the static default); every mode drives the
   same shared harness (`demo/lib/feature-matrix-tests.js`) that
   `feature-matrix.js` uses. Session lessons: `docs/session-defect-review.md`.
-- `fork-stress-d{2,4,6,8}.html` — layered stress test of the forking render
-  system. **Demo-page test case — NOT expected real-world behavior.** A binary
-  tree built layer by layer; each layer adds exactly 2 children per node
-  through one of the four runtime child-creation mechanisms, cycling:
-  placement → component values → component link → idempotent handler → repeats
-  with different placement/component names. Depth d has layers 1..d−1
-  (layer k has 2^k nodes), total 2^d − 1. Every node renders its
-  `stress:layers` chain (depth + tree-back-to-root). The page uses ONLY core
-  (`dist/core/*`) and handler code — the serializable part (L1 placement, L2
-  values, L3 link) is shipped in `preempt-initial-data`; the browser module
-  drives the runtime layers (L4 handler, L5 placement, L6 values, L7 link)
-  via the `attach` op, component sources/targets, and idempotent
-  `after-compile` handlers (guarded by their layer marker — the default guard
-  against after-assembly loops). Spec: `docs/specs/fork-stress.md`.
+- `fork-stress-d{2,4,6,8,9,10,11,12}.html` — layered stress test of the
+  forking render system. **Demo-page test case — NOT expected real-world
+  behavior.** A binary tree built layer by layer; each layer adds exactly 2
+  children per node through one of the four runtime child-creation
+  mechanisms, cycling: placement → component values → component link →
+  idempotent handler → repeats with different placement/component names.
+  Depth d has layers 1..d−1 (layer k has 2^k nodes), total 2^d − 1. Every
+  node renders its `stress:layers` chain (depth + tree-back-to-root) AND a
+  different css property per level with a value per sibling slot (compile-
+  lookup stressor; the `levelCss` helper is **demo-only** — see §14.3). The page uses ONLY core (`dist/core/*`) and
+  handler code — the serializable part (L1 placement, L2 values, L3 link) is
+  shipped in `preempt-initial-data`; the browser module drives the runtime
+  layers (L4 handler, L5 placement, L6 values, L7 link, … up to L11) via the
+  `attach` op, component sources/targets, and idempotent `after-compile`
+  handlers (guarded by their layer marker — the default guard against
+  after-assembly loops). Spec: `docs/specs/fork-stress.md`.
+- `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` — DATA-DRIVEN variant of the
+  fork-stress page. **Demo-page test case — NOT expected real-world
+  behavior.** The page input is a LEGACY envelope (`forkStressLegacyData(depth)`:
+  root + two prototype nodes per layer, one per sibling slot), NOT a
+  serialized anchor document — `translateLegacy` parses it. Handlers are
+  declared BY NAME in the data (`handlers: [{ name, phase }]`); the page
+  supplies the body per name and installs it on each prototype (`addLayer`),
+  so the clone inherits it. The page kicks off layer 1 by cloning the
+  prototypes onto the root (`clone-instance` op — the supervisor registers +
+  attaches + marks the copy pass-2 dirty); each clone's inherited
+  `after-compile` expands the next layer by cloning the layer+1 prototypes
+  under it (recursive assembly — depth 12 = 4095 nodes). HandlerContext
+  carries no current node, so the body (closed over its prototype) expands
+  every PENDING clone of its (layer, slot): a page-side registry fed from the
+  clone-instance `dirtied` ids makes re-runs O(1) (idempotent — the first
+  clone's pass expands a whole layer, re-runs no-op). The page uses ONLY core
+  (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/
+  `cssPropForLevel`/`LAYER_METHODS` — demo-only, see §14.3) — no
+  demo-fixtures, no demo-side render machinery. Its runner checks mirror the
+  imperative page's: per-layer counts + total, css property/slot pairs,
+  `stress:kind` per mechanism, DOM nesting vs graph children, ancestry
+  chains, idempotency, and the incremental-render contract (bootstrap the
+  only full compile). Spec: `docs/specs/fork-stress-data.md`.
 
 ## 13. Running checks
 
@@ -357,3 +384,41 @@ Full defect-by-defect analysis: `docs/session-defect-review.md`. The rules:
    should grep for them.
 5. **`REAL_DOM_CHILDREN=1` is the browser-realism gate** — run the smoke
    with it to catch HTMLCollection misuse before opening a browser.
+
+### 14.3 Demo-only helpers — keep them OUT of core docs
+
+Demo pages may carry small test-only helpers (e.g. `levelCss` in
+`demo/fork-stress-fixture.js` — the per-node unique hue/padding generator for
+the CSS stress check). These are **NOT core APIs**:
+
+- They must NOT be documented in core specs (`docs/specs/*.md`), the design
+  skill §1–§9, or the core header comments in `src/`.
+- They SHOULD be called out as demo-only wherever referenced (§12 demo-page
+  entries, the demo's own spec, `RENDER_PROCESS_NOTES` DECIDED entries).
+- Their implementation notes (how uniqueness is guaranteed, what the
+  serialization schema does) belong in the demo's spec or a review doc, not
+  in core docs.
+
+### 14.4 CSS-stress lessons (from the fork-stress per-level css work)
+
+1. **Key per-(level, slot) pairs, not hashes.** An early `nodeSeed(id) % N`
+   collided (two L3 siblings shared a hue). The final design keys the css
+   value by (level, sibling slot) and the property by level, so the css
+   string is unique per (level, slot) by construction — each level changes a
+   DIFFERENT property (L1 background-color, L2 border-style, L3
+   border-width, L4 text-decoration, cycling) and the two sibling slots get
+   different values.
+2. **`css` is a closed serialization schema.** `serializeSlice` ships only
+   `id`/`classes`/`style`/`cssDef` (`serialize.ts` `cssState`). A demo-side
+   css key (e.g. `data-layer`) is silently dropped from
+   `preempt-initial-data`; emit per-level properties through the `style`
+   string (`property: value;`), and put markers in `props` (emitted as
+   attributes).
+3. **Def-retyped children keep their OWN authored css/props.** The
+   component-link emitter re-types real children (their standalone emission
+   is skipped via `defCovered`), so it must preserve each real child's own
+   css/props — the def's css/props are a fallback for synthetic
+   `${wire}:${bind}` children only.
+4. **Runtime nodes must be registered in the page's own `wireToNode` map**
+   for emitter lookups to find them — `supervisor.registerNode` alone is not
+   enough.

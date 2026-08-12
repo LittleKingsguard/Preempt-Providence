@@ -31,6 +31,9 @@ import {
   valuePair,
   linkDef,
   HANDLER_MARKER,
+  levelCss,
+  layerMarkerProp,
+  cssPropForLevel,
 } from './fork-stress-fixture.js'
 
 setCompilePassLogging(true)
@@ -105,13 +108,16 @@ function installHandlerLayer(parents, cycle) {
             const existing = c.tree.descendantsOf(node).some((d) => d.props?.[marker] === name)
             if (existing) return
             for (const [k, tag] of [['a', 'span'], ['b', 'span']]) {
+              const pid = `${node.props.id}-h-${k}`
               const child = addChild(node, {
                 type: tag,
                 props: {
-                  id: `${node.props.id}-h-${k}`,
+                  id: pid,
                   'stress:layers': `${node.props['stress:layers'] ?? ''}|L${cycle * 4}:${name}`,
                   [marker]: name,
+                  ...layerMarkerProp(cycle * 4, 'handler'),
                 },
+                css: levelCss(cycle * 4, k),
               }, k === 'a' ? 0 : 1)
               wireToNode.set(child.id, child)
             }
@@ -130,13 +136,17 @@ function addPlacementLayer(parents, cycle) {
   for (const parent of parents) {
     parent.addAnchor('placement', pName, {}, hub().linkFor(pName, 'placement'))
     for (const [k, tag] of [['a', 'div'], ['b', 'div']]) {
+      const pid = `${parent.props.id}-p-${k}`
       const child = addChild(parent, {
         type: tag,
         props: {
-          id: `${parent.props.id}-p-${k}`,
+          id: pid,
           'stress:layers': `${parent.props['stress:layers'] ?? ''}|L${cycle * 4 - 3}:placement`,
+          ...layerMarkerProp(cycle * 4 - 3, 'placement'),
         },
+        css: levelCss(cycle * 4 - 3, k),
       }, k === 'a' ? 0 : 1)
+      wireToNode.set(child.id, child)
       child.addAnchor('placement', pName, {}, hub().linkFor(pName, 'placement'))
       out.push(child)
     }
@@ -154,12 +164,15 @@ function addValuesLayer(parents, cycle) {
   for (const parent of parents) {
     targetAnchor(parent, cName)
     for (const [k, bind] of [['a', `${cName}.a`], ['b', `${cName}.b`]]) {
+      const pid = `${parent.props.id}-v-${k}`
       const child = addChild(parent, {
         type: 'span',
         props: {
-          id: `${parent.props.id}-v-${k}`,
+          id: pid,
           'stress:layers': `${parent.props['stress:layers'] ?? ''}|L${cycle * 4 - 2}:${cName}`,
+          ...layerMarkerProp(cycle * 4 - 2, 'values'),
         },
+        css: levelCss(cycle * 4 - 2, k),
       }, k === 'a' ? 0 : 1)
       targetAnchor(child, bind)
       out.push(child)
@@ -178,13 +191,17 @@ function addLinkLayer(parents, cycle) {
   for (const parent of parents) {
     targetAnchor(parent, cName)
     for (const [k, tag] of [['a', 'div'], ['b', 'div']]) {
+      const pid = `${parent.props.id}-l-${k}`
       const child = addChild(parent, {
         type: tag,
         props: {
-          id: `${parent.props.id}-l-${k}`,
+          id: pid,
           'stress:layers': `${parent.props['stress:layers'] ?? ''}|L${cycle * 4 - 1}:${cName}`,
+          ...layerMarkerProp(cycle * 4 - 1, 'link'),
         },
+        css: levelCss(cycle * 4 - 1, k),
       }, k === 'a' ? 0 : 1)
+      wireToNode.set(child.id, child)
       out.push(child)
     }
   }
@@ -387,6 +404,73 @@ async function main() {
     }
   })
 
+  await runner.check("DOM nesting: every layer element's direct children are exactly its graph node's children (boxes nest)", () => {
+    const wireOf = (e) => {
+      if (!e) return ''
+      return e.getAttribute?.('data-wire') ?? e.dataset?.wire ?? ''
+    }
+    const allWires = [...adapter.wires.values()]
+    // the app root is a consumed PROVIDER (provides the values/link sources),
+    // so it is not emitted — walk from the placement zone (the first rendered
+    // element), and verify every zone-descendant nests under its graph parent.
+    const zoneEl = allWires.find((e) => e && wireOf(e) === 'fs-zone')
+    if (!zoneEl) throw new Error('placement zone element missing')
+    let checked = 0
+    const walk = (el) => {
+      const wire = wireOf(el)
+      const node = wire ? supervisor.getNode(wire) : undefined
+      if (node) {
+        const domKids = Array.from(el.children ?? []).map((c) => wireOf(c)).filter(Boolean)
+        const graphKids = node.children.map((c) => c.id)
+        if (JSON.stringify(domKids) !== JSON.stringify(graphKids)) {
+          throw new Error(`nesting mismatch on ${wire}: DOM children ${JSON.stringify(domKids)} ≠ graph children ${JSON.stringify(graphKids)}`)
+        }
+        checked += 1
+      }
+      for (const c of Array.from(el.children ?? [])) walk(c)
+    }
+    walk(zoneEl)
+    // zone + all layer nodes (root is a non-emitted provider)
+    if (checked !== 2 ** depth - 1) throw new Error(`nesting check visited ${checked} nodes, expected ${2 ** depth - 1} (zone + layers)`)
+  })
+
+  await runner.check('css stress: each level changes a DIFFERENT css property; the two sibling slots get different values', () => {
+    // Per level k, every node carries cssPropForLevel(k) inside its `style`
+    // cssText. Within a level, the FIRST child (slot a) and SECOND child
+    // (slot b) of every parent get DIFFERENT values; different levels use
+    // different properties. The expected (prop, value) pairs come straight
+    // from levelCss(k, 'a') / levelCss(k, 'b') — the compile/emit lookup
+    // must produce exactly those two per level.
+    const seenPairs = {}
+    for (const [key, el] of adapter.wires) {
+      const layers = el.getAttribute?.('stress:layers') ?? el.dataset?.stressLayers ?? ''
+      if (!layers) continue // root / zone — no layer chain, no level css
+      const level = layers.split('|').filter(Boolean).length
+      const prop = cssPropForLevel(level)
+      const cssText = el.style?.cssText ?? el.getAttribute?.('data-css-style') ?? ''
+      const m = new RegExp(`${prop}:\\s*([^;]+);`).exec(cssText)
+      if (!m) throw new Error(`element ${key} (L${level}) has no ${prop} in style "${cssText}"`)
+      const pair = `${prop}=${m[1].trim()}`
+      ;(seenPairs[level] ??= new Set()).add(pair)
+      const top = layers.split('|').filter(Boolean).pop() ?? ''
+      const kind = top.includes('placement') ? 'placement' : top.includes('values') ? 'values' : top.includes('link') ? 'link' : top.includes('handler') ? 'handler' : '?'
+      const stressKind = el.getAttribute?.('stress:kind') ?? ''
+      if (!stressKind.startsWith(kind)) throw new Error(`stress:kind "${stressKind}" does not match top layer "${top}" on ${key}`)
+    }
+    for (let k = 1; k <= depth - 1; k += 1) {
+      const mkPair = (slot) => {
+        const css = levelCss(k, slot)
+        const m = /^([a-z-]+):\s*([^;]+);/.exec(css.style)
+        return `${m[1]}=${m[2].trim()}`
+      }
+      const expected = new Set([mkPair('a'), mkPair('b')])
+      if (expected.size !== 2) throw new Error(`L${k}: sibling slots share a css value`)
+      const actual = seenPairs[k] ?? new Set()
+      if (actual.size !== 2) throw new Error(`L${k}: expected exactly 2 css pairs, got ${[...actual].join(' | ')}`)
+      for (const e of expected) if (!actual.has(e)) throw new Error(`L${k}: missing expected pair ${e} (got ${[...actual].join(' | ')})`)
+    }
+  })
+
   await runner.check('placement layers: children carry the placement anchor', () => {
     const all = allNodes()
     const placed = all.filter((n) => n.anchors.some((a) => a.role === 'placement' && typeof a.target === 'string'))
@@ -401,16 +485,10 @@ async function main() {
 
   await runner.check('values layers: children render the component-provided value', () => {
     const rendered = domText()
-    if (depth >= 3) {
-      const v1 = valuePair(1)
-      if (!rendered.includes(v1.a) || !rendered.includes(v1.b)) {
-        throw new Error(`values-1 text missing: ${JSON.stringify(v1)}`)
-      }
-    }
-    if (depth >= 7) {
-      const v2 = valuePair(2)
-      if (!rendered.includes(v2.a) || !rendered.includes(v2.b)) {
-        throw new Error(`values-2 text missing: ${JSON.stringify(v2)}`)
+    for (let cyc = 1; cyc * 4 - 2 <= depth - 1; cyc += 1) {
+      const v = valuePair(cyc)
+      if (!rendered.includes(v.a) || !rendered.includes(v.b)) {
+        throw new Error(`values-${cyc} text missing: ${JSON.stringify(v)}`)
       }
     }
   })
@@ -421,15 +499,16 @@ async function main() {
     const all = allNodes()
     const consumers = all.filter((n) => n.children.some((c) => topLayerOf(c).includes(':link-')))
     if (!consumers.length) throw new Error('no link-layer consumers found')
+    const linkBindings = (cs) => Object.keys(cs.bindings ?? {}).filter((k) => /^link-\d+$/.test(k))
     for (const c of consumers) {
-      const st = statesOf(c.id)
-      if (!st.some((s) => s.bindings?.['link-1'] || s.bindings?.['link-2'])) {
+      if (!statesOf(c.id).some((s) => linkBindings(s).length > 0)) {
         throw new Error(`link def binding missing on ${c.id}`)
       }
     }
     const rendered = domText()
-    if (!rendered.includes('link-1.a') || !rendered.includes('link-1.b')) {
-      throw new Error('link-1 children not rendered')
+    for (let cyc = 1; cyc * 4 - 1 <= depth - 1; cyc += 1) {
+      const tag = `link-${cyc}.a`
+      if (!rendered.includes(tag)) throw new Error(`${tag} children not rendered`)
     }
   })
 
@@ -479,4 +558,6 @@ async function main() {
   )
 }
 
-main()
+// The smoke test awaits this to know the page finished (deep pages take
+// longer than the generic settle window).
+globalThis.__forkStressDone = main()

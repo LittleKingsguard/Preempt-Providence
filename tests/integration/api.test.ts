@@ -350,12 +350,12 @@ describe('ClientAPI.apply — api.md §8 exhaustiveness', () => {
     expect(new Set(exposed.map((e) => e.status))).toEqual(new Set(['ok']))
   })
 
-  it('T13: loop-terminated arm → diagnostic event, no actionable state', async () => {
+  it('T13: deep acyclic chain compiles actionable after a pass-2 edit (no circular-source diagnostic)', async () => {
     const sys = newSystem()
     const { clientAPI, events, root, register } = sys
-    // A borrow walk whose depth exceeds the loop/depth-cap counts AS loop
-    // (pipeline.md §2.1, node.md FS-7): the arm is dropped and a
-    // circular-source diagnostic is emitted.
+    // A 12-link acyclic chain: parent-chain classification is memoized and
+    // cycle-only (compile-horizon §6.1), so depth is not a loop signal; the
+    // root-sourced target resolves through the iterative fitReference walk.
     const depth = chainOfDepth(root, 12)
     register(...depth)
     const deep = depth[depth.length - 1]!
@@ -366,13 +366,11 @@ describe('ClientAPI.apply — api.md §8 exhaustiveness', () => {
     clientAPI.apply(deep.id, [{ targetProp: 'content', mode: 'replace', value: 'probe' }])
     await flushTicks()
 
-    // No actionable state for the looping arm…
-    expect(states(envelopes).find((e) => e.nodeId === deep.id && e.status === 'ok')).toBeUndefined()
-    // …and exactly one 'circular-source' diagnostic carrying a path trace.
-    const circ = diagnostics(envelopes)
-    expect(circ.length).toBe(1)
-    expect(circ[0]?.code).toBe('circular-source')
-    expect(circ[0]!.trace.length).toBeGreaterThan(0)
+    // The deep node compiles actionable after the pass-2 edit…
+    const st = states(envelopes).find((e) => e.nodeId === deep.id)
+    expect(st?.status).toBe('ok')
+    // …and emits no 'circular-source' diagnostic.
+    expect(diagnostics(envelopes)).toHaveLength(0)
   })
 
   it('T14: prototype/contentNodes-terminated arm drops silently', async () => {

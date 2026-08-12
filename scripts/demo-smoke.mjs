@@ -159,6 +159,29 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
     console.error(`fork-stress (depth ${depth}) failed:`, e)
     process.exit(1)
   })
+  // each page finishes asynchronously (deep pages exceed the generic settle)
+  await Promise.race([
+    globalThis.__forkStressDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+}
+
+// ---- fork-stress DATA-DRIVEN pages: one module instance per depth ----------
+// The page input is a LEGACY envelope (root + prototypes); the module
+// translates it, installs the handler bodies by name, and the clone-instance
+// recursion assembles the tree.
+for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
+  const pageHtml = await readFile(`${base}demo/fork-stress-data-d${depth}.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/fork-stress-data.js?depth=${depth}`).catch((e) => {
+    console.error(`fork-stress-data (depth ${depth}) failed:`, e)
+    process.exit(1)
+  })
+  // each page finishes asynchronously (deep pages exceed the generic settle)
+  await Promise.race([
+    globalThis.__forkStressDataDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
 }
 
 // Give microtasks a chance (Supervisor event flushes + async page checks).
@@ -208,6 +231,12 @@ for (const mode of ['client', 'ssr', 'markdown']) {
 for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
   if (!banners.some((b) => b.includes(`Fork Stress — depth ${depth}`) && /0 failed/.test(b))) {
     console.error(`fork-stress (depth ${depth}) page did not complete its checks (banner missing)`)
+    process.exit(1)
+  }
+}
+for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
+  if (!banners.some((b) => b.includes(`Fork Stress (data) — depth ${depth}`) && /0 failed/.test(b))) {
+    console.error(`fork-stress-data (depth ${depth}) page did not complete its checks (banner missing)`)
     process.exit(1)
   }
 }

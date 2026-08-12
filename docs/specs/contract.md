@@ -196,7 +196,7 @@ export class Node {
   familyLinkFor(): Link | null        // this node's own 'parent' family link (create if none)
   reconcileAnchors(): void            // pass-1 anchor materialization from layers
   compileLocal(): void
-  compileRemote(visited?: Set<Node>, depth?: number): CompiledState
+  compileRemote(visited?: Set<string>, depth?: number): void
   compile(slice: Node[]): CompileResult
   destroyLinks(): void
   markDestroyed(): void

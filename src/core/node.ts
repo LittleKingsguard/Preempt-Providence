@@ -44,30 +44,42 @@ export type ChainKind =
   | { kind: 'unplaced' }
   | { kind: 'destroyed-owner' }
 
+function chainTokenKind(target: string): ChainKind {
+  if (target === 'rootNode') return { kind: 'token', token: 'rootNode' }
+  if (target === 'component') return { kind: 'token', token: 'component' }
+  if (target === 'contentNodes') return { kind: 'token', token: 'contentNodes' }
+  return { kind: 'token', token: 'other' }
+}
+
+function chainSliceRule(node: Node, slice: ReadonlySet<NodeId>): ChainKind {
+  return slice.has(node.id) ? { kind: 'slice-root' } : { kind: 'unplaced' }
+}
+
+/** Phase-B parent-chain walk (compile-horizon §6.1/§6.2): follows parent-anchor
+ *  object targets from `root` until a termination rule applies — a revisit
+ *  (per-walk `seen`, never shared) ⇒ loop; a string token ⇒ its kind; a
+ *  destroyed node ⇒ destroyed-owner (wins over childless, exempt from
+ *  pass-through); a childless node ⇒ the slice rule; an absent parent anchor ⇒
+ *  the slice rule. The walk is bounded by `seen` only — there is NO depth cap:
+ *  acyclic chains of any length classify by their true termination. Known-kind
+ *  nodes with a child anchor are never a walk stop — only Phase C inherits.
+ */
 function chainRoot(root: Node, slice: ReadonlySet<NodeId>, depth = 0, seen = new Set<NodeId>()): ChainKind {
-  if (depth > MAX_COMPILE_DEPTH) return { kind: 'loop' }
   if (seen.has(root.id)) return { kind: 'loop' }
   seen.add(root.id)
   const child = root.childAnchor()
   if (!child) return { kind: 'unplaced' }
   const parentAnchor = linkOf(child).anchorsOf('parent')[0]
-  if (!parentAnchor) return slice.has(root.id) ? { kind: 'slice-root' } : { kind: 'unplaced' }
+  if (!parentAnchor) return chainSliceRule(root, slice)
   const target = parentAnchor.target
-  if (typeof target === 'string') {
-    if (target === 'rootNode') return { kind: 'token', token: 'rootNode' }
-    if (target === 'component') return { kind: 'token', token: 'component' }
-    if (target === 'contentNodes') return { kind: 'token', token: 'contentNodes' }
-    return { kind: 'token', token: 'other' }
-  }
+  if (typeof target === 'string') return chainTokenKind(target)
   if (typeof target === 'object' && target !== null) {
     const owner = target as Node
     if (owner.destroyed) return { kind: 'destroyed-owner' }
-    if (owner.childAnchor() === null) {
-      return slice.has(owner.id) ? { kind: 'slice-root' } : { kind: 'unplaced' }
-    }
+    if (owner.childAnchor() === null) return chainSliceRule(owner, slice)
     return chainRoot(owner, slice, depth + 1, seen)
   }
-  return slice.has(root.id) ? { kind: 'slice-root' } : { kind: 'unplaced' }
+  return chainSliceRule(root, slice)
 }
 
 function makeLayer(
@@ -428,7 +440,6 @@ export class Node {
   }
 
   compileRemote(visited: Set<string> = new Set(), depth = 0): void {
-    if (depth > MAX_COMPILE_DEPTH) return
     if (visited.has(this.id)) return
     visited.add(this.id)
     this.compileLocal()
@@ -461,7 +472,61 @@ export class Node {
 
     const sliceSet = new Set<NodeId>(slice.map(n => n.id))
     const kinds = new Map<NodeId, ChainKind>()
-    for (const node of slice) kinds.set(node.id, chainRoot(node, sliceSet))
+    // Memoized chain classification (compile-horizon §6.2) — order-independent:
+    // Phase A — unconditional local kinds, order-free: destroyed; no child
+    // anchor; child anchor without a parent anchor; string-token parent;
+    // destroyed-owner parent.
+    for (const node of slice) {
+      if (node.destroyed) {
+        kinds.set(node.id, { kind: 'destroyed-owner' })
+        continue
+      }
+      const child = node.childAnchor()
+      if (!child) {
+        kinds.set(node.id, { kind: 'unplaced' })
+        continue
+      }
+      const parentAnchor = linkOf(child).anchorsOf('parent')[0]
+      if (!parentAnchor) {
+        kinds.set(node.id, chainSliceRule(node, sliceSet))
+        continue
+      }
+      const target = parentAnchor.target
+      if (typeof target === 'string') {
+        kinds.set(node.id, chainTokenKind(target))
+        continue
+      }
+      if (typeof target === 'object' && target !== null && (target as Node).destroyed) {
+        kinds.set(node.id, { kind: 'destroyed-owner' })
+      }
+    }
+    // Phase B — for any node whose parent-anchor target is an object whose
+    // kind is NOT yet known (in or out of slice), walk the chain from that
+    // parent with a per-walk `seen` set (never shared); no depth cap.
+    for (const node of slice) {
+      if (kinds.has(node.id)) continue
+      const child = node.childAnchor()
+      if (!child) continue
+      const parentAnchor = linkOf(child).anchorsOf('parent')[0]
+      if (!parentAnchor) continue
+      const target = parentAnchor.target
+      if (typeof target !== 'object' || target === null || kinds.has((target as Node).id)) continue
+      kinds.set(node.id, chainRoot(target as Node, sliceSet))
+    }
+    // Phase C — memoized propagation over the complete parent map: a node
+    // inherits its parent's kind, EXCEPT an in-slice parent with no child
+    // anchor (and not destroyed) terminates the child's chain there ⇒ slice-root.
+    for (const node of slice) {
+      if (kinds.has(node.id)) continue
+      const child = node.childAnchor()
+      const parentAnchor = linkOf(child!).anchorsOf('parent')[0]!
+      const parent = parentAnchor.target as Node
+      if (sliceSet.has(parent.id) && parent.childAnchor() === null && !parent.destroyed) {
+        kinds.set(node.id, { kind: 'slice-root' })
+      } else {
+        kinds.set(node.id, kinds.get(parent.id)!)
+      }
+    }
 
     const viable = new Set<NodeId>()
     for (const node of slice) {

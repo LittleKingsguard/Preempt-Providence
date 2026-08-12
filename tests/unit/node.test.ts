@@ -5,7 +5,7 @@
  * observed only via the `Node`/`Link` surface in contract.md.
  */
 import { describe, it, expect } from 'vitest'
-import { Node, mintNodeId, MAX_COMPILE_DEPTH } from '../../src/core/node.js'
+import { Node, mintNodeId, MAX_COMPILE_DEPTH, reconcileParentTargets } from '../../src/core/node.js'
 import { Link } from '../../src/core/link.js'
 import { LinkConfigError, SingleParentError, CycleError } from '../../src/core/errors.js'
 import { applyStateSlice } from '../../src/core/ops.js'
@@ -588,23 +588,53 @@ describe('two-pass compile — §8.1–§8.4', () => {
     expect(res.dropped.some(d => d.reason === 'owner-terminated')).toBe(true)
   })
 
-  it('C9 deep-borrow depth-cap trips the loop detector → dropped, circular-source warning', () => {
-    const root = makeRoot()
-    const chain: Node[] = [root]
-    let parent = root
-    for (let i = 0; i <= MAX_COMPILE_DEPTH; i++) {
-      const child = makeNode()
-      childOf(parent, child)
-      chain.push(child)
-      parent = child
-    }
-    const deep = parent
-    targetAnchor(deep, 'deep-borrow')
-    addComponentSource(root, 'deep-borrow', { at: 'root' })
+  it('C9(a) anchor circle (seed refs + reconcileParentTargets) drops as loop with circular-source', () => {
+    // Both nodes seed a child anchor whose parent ref points at the OTHER node;
+    // reconcileParentTargets resolves the string refs into a real anchor circle.
+    const a = new Node(
+      { type: 'a', anchors: [{ role: 'child', target: 'circle-b', parent: 'circle-b' }] } as unknown as NodeBaseData,
+      hub(),
+      'circle-a',
+    )
+    const b = new Node(
+      { type: 'b', anchors: [{ role: 'child', target: 'circle-a', parent: 'circle-a' }] } as unknown as NodeBaseData,
+      hub(),
+      'circle-b',
+    )
+    reconcileParentTargets([a, b])
+    expect(a.parent).toBe(b)
+    expect(b.parent).toBe(a)
 
-    const res = root.compile(chain)
+    const res = a.compile([a, b])
+    expect(res.actionable).toHaveLength(0)
     expect(res.dropped.some(d => d.reason === 'loop')).toBe(true)
     expect(res.warnings.some(w => w.code === 'circular-source')).toBe(true)
+    expect(a.state).toBe('unplaced')
+  })
+
+  it('C9(b) deep acyclic chain (9..20 links): deepest node actionable with correct pathKey, NO drop, NO warning', () => {
+    for (let links = 9; links <= 20; links++) {
+      const root = makeRoot()
+      const chain: Node[] = [root]
+      let parent = root
+      for (let i = 0; i < links; i++) {
+        const child = makeNode()
+        childOf(parent, child)
+        chain.push(child)
+        parent = child
+      }
+      const deep = parent
+      targetAnchor(deep, 'deep-borrow')
+      addComponentSource(root, 'deep-borrow', { at: 'root' })
+
+      const res = root.compile(chain)
+      const cs = res.actionable.find(s => s.nodeId === deep.id)
+      expect(cs, `deepest node of the ${links}-link chain must be actionable`).toBeDefined()
+      expect(cs?.pathKey).toBe(['root', ...chain.slice(1).map(c => c.id)].join('/'))
+      expect((cs?.bindings['deep-borrow'] as { at?: string } | undefined)?.at).toBe('root')
+      expect(res.dropped.some(d => d.reason === 'loop' && d.arm[0] === deep.id)).toBe(false)
+      expect(res.warnings.some(w => w.code === 'circular-source')).toBe(false)
+    }
   })
 })
 
@@ -734,7 +764,7 @@ describe('fail-states — §9 FS-1…FS-11', () => {
     expect(() => victim.clone('actor')).toThrow()
   })
 
-  it('FS-7 compile-time walk revisits a node or exceeds depth-cap → dropped arm, loop warning', () => {
+  it('FS-7 compile-time walk: a revisit drops as loop; a deep ACYCLIC chain compiles actionable (no depth-cap drop)', () => {
     const root = makeRoot()
     const chain: Node[] = [root]
     let parent = root
@@ -749,9 +779,13 @@ describe('fail-states — §9 FS-1…FS-11', () => {
     addComponentSource(root, 'deep-borrow', { at: 'root' })
 
     const res = root.compile(chain)
-    expect(res.dropped.some(d => d.reason === 'loop')).toBe(true)
-    expect(res.warnings.some(w => w.code === 'circular-source')).toBe(true)
-    expect(res.actionable.find(s => s.nodeId === deep.id && s.bindings['deep-borrow'] !== undefined)).toBeUndefined()
+    // 10-link acyclic chain: depth is NOT a loop signal for the parent chain —
+    // only a genuine revisit is (compile-horizon §6.1.2/§6.1.4).
+    expect(res.dropped.some(d => d.reason === 'loop')).toBe(false)
+    expect(res.warnings.some(w => w.code === 'circular-source')).toBe(false)
+    const cs = res.actionable.find(s => s.nodeId === deep.id && s.bindings['deep-borrow'] !== undefined)
+    expect(cs).toBeDefined()
+    expect((cs?.bindings['deep-borrow'] as { at?: string } | undefined)?.at).toBe('root')
   })
 
   it('FS-8 unresolved component target is a compile STATE — warning + still renders (not hidden)', () => {
@@ -805,6 +839,240 @@ describe('fail-states — §9 FS-1…FS-11', () => {
     expect(lock.state).toBe('resolved')
     lock.unlock()
     expect(lock.state).toBe('released')
+  })
+})
+
+describe('memoized chainRoot classification — compile-horizon §6 parity + termination rules', () => {
+  type RefKind = 'root' | 'proto' | 'other-token' | 'slice-root' | 'loop' | 'unplaced' | 'destroyed-owner'
+
+  /** §6.2 reference walker: the per-node parent-chain walk the memoized
+   *  three-phase classifier must equal (parity invariant, §6.2.3). Bounded by
+   *  `seen` only — no depth cap (chains here stay ≤ 8 hops so both agree). */
+  function refChainKind(node: Node, slice: ReadonlySet<string>): RefKind {
+    const seen = new Set<string>()
+    let cur: Node | null = node
+    for (;;) {
+      if (cur === null) return 'unplaced'
+      if (cur.destroyed) return 'destroyed-owner'
+      if (seen.has(cur.id)) return 'loop'
+      seen.add(cur.id)
+      const child = cur.childAnchor()
+      if (child === null) return 'unplaced'
+      const parentAnchor = (child.link as unknown as Link).anchorsOf('parent')[0]
+      if (!parentAnchor) return slice.has(cur.id) ? 'slice-root' : 'unplaced'
+      const target = parentAnchor.target
+      if (typeof target === 'string') {
+        if (target === 'rootNode') return 'root'
+        if (target === 'component') return 'proto'
+        return 'other-token'
+      }
+      const owner = target as Node
+      if (owner.destroyed) return 'destroyed-owner' // destroyed wins over childless (node.ts:64)
+      if (owner.childAnchor() === null) return slice.has(owner.id) ? 'slice-root' : 'unplaced'
+      cur = owner
+    }
+  }
+
+  /** Map a reference kind to its compile-observable outcome (drop reason /
+   *  actionable + warning). 'destroyed-owner' and 'unplaced' both surface as
+   *  owner-terminated; only the kind-vs-walk parity is asserted here. */
+  function assertKindMatches(res: CompileResult, node: Node, kind: RefKind): void {
+    const droppedAs = (reason: string): boolean => res.dropped.some(d => d.arm[0] === node.id && d.reason === reason)
+    switch (kind) {
+      case 'root':
+      case 'slice-root':
+        expect(res.actionable.some(s => s.nodeId === node.id), `${node.id} should be actionable`).toBe(true)
+        break
+      case 'loop':
+        expect(droppedAs('loop'), `${node.id} should drop as loop`).toBe(true)
+        expect(res.warnings.some(w => w.code === 'circular-source')).toBe(true)
+        break
+      case 'proto':
+        expect(droppedAs('prototype-terminated'), `${node.id} should drop as prototype-terminated`).toBe(true)
+        break
+      case 'other-token':
+      case 'unplaced':
+      case 'destroyed-owner':
+        expect(droppedAs('owner-terminated'), `${node.id} should drop as owner-terminated`).toBe(true)
+        break
+    }
+  }
+
+  /** A real A↔B anchor circle (each node is the other's parent). */
+  function anchorCircleFixture(): { a: Node; b: Node } {
+    const a = makeNode({ type: 'a' })
+    const b = makeNode({ type: 'b' })
+    const l1 = new Link({ name: 'parent-child' })
+    a.addAnchor('parent', a, {}, l1)
+    b.addAnchor('child', b, {}, l1)
+    const l2 = new Link({ name: 'parent-child' })
+    b.addAnchor('parent', b, {}, l2)
+    a.addAnchor('child', a, {}, l2)
+    return { a, b }
+  }
+
+  it('parity: memoized classification equals the per-node walk for a full in-slice forest (root-first AND leaf-first orders)', () => {
+    const root = makeRoot()
+    const n1 = childOf(root, makeNode())
+    const n2 = childOf(n1, makeNode())
+    const n3 = childOf(n2, makeNode())
+
+    const proto = makePrototype()
+    const protoKid = childOf(proto, makeNode())
+
+    const cc = new Node({ type: 'content' }, hub())
+    const ccLink = new Link({ name: 'parent-child' })
+    cc.addAnchor('child', cc, {}, ccLink)
+    ccLink.addAnchor({ role: 'parent', target: 'contentNodes', options: {}, link: ccLink })
+
+    const sharedA = childOf(root, makeNode())
+    const sharedB = childOf(sharedA, makeNode())
+    const x = childOf(sharedB, makeNode())
+    const y = childOf(sharedB, makeNode())
+
+    const stop = makeNode() // in-slice childless parent
+    const stopKid = childOf(stop, makeNode())
+
+    // child anchor whose family link has NO parent anchor (node.ts:54 — raw
+    // `new Link()` + `addAnchor('child')`): walk termination with the slice rule
+    const noParent = makeNode()
+    const noParentLink = new Link({ name: 'parent-child' })
+    noParent.addAnchor('child', noParent, {}, noParentLink)
+    const noParentKid = makeNode()
+    const noParentKidLink = new Link({ name: 'parent-child' })
+    noParentKid.addAnchor('child', noParentKid, {}, noParentKidLink)
+    noParentKidLink.addAnchor({ role: 'parent', target: noParent, options: {}, link: noParentKidLink })
+
+    const d = childOf(root, makeNode())
+    const dKid = childOf(d, makeNode())
+    d.markDestroyed() // destroyed but still carries a child anchor
+
+    const d2 = makeNode() // destroyed AND childless
+    const d2Kid = childOf(d2, makeNode())
+    d2.markDestroyed()
+
+    const { a, b } = anchorCircleFixture()
+    const u = makeNode()
+
+    const slice = [root, n1, n2, n3, proto, protoKid, cc, x, y, stop, stopKid, noParent, noParentKid, d, dKid, d2, d2Kid, a, b, u]
+    const sliceSet = new Set(slice.map(n => n.id))
+    for (const order of [slice, [...slice].reverse()]) {
+      const res = root.compile(order)
+      for (const node of order) assertKindMatches(res, node, refChainKind(node, sliceSet))
+    }
+  })
+
+  it('in-slice anchor cycle classifies as loop (round-2 F1)', () => {
+    const { a, b } = anchorCircleFixture()
+    const res = a.compile([a, b])
+    expect(res.actionable).toHaveLength(0)
+    expect(res.dropped.filter(d => d.reason === 'loop').map(d => d.arm[0]).sort()).toEqual([a.id, b.id].sort())
+    expect(res.warnings.filter(w => w.code === 'circular-source').length).toBeGreaterThan(0)
+  })
+
+  it('two in-slice nodes sharing an out-of-slice ancestor do NOT false-positive loop (per-walk seen, round-2 F5)', () => {
+    const root = makeRoot()
+    const sharedA = childOf(root, makeNode())
+    const sharedB = childOf(sharedA, makeNode())
+    const x = childOf(sharedB, makeNode())
+    const y = childOf(sharedB, makeNode())
+
+    const res = root.compile([root, x, y])
+    expect(res.dropped.some(d => d.reason === 'loop')).toBe(false)
+    expect(res.warnings.some(w => w.code === 'circular-source')).toBe(false)
+    expect(res.actionable.find(s => s.nodeId === x.id)).toBeDefined()
+    expect(res.actionable.find(s => s.nodeId === y.id)).toBeDefined()
+  })
+
+  it('in-slice childless parent terminates the child chain as slice-root (round-2 F2)', () => {
+    const stop = makeNode()
+    const kid = childOf(stop, makeNode())
+    const res = stop.compile([stop, kid])
+    expect(res.actionable.find(s => s.nodeId === kid.id)).toBeDefined()
+    expect(res.actionable.find(s => s.nodeId === stop.id)).toBeUndefined()
+    expect(res.dropped.some(d => d.reason === 'owner-terminated' && d.arm[0] === stop.id)).toBe(true)
+  })
+
+  it('out-of-slice parent under a prototype drops prototype-terminated, NOT slice-root (round-1 F2)', () => {
+    const proto = makePrototype()
+    const outOfSlice = childOf(proto, makeNode())
+    const consumer = childOf(outOfSlice, makeNode())
+    const res = consumer.compile([consumer])
+    expect(res.dropped.some(d => d.reason === 'prototype-terminated' && d.arm[0] === consumer.id)).toBe(true)
+    expect(res.actionable.find(s => s.nodeId === consumer.id)).toBeUndefined()
+  })
+
+  it('destroyed-with-child-anchor parent ⇒ child destroyed-owner (round-6 F1)', () => {
+    const root = makeRoot()
+    const d = childOf(root, makeNode())
+    const kid = childOf(d, makeNode())
+    d.markDestroyed()
+    expect(d.destroyed).toBe(true)
+    expect(d.childAnchor()).not.toBeNull()
+
+    const res = root.compile([root, d, kid])
+    expect(res.actionable.find(s => s.nodeId === kid.id)).toBeUndefined()
+    expect(res.dropped.some(dr => dr.reason === 'owner-terminated' && dr.arm[0] === kid.id)).toBe(true)
+  })
+
+  it('destroyed-before-childless precedence: destroyed childless parent ⇒ destroyed-owner, not slice-root (node.ts:64)', () => {
+    const d2 = makeNode()
+    const kid = childOf(d2, makeNode())
+    d2.markDestroyed()
+    expect(d2.childAnchor()).toBeNull() // destroyed AND childless
+
+    const res = d2.compile([d2, kid])
+    expect(res.actionable.find(s => s.nodeId === kid.id)).toBeUndefined()
+    expect(res.dropped.some(dr => dr.reason === 'owner-terminated' && dr.arm[0] === kid.id)).toBe(true)
+  })
+})
+
+describe('resolution recursion cap — resolveNames/continueArm (resolve.ts:100)', () => {
+  it('provider chain ≥9 hops still drops as loop (resolution cap unchanged after the parent-chain flip)', () => {
+    const root = makeRoot()
+    targetAnchor(root, 'a0')
+    const providers: Node[] = []
+    let parent = root
+    for (let i = 1; i <= 8; i++) {
+      const p = childOf(parent, makeNode())
+      providers.push(p)
+      parent = p
+    }
+    // Nested provider chain: Pk provides a(k-1) and targets a(k). P7 ALSO
+    // provides 'a8', so P8's target walks back up to P7 and pushes the
+    // resolveNames recursion to depth 9 (> MAX_COMPILE_DEPTH) → loop drop.
+    for (let k = 1; k <= 8; k++) {
+      const p = providers[k - 1]!
+      addComponentSource(p, `a${k - 1}`, { hop: k })
+      targetAnchor(p, `a${k}`)
+    }
+    addComponentSource(providers[6]!, 'a8', { hop: 7 })
+
+    const res = root.compile([root, ...providers])
+    expect(res.dropped.some(d => d.reason === 'loop' && d.arm[0] === root.id)).toBe(true)
+    expect(res.warnings.some(w => w.code === 'circular-source')).toBe(true)
+    expect(res.actionable.find(s => s.nodeId === root.id)).toBeUndefined()
+  })
+
+  it('a 9+ link acyclic chain with a root-sourced target resolves via iterative fitReference — actionable', () => {
+    const root = makeRoot()
+    const chain: Node[] = [root]
+    let parent = root
+    for (let i = 0; i < 10; i++) {
+      const n = childOf(parent, makeNode())
+      chain.push(n)
+      parent = n
+    }
+    const deep = parent
+    targetAnchor(deep, 'deep-borrow')
+    addComponentSource(root, 'deep-borrow', { at: 'root' })
+
+    const res = root.compile(chain)
+    const cs = res.actionable.find(s => s.nodeId === deep.id)
+    expect(cs).toBeDefined()
+    expect((cs?.bindings['deep-borrow'] as { at?: string } | undefined)?.at).toBe('root')
+    expect(res.dropped.some(d => d.reason === 'loop')).toBe(false)
+    expect(res.warnings.some(w => w.code === 'circular-source')).toBe(false)
   })
 })
 

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Fork Stress (data-driven) (depth __DEPTH__)</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body data-depth="__DEPTH__">
+  <!--
+    ============================================================================
+    FORK STRESS DEMO — DATA-DRIVEN VARIANT of the layered stress test.
+
+    ⚠ DEMO-PAGE TEST CASE — NOT expected real-world behavior. No production
+    app builds a binary tree by cloning prototypes recursively; the page
+    exists to prove the same deep binary stress tree can be assembled from a
+    LEGACY envelope alone:
+
+      • `preempt-initial-data` carries the LEGACY initial-data envelope
+        (template.root + content payload with TWO prototype nodes per layer —
+        one per sibling slot — plus clientConfig). NOT a serialized anchor
+        document: translateLegacy parses it.
+      • Each prototype declares its `after-compile` handler BY NAME
+        (`handlers: [{ name: 'stress-expand', phase: 'after-compile' }]`);
+        the page module supplies the BODY for that name (functions cannot be
+        JSON-serialized).
+      • The page clones the layer-1 prototypes onto the root; each clone
+        inherits its prototype's handler, which expands the next layer by
+        cloning the layer+1 prototypes under it (recursive assembly). The
+        supervisor registers/attaches/marks every copy, so the tree grows
+        from the data alone.
+      • The page uses ONLY core (dist/core/*) + the shared data-derivation
+        helpers (levelCss/cssPropForLevel) — no demo-fixtures, no demo-side
+        render machinery.
+
+    Every node carries `stress:layer` (its depth) and `stress:layers` (the
+    chain of layer mechanisms from root to it) — depth + tree-back-to-root.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>Fork Stress (data-driven) — depth __DEPTH__ (<code>2<sup>__DEPTH__</sup> − 1 = __TOTAL__</code> layer nodes + 1 root)</h1>
+    <p class="goals">
+      Layer cycle: placement → component values → component link → handler
+      (repeats with different placement/component names). Each layer doubles
+      the node count. The whole tree is assembled from a LEGACY envelope of
+      two prototypes per layer: each prototype declares its <code>stress-expand</code>
+      after-compile handler by name, the page supplies the body, and cloning
+      (the <code>clone-instance</code> op) recurses layer by layer. The shared
+      harness asserts per-layer node counts, css property/slot pairs, method
+      kinds, DOM nesting, ancestry chains, handler idempotency, and the
+      incremental render contract (no render-side compile after bootstrap).
+    </p>
+
+    <!-- Framework input: the LEGACY envelope (translateLegacy input — NOT a
+         serialized anchor document; spec: docs/specs/fork-stress-data.md). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section>
+      <h2>Layered stress tree (live DOM)</h2>
+      <p class="expect">
+        Every element is framework-rendered. Each node shows its
+        <code>stress:layers</code> chain (layer mechanisms from root to it).
+      </p>
+      <div id="app"></div>
+    </section>
+
+    <section>
+      <h2>Layer plan (embedded)</h2>
+      <pre id="layer-plan" class="doc"></pre>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="fork-stress-data.js"></script>
+</body>
+</html>

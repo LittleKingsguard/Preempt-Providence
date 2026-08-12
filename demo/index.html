@@ -30,7 +30,8 @@
         <li>
           <a class="back" href="loop-safety.html"><strong>Loop-safety probes</strong></a>
           — mirrors <code>tests/e2e/loop-safety.test.ts</code>: A→B→A circles,
-          component self-reference, dangling source/target, depth-cap trip,
+          component self-reference, dangling source/target, deep acyclic chains
+          (compile actionable — depth is not a loop signal),
           single-parent enforcement — each with its expected behavior, the graph
           structure built, and the observed guard trip.
         </li>
@@ -61,19 +62,48 @@
           <code>scripts/serve-demo.mjs</code>.
         </li>
         <li>
-          <a class="back" href="fork-stress-d8.html"><strong>Fork stress — layered child-creation stress test</strong></a>
+          <a class="back" href="fork-stress-d12.html"><strong>Fork stress — layered child-creation stress test</strong></a>
           (<a class="back" href="fork-stress-d2.html">d2</a> ·
           <a class="back" href="fork-stress-d4.html">d4</a> ·
           <a class="back" href="fork-stress-d6.html">d6</a> ·
-          <a class="back" href="fork-stress-d8.html">d8</a>)
+          <a class="back" href="fork-stress-d8.html">d8</a> ·
+          <a class="back" href="fork-stress-d9.html">d9</a> ·
+          <a class="back" href="fork-stress-d10.html">d10</a> ·
+          <a class="back" href="fork-stress-d11.html">d11</a> ·
+          <a class="back" href="fork-stress-d12.html">d12</a>)
           — a demo-only stress test of the forking render system. A binary tree
           is built layer by layer, each layer adding 2 children per node through
           one of the four runtime child-creation mechanisms, cycling: placement →
           component values → component link → idempotent handler → repeats with
-          different placement/component names. Depth dN has 2<sup>N</sup> − 1 nodes.
+          different placement/component names. Depth dN has 2<sup>N</sup> − 1 nodes
+          (d12 = 4095 nodes; the memoized, cycle-only parent-chain classifier keeps
+          every layer actionable).
           Every node renders its <code>stress:layers</code> chain (depth +
           tree-back-to-root). The page uses ONLY core (<code>dist/core/*</code>) and
           handler code — no demo-side render machinery.
+        </li>
+        <li>
+          <a class="back" href="fork-stress-data-d12.html"><strong>Fork stress (data-driven) — prototype-driven assembly from a legacy envelope</strong></a>
+          (<a class="back" href="fork-stress-data-d2.html">d2</a> ·
+          <a class="back" href="fork-stress-data-d4.html">d4</a> ·
+          <a class="back" href="fork-stress-data-d6.html">d6</a> ·
+          <a class="back" href="fork-stress-data-d8.html">d8</a> ·
+          <a class="back" href="fork-stress-data-d9.html">d9</a> ·
+          <a class="back" href="fork-stress-data-d10.html">d10</a> ·
+          <a class="back" href="fork-stress-data-d11.html">d11</a> ·
+          <a class="back" href="fork-stress-data-d12.html">d12</a>)
+          — the same deep binary stress tree (2<sup>N</sup> − 1 nodes, d12 =
+          4095), assembled from a LEGACY envelope alone: <code>preempt-initial-data</code>
+          carries the legacy format (root + two prototype nodes per layer — one
+          per sibling slot) which <code>translateLegacy</code> parses. Each
+          prototype declares its <code>stress-expand</code> after-compile handler
+          by NAME in the data (bodies can't be JSON-serialized); the page supplies
+          the body and recursion does the rest: cloning the layer-1 prototypes
+          onto the root, each clone's inherited handler expanding the next layer
+          via the <code>clone-instance</code> op until depth N. CORE ONLY — no
+          demo-fixtures, no demo-side render machinery; the shared
+          <code>levelCss</code>/<code>cssPropForLevel</code> helpers are pure
+          data-derivation (demo-only, not core APIs).
         </li>
       </ul>
     </section>

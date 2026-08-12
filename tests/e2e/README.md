@@ -10,8 +10,9 @@ Written:
   (op-time `cycle-detected` rejection + compile-time loop drop with
   `circular-source` warning), component self-reference (depth-0 resolve,
   never loops), dangling source/target (unresolved-reference warning, own
-  state still renders; prototype-only candidates drop silently), depth-cap
-  trip, single-parent enforcement.
+  state still renders; prototype-only candidates drop silently), deep
+  acyclic chains compile actionable (depth is not a loop signal — only
+  genuine revisits drop as loop), single-parent enforcement.
 - `legacy-bootstrap.test.ts` — original backend NodeSchema JSON →
   `translateLegacy` → complete render (in-tree parts render, unplaced
   content stays out), placement attachment, handler-driven managed update

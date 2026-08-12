@@ -309,37 +309,50 @@ pass-2 slices. Therefore:
      that parent with a **per-walk `seen` revisit set** (NOT a shared set —
      a shared set would false-positive `loop` when two in-slice nodes share
      an out-of-slice ancestor). The walk is bounded by `seen` only — no depth
-     cap. **Walk termination rules (explicit, round-5 F9 + round-6 F1):** a
-     revisit ⇒ `loop`; a string token ⇒ that token's kind; a **destroyed
-     node terminates the walk ⇒ `destroyed-owner`** — destroyed wins over the
-     childless rule and is EXEMPT from the pass-through rule (a destroyed
-     node can retain child anchors; node.ts:64 precedes the childless check,
-     round-6 F1); a **childless node terminates the walk** with the **slice
-     rule** (`slice-root` if in-slice, `unplaced` if not) — **the childless
-     rule WINS over the known-kind rule** (every in-slice childless node is
-     Phase-A `unplaced`, i.e. already known-kind; the walk must still
-     terminate with `slice-root` for a re-entering chain, matching
-     node.ts:66); a **known-kind node WITH a child anchor (and not
-     destroyed) is never a walk stop** — only Phase C inherits from it. This
-     makes cycles classifiable (a parent cycle has no Phase-A base; Phase B
-     walks it and `seen` returns `loop`).
+     cap. **Walk termination rules (explicit, round-5 F9 + round-6 F1 +
+     round-7 F2):** a revisit ⇒ `loop`; a string token ⇒ that token's kind; a
+     **destroyed node terminates the walk ⇒ `destroyed-owner`** — destroyed
+     wins over the childless rule and is EXEMPT from the pass-through rule (a
+     destroyed node can retain child anchors; node.ts:64 precedes the
+     childless check, round-6 F1); a **childless node terminates the walk**
+     with the **slice rule** (`slice-root` if in-slice, `unplaced` if not) —
+     the childless rule WINS over the known-kind rule (every in-slice
+     childless node is Phase-A `unplaced`, i.e. already known-kind; the walk
+     must still terminate with `slice-root` for a re-entering chain, matching
+     node.ts:66); an **absent parent anchor terminates the walk** with the
+     **     slice rule** (`slice-root` if in-slice, `unplaced` if not — node.ts:54,
+     round-7 F2: the walk terminates AT a parentless node, whether it starts
+     there or reaches it via an out-of-slice parent); a **known-kind node
+     WITH a child anchor (and not destroyed) is never a walk stop** — only
+     Phase C inherits from it. This makes cycles classifiable (a parent cycle
+     has no Phase-A base; Phase B walks it and `seen` returns `loop`).
    - Phase C — memoized propagation over the now-complete parent map: any
      node whose parent's kind is known inherits it, EXCEPT when the in-slice
-     parent has no child anchor — then the child's chain **terminates at that
-     parent** ⇒ `slice-root` (round-2 F2; mirrors node.ts:66). Propagation is
-     a pure cache over Phase-A/B results.
+     parent has no child anchor **and is not destroyed** — then the child's
+     chain **terminates at that parent** ⇒ `slice-root` (round-2 F2; mirrors
+     node.ts:66; the destroyed-before-childless precedence of node.ts:64 is
+     preserved — a destroyed childless parent ⇒ `destroyed-owner`, round-7
+     F1). Propagation is a pure cache over Phase-A/B results.
 2. `slice-root` retains its exact current meaning: a chain that **terminates**
-   at an in-slice node whose parent-anchor is absent (node.ts:54,66,70), or a
-   child whose in-slice parent is childless (Phase C exception — round-3 F4).
-   The cache never fabricates it outside those two cases. A walk may leave the
-   slice and re-enter at an in-slice childless node; that termination is
-   `slice-root` (round-2 F2).
-3. **Parity invariant (test):** for any slice, the memoized classification
-   equals the per-node `chainRoot` walk for every node whose full chain is in
-   the slice, and for every node whose walk leaves the slice it equals the
-   walk's TRUE termination kind (token/destroyed/unplaced/`slice-root` when it
-   re-enters at a childless in-slice node). Covers leaf-first pass-2 slices
-   (round-1 F1) and cycles (round-2 F1).
+   at an in-slice node whose parent-anchor is absent (node.ts:54 — the
+   parentless case), or at a childless in-slice node (node.ts:66 — including
+   the Phase C exception, round-3 F4 / round-9 F2 shorthand). The cache never
+   fabricates it outside those cases. A walk may leave the slice and re-enter
+   at an in-slice childless or parentless node; that termination is
+   `slice-root` (round-2 F2, round-8 F4).
+3. **Parity invariant (test, round-8 F1):** for any slice, the memoized
+   classification equals the per-node `chainRoot` walk for every **non-
+   destroyed** node whose full chain is in the slice, and for every node
+   whose walk leaves the slice it equals the walk's TRUE termination kind
+   (token/destroyed-owner/unplaced/`slice-root` when it re-enters at a
+   childless or parentless in-slice node). **Destroyed nodes are dropped at
+   node.ts:468 BEFORE kinds are consulted** — their kinds map entry (if
+   stored) is `destroyed-owner` (Phase A), and the parity claim covers only
+   non-destroyed nodes; a child of a destroyed-with-child-anchor parent
+   inherits `destroyed-owner` via Phase C (round-6 F1 / round-8 F1). Covers
+   leaf-first pass-2 slices (round-1 F1) and cycles (round-2 F1);
+   `slice-root` terminations arise when the walk re-enters the slice at a
+   childless or parentless in-slice node (round-8 F4).
 
 ### 6.3 Resolution past the horizon (CORRECTED per reviewer round-3 F1)
 
@@ -396,9 +409,12 @@ a note is kept that `slice-root` prevalence must not increase.
 
 ### 6.4 Test-surface delta (red set for the TestWriter)
 
-- `tests/unit/node.test.ts` **C9** splits: (a) *cycle* case — unchanged,
-  drops as `loop` + `circular-source`; (b) *deep acyclic chain* (9+ links) —
-  now compiles to actionable, NO drop, NO warning.
+- `tests/unit/node.test.ts` **C9** splits (round-7 F4: the current C9 at
+  node.test.ts:591 is pure-depth — there is NO cycle case inside it, so the
+  cycle arm is NEWLY WRITTEN, not "unchanged"): (a) *cycle* — NEW test,
+  anchor circle drops as `loop` + `circular-source` (carried from e2e probe
+  2); (b) *deep acyclic chain* (9+ links) — now compiles to actionable, NO
+  drop, NO warning.
 - `tests/unit/node.test.ts` **FS-7 test** (line ~737, 10-link chain): flips
   identically to C9(b) — deep acyclic chain now actionable (round-2 F3).
 - `tests/integration/api.test.ts` **T13** (lines ~353-376, 12-link chain +
@@ -434,10 +450,10 @@ a note is kept that `slice-root` prevalence must not increase.
   A NEW cycle probe still trips (unchanged).
 - **`demo:smoke` gate (round-3 F1):** fork-stress depths 9-11 flip from red
   to green (L8 handler children now actionable), and depth 12's compile
-  accelerates — but depth 12 currently ALSO fails the smoke's 250ms settle
-  (banner never lands for the 4095-node tree), so the settle must be
-  verified/lengthened for its banner to land (round-4 parked-2 clarifies:
-  it fails the rendered-count check AND the settle).
+  accelerates — pre-flip depth 12 fails the rendered-count checks AND the
+  250ms settle (module work ≈1.35s, banner never lands); post-flip only the
+  settle remains, so it must be verified/lengthened for the depth-12 banner
+  to land (round-4 parked-2 / round-6 F2 / round-7 F3).
 - **`demo/fork-stress.js` + `docs/specs/fork-stress.md` (round-3 F2 / round-4
   parked-3):** the rendered-count checks now include layers 9+ (no
   depth-cap drop remains anywhere in the demo surface; §4.1(6) already
@@ -451,21 +467,30 @@ a note is kept that `slice-root` prevalence must not increase.
 ### 6.5 Docs to update (with this change)
 
 `contract.md` (constants table + MAX_COMPILE_DEPTH comment + `compileRemote`
-row), `node.md` §8.2 (remote compile row), §8.3 (loop trip = revisit only for
+row — fold in the pre-existing signature staleness at :199:
+`visited?: Set<Node>` / `: CompiledState` → `visited?: Set<string>` / `: void`
+— round-9 F3 / round-10 F1), `node.md` §8.2 (remote compile row), §8.3 (loop trip = revisit only for
 parent chain), §2 **ArmDropReason** (line ~107: "depth-cap/visit-set trips
 count AS loop" — narrow to "resolution-recursion trips count AS loop";
 parent-chain depth no longer a drop reason), §9 FS-7 (revisit → loop; deep
 acyclic → actionable), `designing-pages.md` (C9/FS-7 row line ~48 AND §9
 loop-safety prose line ~195 "borrow depth caps" — both narrow to
-resolution-recursion; fork-stress `d{2,4,6,8}` → full 2-12 series),
+resolution-recursion; fork-stress `d{2,4,6,8}` → full 2-12 series; line ~295
+"drives the runtime layers (L4 handler … L7 link)" — stale, demo now runs to
+L11 — round-8 F2),
 `pipeline.md` **§2.1 DropReason `'loop'` row** (line ~128: "loop-guard/depth-
 cap trips count AS loop" — narrow to resolution recursion; the per-slice
 emission lock's `maxDepth` at pipeline.ts:156 is UNCHANGED — it guards
 emission recursion, not compile), `docs/specs/fork-stress.md` (un-cap to
-depths 9-12; page-series text), `demo/index.html` (page-series + probe
+depths 9-12; page-series text at :13/:42-43 AND the §Tree-shape heading at
+:28 "depth 8 = 255 nodes" → depth 12 = 4095 — round-9 F1), `demo/index.html` (page-series + probe
 description), `demo/loop-safety.html` (probe-6 copy), `tests/e2e/README.md`
 (probe list), `src/core/constants.ts` (doc comment, per §6.1.3),
 `FRESH-CONTEXT-SUMMARY.md` (line ~61: "depth caps (MAX_COMPILE_DEPTH=8)"),
+`demo/feature-matrix.html` + `.template.html` (line ~52, F3 note: "trips on
+the borrow-walk/ancestry cycles and depth caps" — narrow to
+"resolution-recursion depth caps"; stays substantively true, no live depth
+assertion — round-7 F5),
 `RENDER_PROCESS_NOTES.md` — BOTH the new DECIDED entry AND the **existing**
 fork-stress DECIDED entry (~line 798: stale "`fork-stress-d{2,4,6,8}.html`"
 and "drives the runtime layers (L4 handler … L7 link)" text — the demo now

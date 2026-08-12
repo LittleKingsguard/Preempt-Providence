@@ -289,17 +289,26 @@ test rather than a review finding.
   rules (B-1..B-5) added: css classes are data, content+children don't
   shadow, copy must match DOM, node-ref vs presentation id, HTMLCollection
   handling, no-redundant-reappend focus guard, bootstrap-vs-incremental.
+  §14.3 (demo-only helpers stay out of core docs) + §14.4 (css-stress
+  lessons: guaranteed-not-hashed uniqueness, closed css serialization
+  schema, def-retyped children keep own css, wireToNode registration).
 - `docs/specs/render.md` — ORD-H6 (no re-append on unchanged order) added.
 - `docs/specs/fork-stress.md` — layered stress-test spec (four runtime
-  child-creation mechanisms cycling per layer; only core + handler code).
+  child-creation mechanisms cycling per layer; only core + handler code;
+  per-level-property css stressor with the demo-only `levelCss` helper — NOT
+  a core API).
+- `docs/specs/compile-horizon-review.md` — memoized-chainRoot spec (depths
+  9-12) + feasibility analysis.
 - `RENDER_PROCESS_NOTES.md` §10.10 — DECIDED entries: incremental render
   (payload-focused-slice + prune), no redundant re-appends (ORD-H6 focus
   guard), fork-stress demo (idempotent after-compile handler guard;
-  emitElements component-binding interpretations).
+  emitElements component-binding interpretations; per-node css stressor,
+  demo-only helper), memoized root-first chainRoot.
 - `demo/lib/feature-matrix-tests.js` — harness comments document the
   check-ordering + live-end-state rule (A-2), presentation-id matching (A-1),
   HTMLCollection rule (B-1), focus-op assertion (B-2).
-- `scripts/demo-smoke.mjs` — `REAL_DOM_CHILDREN=1` browser-realism gate.
+- `scripts/demo-smoke.mjs` — `REAL_DOM_CHILDREN=1` browser-realism gate;
+  per-depth fork-stress completion await.
 
 ## Validation (post-fix)
 

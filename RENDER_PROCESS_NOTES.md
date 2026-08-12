@@ -796,7 +796,8 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   authoring/browser-realism rules derived from it: `docs/session-defect-review.md`,
   folded into `docs/skills/designing-pages.md` §14.
 - **DECIDED (fork-stress demo, runtime child-creation stress test):**
-  `demo/fork-stress-d{2,4,6,8}.html` stress-tests the forking render system by
+  `demo/fork-stress-d{2,4,6,8,9,10,11,12}.html` stress-tests the forking
+  render system by
   building a binary tree layer by layer, each layer adding exactly 2 children
   per node through one of the four runtime child-creation mechanisms, cycling:
   placement → component values → component link → idempotent handler → repeats
@@ -804,7 +805,8 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   has 2^k nodes, total 2^d − 1). The page uses ONLY core (`dist/core/*`) and
   handler code — the serializable part (L1 placement, L2 values, L3 link) is
   shipped in `preempt-initial-data`; the browser module drives runtime layers
-  (L4 handler, L5 placement, L6 values, L7 link) via the `attach` op,
+  (L4 handler, L5 placement, L6 values, L7 link, … up to L11) via the
+  `attach` op,
   component sources/targets, and idempotent `after-compile` handlers. The
   handler layer is guarded by its layer marker (`stress:handler`): it only
   adds children when no child with that marker exists — the default guard
@@ -812,8 +814,56 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   binding interpretations this needs: scalar resolved bindings render as
   element content (values layer) and a definition-object binding
   (`{type, children:[{bind,type}]}`) re-types a slice of the consumer's real
-  children (prototype-as-child link layer, `childOffset`). Every node renders
-  its `stress:layers` chain (depth + tree-back-to-root). Spec:
+  children (prototype-as-child link layer, `childOffset`), preserving each
+  real child's OWN authored css/props. Every node renders its
+  `stress:layers` chain (depth + tree-back-to-root) AND a css style where
+  each level changes a DIFFERENT property (background-color, border-style,
+  border-width, text-decoration, cycling) with a value per sibling slot — the
+  css stressor uses the DEMO-ONLY `levelCss` helper
+  (`demo/fork-stress-fixture.js`), NOT a core API (uniqueness is a global
+  index → hue/padding pair; css serialization ships only id/classes/style/
+  cssDef, so the `stress:kind` marker lives in props). Spec:
   `docs/specs/fork-stress.md`; harness checks in `demo/fork-stress.js`.
+- **DECIDED (fork-stress DATA-DRIVEN variant, prototype-driven assembly):**
+  `demo/fork-stress-data-d{2,4,6,8,9,10,11,12}.html` proves the same deep
+  binary stress tree can be assembled from a LEGACY envelope alone
+  (`forkStressLegacyData(depth)` — root + TWO prototype nodes per layer, one
+  per sibling slot; `preempt-initial-data` carries the legacy format, NOT a
+  serialized anchor document; `translateLegacy` parses it). Handlers are
+  declared BY NAME in the data (`handlers: [{ name: 'stress-expand',
+  phase: 'after-compile' }]`) because bodies cannot be JSON-serialized; the
+  page module supplies the body per name and installs it on each prototype
+  via `addLayer` (the clone inherits the prototype's layers, so the body runs
+  on every clone's after-compile). The page kicks off layer 1 by cloning the
+  prototypes onto the root with the `clone-instance` op
+  (`clientAPI.apply(id, { kind: 'clone-instance', source, slot, priority })` —
+  the supervisor registers + attaches + marks the copy pass-2 dirty); each
+  clone's own after-compile then clones the next layer's prototypes under it
+  (recursive assembly, `stress:layers` chain + `stress:expanded` marker set
+  on the clone via a state-slice apply). HandlerContext carries no current
+  node, so the body (closed over its prototype) expands every PENDING clone
+  of its (layer, slot) — a page-side registry fed from the clone-instance
+  `dirtied` ids keeps every after-compile call O(1) (no graph scan; the first
+  clone's pass expands a whole layer, re-runs no-op — idempotency). The page
+  is CORE-ONLY (no demo-fixtures); the only shared helpers are the pure
+  data-derivation `levelCss`/`cssPropForLevel`/`LAYER_METHODS`. Render is
+  bootstrap-compile-once + `takePass2States` consumption (the incremental
+  contract). Spec: `docs/specs/fork-stress-data.md`; harness checks in
+  `demo/fork-stress-data.js` (self-verifying: 8 checks, zero-failure banner).
+- **DECIDED (memoized root-first chainRoot, compile-horizon):** the
+  parent-chain classification in `compile(slice)` is memoized and
+  order-independent (three phases: A — unconditional local kinds; B —
+  chain-walk with a per-walk `seen` set for any parent whose kind is
+  unknown, in or out of slice; C — memoized propagation). **Acyclic parent
+  chains have NO depth cap** — the only loop signal on the parent chain is a
+  revisit. `MAX_COMPILE_DEPTH` (still 8) is re-scoped to the **resolution
+  recursion** cap (`resolveNames`/`continueArm`) only; `compileRemote`'s
+  walk gate is removed as consistency cleanup. Real cycles (A→B→A) still
+  drop as `loop` + `circular-source` at op time (FS-5) and compile time
+  (FS-7). Fork-stress depths 9-12 become compilable (L8/L9/L10/L11 layers
+  actionable; depth-12 needs a longer smoke settle). Landed via the
+  subagents workflow: spec `docs/specs/compile-horizon-review.md` §6
+  (reviewer loop exit criteria met); TestWriter red set + Implementer per
+  that spec's §6.4/§6.5.
 
 (TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)

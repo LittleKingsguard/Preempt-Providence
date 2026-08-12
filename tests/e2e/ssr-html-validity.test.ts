@@ -267,7 +267,7 @@ describe('e2e — SSR HTML output validity (real SSRFragmentAdapter)', () => {
   })
 
   describe('loop-safety.test.ts scenario (loop-safety render)', () => {
-    it('SSR-V8 depth-cap render: dropped loop arm absent; remaining chain emits well-formed HTML', () => {
+    it('SSR-V8 deep acyclic chain render: the deep arm renders; the chain emits well-formed HTML', () => {
       const root = makeRoot()
       const chain: Node[] = [root]
       let parent = root
@@ -286,8 +286,8 @@ describe('e2e — SSR HTML output validity (real SSRFragmentAdapter)', () => {
       const html = renderOps(ops)
       expect(validateHtml(html)).toEqual([])
       expect(html.startsWith('<div')).toBe(true)
-      // the loop-dropped deep node contributes nothing (NVS-2, SER-R4)
-      expect(html).not.toContain(deep.id)
+      // the deep acyclic node renders — no depth-cap drop (compile-horizon §6.1)
+      expect(html).toContain(deep.id)
     })
   })
 

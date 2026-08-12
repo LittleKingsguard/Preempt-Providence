@@ -6,7 +6,8 @@
  *   - A→B→A anchor circles (attach-time op guard + compile-time loop drop)
  *   - component self-reference
  *   - dangling source/target (unresolved reference)
- *   - depth-cap trips (compile-time guard)
+ *   - deep acyclic chains (compile actionable — depth is not a loop signal;
+ *     only genuine revisits drop as loop)
  */
 import { describe, it, expect } from 'vitest'
 import { Node, Supervisor, findCycle, MAX_COMPILE_DEPTH } from '../../src/core/node.js'
@@ -162,7 +163,7 @@ describe('e2e — loop-safety probes (Step 7)', () => {
     expect(holder.isInTree).toBe(false)
   })
 
-  it('depth-cap trip: a borrow walk deeper than the cap is dropped as loop, never hangs', () => {
+  it('deep acyclic chain: a 10-hop borrow walk compiles actionable — depth is not a loop signal', () => {
     const root = makeRoot()
     const chain: Node[] = [root]
     let parent = root
@@ -177,9 +178,11 @@ describe('e2e — loop-safety probes (Step 7)', () => {
     addComponentSource(root, 'deep-borrow', { at: 'root' })
 
     const res = root.compile(chain)
-    expect(res.dropped.some((d) => d.reason === 'loop')).toBe(true)
-    expect(res.warnings.some((w) => w.code === 'circular-source')).toBe(true)
-    expect(res.actionable.find((s) => s.nodeId === deep.id)).toBeUndefined()
+    expect(res.dropped.some((d) => d.reason === 'loop')).toBe(false)
+    expect(res.warnings.some((w) => w.code === 'circular-source')).toBe(false)
+    const cs = res.actionable.find((s) => s.nodeId === deep.id)
+    expect(cs).toBeDefined()
+    expect((cs?.bindings['deep-borrow'] as { at?: string } | undefined)?.at).toBe('root')
   })
 
   it('A→B→A anchors: single-parent still enforced — a second parent is rejected, never silently reparented', () => {

@@ -66,11 +66,13 @@
     </section>
 
     <section>
-      <h2>Probe 6 — depth-cap trip</h2>
+      <h2>Probe 6 — deep acyclic chain</h2>
       <p class="expect">
-        Expected: a borrow walk deeper than the compile depth cap (<code>MAX_COMPILE_DEPTH =
-        8</code>) is dropped as <code>loop</code> with a <code>circular-source</code>
-        warning.
+        Expected: a borrow walk far deeper than <code>MAX_COMPILE_DEPTH = 8</code> compiles
+        <strong>actionable</strong> — parent-chain classification is memoized and cycle-only
+        (compile-horizon §6.1), so depth is not a loop signal for an acyclic chain. Only a
+        genuine revisit (a real cycle) drops as <code>loop</code> with a
+        <code>circular-source</code> warning.
       </p>
       <pre id="s6" class="doc"></pre>
       <p id="p6" class="probe"></p>

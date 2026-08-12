@@ -203,8 +203,8 @@ async function main() {
     )
   })
 
-  // ---------- Probe 6: depth-cap trip ----------
-  await runner.check('Probe 6 — borrow walk deeper than the cap is dropped as loop, never hangs', () => {
+  // ---------- Probe 6: deep acyclic chain ----------
+  await runner.check('Probe 6 — a deep acyclic borrow chain compiles actionable (depth is not a loop signal)', () => {
     const root = makeRoot()
     const chain = [root]
     let parent = root
@@ -221,20 +221,24 @@ async function main() {
     const depth = MAX_COMPILE_DEPTH + 2
     structure(
       's6',
-      [`document tree:   root ─ ${'─'.repeat(depth)} deep (${depth} levels, cap = ${MAX_COMPILE_DEPTH})`,
+      [`document tree:   root ─ ${'─'.repeat(depth)} deep (${depth} levels; parent-chain classification is memoized, cycle-only)`,
        '',
-       'borrow walk:     deep → … → root (exceeds cap)',
-       'expected:        dropped (loop) · circular-source warning · no actionable deep state'],
+       'borrow walk:     deep → … → root (iterative fitReference, no recursion cap)',
+       'expected:        actionable deep state · root-sourced binding · no loop drop · no circular-source warning'],
     )
 
     const res = root.compile(chain)
-    if (!res.dropped.some((d) => d.reason === 'loop')) throw new Error('expected loop drop')
-    if (!res.warnings.some((w) => w.code === 'circular-source')) throw new Error('expected circular-source warning')
-    if (res.actionable.find((s) => s.nodeId === deep.id)) throw new Error('deep node should not be actionable')
+    if (res.dropped.some((d) => d.reason === 'loop')) throw new Error('deep acyclic chain must not drop as loop')
+    if (res.warnings.some((w) => w.code === 'circular-source')) throw new Error('unexpected circular-source warning')
+    const cs = res.actionable.find((s) => s.nodeId === deep.id)
+    if (!cs) throw new Error('deep node should be actionable')
+    if (cs.bindings['deep-borrow']?.at !== 'root') {
+      throw new Error(`expected root-sourced deep-borrow binding, got ${JSON.stringify(cs.bindings['deep-borrow'])}`)
+    }
 
     probe(
       'p6',
-      `Observed: <span class="badge fail">loop drop</span> + <code>circular-source</code> warning; the deep node produced no actionable state.`,
+      `Observed: <span class="badge pass">actionable</span> — the deep node compiled with the root-sourced <code>deep-borrow</code> binding; no loop drop, no <code>circular-source</code> warning.`,
     )
   })
 
