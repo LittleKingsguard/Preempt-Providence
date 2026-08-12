@@ -140,6 +140,18 @@ ul.tree li {
   letter-spacing: 0.5px;
 }
 
+/* the derived pathKey (derived: { $: 'pathKey' } on every fork-stress node)
+ * displayed under the depth badge — "root / <parentId> / <nodeId>". */
+.fs-node::after {
+  content: attr(data-path);
+  display: block;
+  font: 400 9px/1.5 ui-monospace, Consolas, monospace;
+  color: var(--muted);
+  opacity: 0.6;
+  letter-spacing: 0.3px;
+  word-break: break-all;
+}
+
 .fork-arms {
   display: flex;
   gap: 14px;

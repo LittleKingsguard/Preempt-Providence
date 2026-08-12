@@ -98,6 +98,9 @@ export function forkStressLegacyData(depth, method) {
           'stress:slot': slot,
           'stress:kind': kind,
           'stress:handler': 'stress-expand',
+          // the .fs-node ::before badge renders `"L" attr(data-depth)` —
+          // the same depth marker the imperative page's nodes carry
+          'data-depth': String(layer),
         },
         css: levelCss(layer, slot),
         handlers: [{ name: 'stress-expand', phase: 'after-compile' }],
@@ -106,12 +109,15 @@ export function forkStressLegacyData(depth, method) {
         // Clones inherit the declaration via baseFrom → Node.clone. Leaf
         // clones read false forever; non-leaves bake true once their
         // children exist. The chain (`stress:layers`) stays op-based
-        // (§6 — cross-node derived reads are out of scope).
+        // (§6 — cross-node derived reads are out of scope). `data-path`
+        // bakes the compiled pathKey so every node DISPLAYS its path back
+        // to root (the .fs-node ::after badge renders attr(data-path)).
         derived: {
           props: {
             'stress:expanded': {
               $if: { cond: { $gt: [{ $: 'children.length' }, 0] }, then: true, else: false },
             },
+            'data-path': { $: 'pathKey' },
           },
         },
       }
@@ -268,31 +274,42 @@ if (typeof document !== 'undefined') {
 
   // ---- render: bootstrap once, then consume the supervisor's pass-2 --------
   let prevStates = new Map()
-  let prevMap = null
-  let bootstrapped = false
-  function setStates(actionable) {
-    const byNode = new Map()
-    for (const s of actionable) {
-      const arr = byNode.get(s.nodeId) ?? []
-      arr.push(s)
-      byNode.set(s.nodeId, arr)
-    }
-    for (const [id, arr] of byNode) prevStates.set(id, arr)
-  }
-  function render() {
-    const origWarn = console.warn
-    console.warn = () => {}
-    try {
-      if (!bootstrapped) {
-        const cr = acc('compileMs', () => rootNode.compile(translated.nodes))
-        PROFILE.compileCalls += 1
-        setStates(cr.actionable)
-        supervisor.recordResolved(cr.actionable)
-        bootstrapped = true
-      } else {
-        const fresh = supervisor.takePass2States()
-        for (const [id, arr] of fresh) prevStates.set(id, arr)
-      }
+   let prevMap = null
+   let bootstrapped = false
+   // The renderer only ever renders IN-TREE nodes: the bootstrap slice
+   // includes the unplaced PROTOTYPES, and self-providing unplaced nodes
+   // (the values/link sources) are viable (S1.1 carve-out) — their states
+   // must not reach the emit path or the DOM grows phantom prototype
+   // elements (empty boxes with the unplaced pathKey).
+   function mergeStates(byNode) {
+     for (const [id, arr] of byNode) {
+       if (!supervisor.getNode(id)?.isInTree) continue
+       prevStates.set(id, arr)
+     }
+   }
+   function setStates(actionable) {
+     const byNode = new Map()
+     for (const s of actionable) {
+       const arr = byNode.get(s.nodeId) ?? []
+       arr.push(s)
+       byNode.set(s.nodeId, arr)
+     }
+     mergeStates(byNode)
+   }
+   function render() {
+     const origWarn = console.warn
+     console.warn = () => {}
+     try {
+       if (!bootstrapped) {
+         const cr = acc('compileMs', () => rootNode.compile(translated.nodes))
+         PROFILE.compileCalls += 1
+         setStates(cr.actionable)
+         supervisor.recordResolved(cr.actionable)
+         bootstrapped = true
+       } else {
+         const fresh = supervisor.takePass2States()
+         mergeStates(fresh)
+       }
       const actionable = []
       for (const [, states] of prevStates) actionable.push(...states)
       const byNode = new Map(supervisor.allNodes().map((n) => [n.id, n]))
@@ -358,7 +375,7 @@ if (typeof document !== 'undefined') {
       await flushMicrotasks()
       const pending = supervisor.takePass2States()
       if (pending.size === 0) break
-      for (const [id, arr] of pending) prevStates.set(id, arr)
+      mergeStates(pending)
       render()
       if (round === 39) throw new Error('pass-2 did not drain after 40 rounds')
     }
@@ -497,6 +514,29 @@ if (typeof document !== 'undefined') {
           if (segments[i] !== expected) {
             throw new Error(`node ${n.id}: chain segment ${i + 1} "${segments[i]}" ≠ "${expected}"`)
           }
+        }
+      }
+    })
+
+    await runner.check('every node derives its pathKey into a displayable data-path (derived: { $: pathKey })', () => {
+      for (const n of allNodes()) {
+        const k = n.props?.['stress:layer']
+        // the DERIVED contract: every node's compiled state carries the bake
+        const state = supervisor.getResolvedStates(n.id)?.[0]
+        const baked = state?.props?.['data-path']
+        if (typeof baked !== 'string' || !baked.startsWith('root')) {
+          throw new Error(`node ${n.id}: resolved state lacks derived data-path (got ${JSON.stringify(baked)})`)
+        }
+        const segments = baked.split('/').filter(Boolean)
+        if (segments.length !== k + 1) {
+          throw new Error(`node ${n.id} (L${k}): data-path "${baked}" has ${segments.length} segments, expected ${k + 1}`)
+        }
+        // the DOM attr (standalone-emitted nodes — link def-covered children
+        // are re-typed from pass-1 props and legitimately lack it)
+        const el = adapter.wires.get(n.id)
+        const attr = el?.getAttribute?.('data-path') ?? null
+        if (method !== 'link' && attr !== baked) {
+          throw new Error(`node ${n.id}: element data-path "${attr}" ≠ derived "${baked}"`)
         }
       }
     })
