@@ -9,7 +9,18 @@ import { makeRoot, makeNode, childOf, hub } from '../helpers/fixtures.js'
 import { Supervisor } from '../../src/core/node.js'
 import { EventBridge } from '../../src/core/events.js'
 import { createClient } from '../../src/core/client.js'
-import type { Node } from '../../src/core/node.js'
+import type { Node, Node as NodeType } from '../../src/core/node.js'
+
+function compAnchors(node: NodeType): Array<{ role: string; target: unknown; value?: unknown; applyPath?: string }> {
+  return node.anchors
+    .filter((a) => (a.role === 'target' || a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string')
+    .map((a) => ({
+      role: a.role,
+      target: a.target,
+      ...(a.value !== undefined ? { value: a.value } : {}),
+      ...(typeof a.options.applyPath === 'string' ? { applyPath: a.options.applyPath } : {}),
+    }))
+}
 
 function legacyDoc(): LegacyInitialData {
   return {
@@ -91,5 +102,158 @@ describe('reverseTranslate — live tree → legacy format', () => {
     const header = out.template.root.children![0]!
     expect(header.handlers?.[0]?.name).toBe('click')
     expect(header.handlers?.[0]?.event).toBe('click')
+  })
+})
+
+describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized derived stripped)', () => {
+  it('K5 — consumer with applyPath reverses as { reference, target } and round-trips exactly', () => {
+    const doc: LegacyInitialData = {
+      template: {
+        root: {
+          type: 'app',
+          children: [{ type: 'pane', component: { reference: 'p10', target: 'props.name' } }],
+        },
+      },
+      content: [],
+    }
+    const t = translateLegacy(doc)
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.children![0]!.component).toEqual({ reference: 'p10', target: 'props.name' })
+    // re-translate reproduces the identical binding + apply path + synthesis
+    const again = translateLegacy(out)
+    expect(compAnchors(again.root.children[0]!)).toEqual([{ role: 'target', target: 'p10', applyPath: 'props.name' }])
+    expect(again.root.children[0]!.derived?.props?.name).toEqual({ $: 'bindings.p10' })
+    expect(again.warnings).toEqual([])
+  })
+
+  it('K5 — provider with applyPath reverses as { reference, value, target } and round-trips exactly', () => {
+    const doc: LegacyInitialData = {
+      template: {
+        root: {
+          type: 'app',
+          children: [{ type: 'pane', component: { reference: 'p10', value: 'v10', target: 'props.mood' } }],
+        },
+      },
+      content: [],
+    }
+    const t = translateLegacy(doc)
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.children![0]!.component).toEqual({ reference: 'p10', value: 'v10', target: 'props.mood' })
+    const again = translateLegacy(out)
+    expect(compAnchors(again.root.children[0]!)).toEqual([{ role: 'source', target: 'p10', value: 'v10', applyPath: 'props.mood' }])
+    expect(again.warnings).toEqual([])
+  })
+
+  it('K5 — anchors WITHOUT applyPath keep the current emission (consumer { reference }; provider { reference, value })', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: { reference: 'shell' },
+          children: [{ type: 'pane', component: { reference: 'panel', value: { variant: 'a' } } }],
+        },
+      },
+      content: [],
+    })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'shell' })
+    expect(out.template.root.children![0]!.component).toEqual({ reference: 'panel', value: { variant: 'a' } })
+  })
+
+  it('K5 — runtime duplex (source + name-target, no applyPath) emits { reference, value }; the name-target is DROPPED (legacy-unexpressible)', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', component: { reference: 'sess', value: 'v' } } },
+      content: [],
+    })
+    // the harness-style runtime consumer half on the same per-name link
+    t.root.addAnchor('target', 'sess', {}, t.root.anchors.find((a) => a.role === 'source')!.link)
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'sess', value: 'v' })
+    // the dropped name-target cannot be re-expressed — re-translate yields the provider only
+    const again = translateLegacy(out)
+    expect(again.root.anchors.some((a) => a.role === 'source' && a.target === 'sess')).toBe(true)
+    expect(again.root.anchors.some((a) => a.role === 'target' && a.target === 'sess')).toBe(false)
+    expect(again.warnings).toEqual([])
+  })
+
+  it('K7 — multi-binding nodes reverse as arrays; an applyPath consumer next to a provider is NEVER dropped', () => {
+    const doc: LegacyInitialData = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'a', value: 1, target: 'props.x' },
+            { reference: 'b', target: 'props.y' },
+          ],
+        },
+      },
+      content: [],
+    }
+    const t = translateLegacy(doc)
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual([
+      { reference: 'a', value: 1, target: 'props.x' },
+      { reference: 'b', target: 'props.y' },
+    ])
+    const again = translateLegacy(out)
+    expect(compAnchors(again.root)).toEqual([
+      { role: 'source', target: 'a', value: 1, applyPath: 'props.x' },
+      { role: 'target', target: 'b', applyPath: 'props.y' },
+    ])
+    expect(again.warnings).toEqual([])
+  })
+
+  it('K5 — same-reference runtime forks are legacy-unexpressible: first provider kept, rest dropped (no duplicate-reference on re-translate)', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', component: { reference: 'a', value: 1 } } },
+      content: [],
+    })
+    const link = t.root.anchors.find((a) => a.role === 'source')!.link
+    const dup = t.root.addAnchor('source', 'a', {}, link)
+    dup.value = 2
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'a', value: 1 })
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+  })
+
+  it('N1 — reverse strips the synthesized derived keys; authored derived stays; re-translate has no self-collision', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: { reference: 'a', value: 1, target: 'props.x' },
+          derived: { props: { authored: 'AUTH' } },
+        },
+      },
+      content: [],
+    })
+    // the live node carries BOTH the authored key and the synthesized bindings key
+    expect(t.root.derived?.props?.x).toEqual({ $: 'bindings.a' })
+    expect(t.root.derived?.props?.authored).toBe('AUTH')
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'a', value: 1, target: 'props.x' })
+    expect(out.template.root.derived).toEqual({ props: { authored: 'AUTH' } })
+    // re-translate: the target field re-synthesizes the key cleanly — no
+    // authored-derived collision, no component-target-skipped warning
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+    expect(compAnchors(again.root)).toEqual([{ role: 'source', target: 'a', value: 1, applyPath: 'props.x' }])
+    expect(again.root.derived?.props?.x).toEqual({ $: 'bindings.a' })
+    expect(again.root.derived?.props?.authored).toBe('AUTH')
+  })
+
+  it('K6/K5 — template.component (root) applyPath round-trips as { reference, value, target }', () => {
+    const doc: LegacyInitialData = {
+      template: { root: { type: 'app' }, component: { reference: 'rootp', value: 'rv', target: 'props.rt' } },
+      content: [],
+    }
+    const t = translateLegacy(doc)
+    expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'rootp', value: 'rv', target: 'props.rt' })
+    const again = translateLegacy(out)
+    expect(compAnchors(again.root)).toEqual([{ role: 'source', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
+    expect(again.warnings).toEqual([])
   })
 })

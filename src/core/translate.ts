@@ -13,6 +13,20 @@
 //   HandlerDef      { name, event?|phase?, body }         → node handlers
 //   clientConfig    run* gates                            → {adapter,persistence}
 //
+// Component bindings follow the K1–K8 kernel
+// (docs/specs/legacy-component-ref-only-review.md §2.2 + Appendix E):
+// `target` is the LOCAL `props.<key>` apply path (never a second component
+// name — the runtime duplex anchor shape is legacy-unexpressible); a single
+// binding or an ARRAY of bindings is accepted (K7); vacuous bindings warn +
+// skip (K3); duplicate reference/target warn + block pre-anchor (K8); the
+// apply path persists on the anchor options `applyPath` (K5) and reverse
+// emits it as the legacy `target` field again — consumer `{reference,
+// target}`, provider `{reference, value, target}`, emitted ONLY when the
+// anchor has an apply path; the synthesized derived keys (K2 `bindings.*`
+// machinery) are stripped on reverse (N1); the root's `template.component`
+// mirrors the node mapping incl. the source flip (K6); handler phase/body
+// guards warn + skip, never throw (K8, TR-F2).
+//
 // Children arrays attach via parent-child anchors (single-parent enforced);
 // component references become `target` anchors resolved by the existing
 // compile walk; placements become `placement` anchors.
@@ -20,8 +34,7 @@ import { Node, mintNodeId } from './node.js'
 import { Link } from './link.js'
 import { registerContentNode } from './registry.js'
 import { validateDerived } from './derived.js'
-import type { Anchor, DerivedDecl, LinkConfigNameHub, NodeBaseData } from './types.js'
-
+import type { Anchor, DerivedDecl, DerivedExpr, LinkConfigNameHub, NodeBaseData } from './types.js'
 export type LegacyHandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
 
 export interface LegacyHandlerDef {
@@ -41,14 +54,28 @@ export interface LegacyPlacementConfig {
 
 export interface LegacyComponentBinding {
   reference: string
+  /** LOCAL injection path on the host node — legacy target vocabulary
+   *  (§2.1: flat `props.<key>` is the only translate-time apply seam; other
+   *  vocabulary paths are recognition-only gaps). NOT a second component
+   *  name — the runtime duplex anchor shape is legacy-unexpressible (K1). */
   target?: string
   value?: unknown
+}
+
+/** K4 warnings channel — additive translate-time diagnostics; the translator
+ *  never throws for well-formed-but-invalid semantics (TR-F2). */
+export interface TranslatedWarning {
+  code: string
+  /** tree position, e.g. `root.children[2]` / `template.children[0]` /
+   *  `content[0].content[1]` / `root.handlers[0]` */
+  path?: string
 }
 
 export interface LegacyNodeData {
   type?: string
   placement?: LegacyPlacementConfig
-  component?: LegacyComponentBinding
+  /** single binding OR the K7 array form (multiple bindings per node) */
+  component?: LegacyComponentBinding | LegacyComponentBinding[]
   content?: unknown
   children?: LegacyNodeData[]
   props?: Record<string, unknown>
@@ -64,7 +91,7 @@ export interface LegacyNodeData {
 export interface LegacyTemplateData {
   root: LegacyNodeData
   children?: LegacyNodeData[]
-  component?: LegacyComponentBinding
+  component?: LegacyComponentBinding | LegacyComponentBinding[]
 }
 
 export interface LegacyContentPayload {
@@ -96,6 +123,8 @@ export interface TranslatedTree {
   nodes: Node[]
   /** unplaced content nodes (template.children + payload items) */
   content: Node[]
+  /** K4 — always-present additive warnings channel */
+  warnings: TranslatedWarning[]
   metadata?: unknown
   userData?: unknown
   clientConfig: { adapter: string; persistence: boolean }
@@ -136,7 +165,23 @@ function attachChild(parent: Node, child: Node, priority: number): void {
   child.addAnchor('child', child, { priority }, link)
 }
 
-function baseFrom(nodeData: LegacyNodeData): NodeBaseData {
+/** Focused per-warning console.warn + additive K4 channel entry. */
+function warn(warnings: TranslatedWarning[], code: string, path: string | undefined, detail: string): void {
+  warnings.push(path !== undefined ? { code, path } : { code })
+  const at = path !== undefined ? ` at ${path}` : ''
+  console.warn(`[legacy-translate] ${code}${at}: ${detail}`)
+}
+
+/** K8 AP13 — the closed 3-set; legacy lifecycle hook names are deliberately
+ *  excluded (no mapping), guarded at translate with `handler-phase-unknown`. */
+const LEGACY_HANDLER_PHASES: ReadonlySet<string> = new Set(['before-compile', 'after-compile', 'after-render'])
+
+function baseFrom(
+  nodeData: LegacyNodeData,
+  derived: DerivedDecl | undefined,
+  warnings: TranslatedWarning[],
+  path: string,
+): NodeBaseData {
   const base: NodeBaseData = {}
   if (typeof nodeData.type === 'string') base.type = nodeData.type
   if (nodeData.content !== undefined) base.content = nodeData.content
@@ -146,13 +191,41 @@ function baseFrom(nodeData: LegacyNodeData): NodeBaseData {
     // legacy handler bodies may arrive as FUNCTION SOURCE (a string) — the
     // backend stores loadable handler definitions as text and the render
     // process instantiates them at the translation boundary
-    base.handlers = nodeData.handlers.map(h => (typeof h.body === 'string' ? { ...h, body: instantiateHandlerBody(h.body) } : h))
+    const kept: LegacyHandlerDef[] = []
+    nodeData.handlers.forEach((h, i) => {
+      const hp = `${path}.handlers[${i}]`
+      // K8 AP13 — unknown lifecycle phase → warn + skip (never dispatch)
+      if (h.phase !== undefined && !LEGACY_HANDLER_PHASES.has(h.phase)) {
+        warn(warnings, 'handler-phase-unknown', hp, `phase "${String(h.phase)}" is not a supported lifecycle phase; handler definition skipped`)
+        return
+      }
+      // K8 NP11 — body neither function nor string → warn + skip (TR-F2
+      // downgrade of the old silent passthrough)
+      if (h.body !== undefined && typeof h.body !== 'function' && typeof h.body !== 'string') {
+        warn(warnings, 'handler-body-invalid', hp, 'body must be a function or a function-source string; handler definition skipped')
+        return
+      }
+      if (typeof h.body === 'string') {
+        // string → new Function instantiation; a body that fails to compile
+        // (syntax error or non-function evaluation) warns + skips — TR-F2:
+        // per-definition content is never a throw at translate
+        try {
+          kept.push({ ...h, body: instantiateHandlerBody(h.body) })
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e)
+          warn(warnings, 'handler-body-invalid', hp, `body string failed to instantiate (${reason}); handler definition skipped`)
+        }
+        return
+      }
+      kept.push(h)
+    })
+    base.handlers = kept
   }
-  if (nodeData.derived !== undefined) {
+  if (derived !== undefined) {
     // schema-boundary guard (derived-state.md §7): malformed legacy derived
     // data throws `derived-invalid` at translate, never reaches compile
-    validateDerived(nodeData.derived)
-    base.derived = nodeData.derived
+    validateDerived(derived)
+    base.derived = derived
   }
   return base
 }
@@ -178,6 +251,163 @@ function instantiateHandlerBody(src: string): (...args: unknown[]) => unknown {
   return fn
 }
 
+/** One planned component binding: the anchor to create + the (optional)
+ *  local-apply synthesis + the persisted apply path (K5 translate half). */
+interface BindingPlan {
+  reference: string
+  role: 'source' | 'target'
+  value?: unknown
+  applyPath?: string | undefined
+  synthesized?: DerivedDecl | undefined
+}
+
+/** K8 NP1/D7 — target-syntax edges (component-target-skipped): `props.`,
+ *  `props:name`, `props.name.`, bare `props`, dotted `props.a.b` keys. */
+
+/** K8 NP1 — flat known-vocabulary targets (recognition-only gap,
+ *  component-target-gap): every §2.1 vocabulary path EXCEPT `props.<key>`.
+ *  `css.style.<key>` / `handlers.<event>` add the dotted member rows. */
+const KNOWN_GAP_TARGETS: ReadonlySet<string> = new Set([
+  'type', 'content', 'children', 'props', 'css', 'css.id', 'css.classes', 'css.style', 'handlers', 'component',
+])
+
+/** K1/K2 — classify one `target` string: returns the apply path + synthesized
+ *  derived declaration for the flat `props.<key>` seam, or an empty apply for
+ *  a warn+skip / recognition-only gap (the anchor is ALWAYS kept). */
+function classifyTarget(
+  target: string,
+  reference: string,
+  authoredDerived: DerivedDecl | undefined,
+  warnings: TranslatedWarning[],
+  path: string,
+): { applyPath?: string; synthesized?: DerivedDecl } {
+  if (target.startsWith('props.')) {
+    const rest = target.slice('props.'.length)
+    if (rest.length === 0) {
+      warn(warnings, 'component-target-skipped', path, `target "${target}": empty props key (syntax edge); no apply`)
+      return {}
+    }
+    if (rest.includes('.')) {
+      warn(warnings, 'component-target-skipped', path, `target "${target}": dotted props keys have no write seam; no apply`)
+      return {}
+    }
+    const key = rest
+    if (key === 'id') {
+      warn(warnings, 'component-target-skipped', path, `target "${target}": props.id collides with the reserved derived key; no apply`)
+      return {}
+    }
+    if (reference.includes('.')) {
+      warn(warnings, 'component-target-skipped', path, `reference "${reference}" is dotted — bindings.<ref> synthesis is impossible; no apply`)
+      return {}
+    }
+    if (authoredDerived?.props?.[key] !== undefined) {
+      // K2 — authored-derived wins: skip synthesis, no warn (deliberate)
+      return {}
+    }
+    return { applyPath: target, synthesized: { props: { [key]: { $: `bindings.${reference}` } } } }
+  }
+  if (target === 'props' || target.startsWith('props:')) {
+    warn(warnings, 'component-target-skipped', path, `target "${target}": malformed props form (syntax edge); no apply`)
+    return {}
+  }
+  if (KNOWN_GAP_TARGETS.has(target) || /^css\.style\.[^.\s]+$/.test(target) || /^handlers\.[^.\s]+$/.test(target)) {
+    warn(warnings, 'component-target-gap', path, `target "${target}" is a valid legacy injection path with no translate-time seam (recognition only); no apply`)
+    return {}
+  }
+  warn(warnings, 'component-target-gap', path, `target "${target}" is not a known legacy target path; no apply`)
+  return {}
+}
+
+/**
+ * K1–K8 binding pipeline for ONE node's `component` value (single binding or
+ * K7 array). Runs the K3 vacuous filter and the K8 pre-anchor duplicate
+ * guards over the normalized list, then plans anchors + synthesis per
+ * binding. Never throws for binding content (TR-F2).
+ */
+function planBindings(
+  component: unknown,
+  authoredDerived: DerivedDecl | undefined,
+  warnings: TranslatedWarning[],
+  path: string,
+): { plans: BindingPlan[]; count: number } {
+  const plans: BindingPlan[] = []
+  if (component === undefined || component === null) return { plans, count: 0 }
+  // K7 array form + K3 Array.isArray carve-out: `component: []` is a valid
+  // empty multi-binding list, NOT a vacuous binding
+  const list: unknown[] = Array.isArray(component) ? component : [component]
+  const seenReferences = new Set<string>()
+  const seenTargets = new Set<string>()
+  for (const raw of list) {
+    const binding = (typeof raw === 'object' && raw !== null ? raw : null) as LegacyComponentBinding | null
+    const reference = binding?.reference
+    // K3 — vacuous trigger: reference must be a non-empty string
+    if (typeof reference !== 'string' || reference.length === 0) {
+      warn(warnings, 'component-binding-empty', path, 'binding lacks a non-empty string `reference`; no anchors created')
+      continue
+    }
+    // K8 — duplicate reference: keep first, block the rest pre-anchor
+    if (seenReferences.has(reference)) {
+      warn(warnings, 'component-duplicate-reference', path, `reference "${reference}" is already bound on this node; duplicate blocked`)
+      continue
+    }
+    seenReferences.add(reference)
+    const target = typeof binding!.target === 'string' && binding!.target.length > 0 ? binding!.target : undefined
+    // K8 — duplicate exact target path: keep first, block the rest pre-anchor
+    if (target !== undefined) {
+      if (seenTargets.has(target)) {
+        warn(warnings, 'component-duplicate-target', path, `target "${target}" is already bound on this node; duplicate blocked`)
+        continue
+      }
+      seenTargets.add(target)
+    }
+    const plan: BindingPlan = { reference, role: binding!.value !== undefined ? 'source' : 'target' }
+    if (binding!.value !== undefined) plan.value = binding!.value
+    if (target !== undefined) {
+      const t = classifyTarget(target, reference, authoredDerived, warnings, path)
+      plan.applyPath = t.applyPath
+      plan.synthesized = t.synthesized
+    }
+    plans.push(plan)
+  }
+  return { plans, count: plans.length }
+}
+
+/** Merge a plan's synthesized derived declarations into a base declaration
+ *  (authored-derived wins — existing keys are never overridden). */
+function mergeSynthesized(base: DerivedDecl | undefined, plans: BindingPlan[]): DerivedDecl | undefined {
+  let merged = base
+  for (const plan of plans) {
+    if (plan.synthesized?.props) merged = mergeDecl(merged, plan.synthesized)
+  }
+  return merged
+}
+
+/** Merge an extra declaration into a base one, skipping keys that already
+ *  exist (authored wins, no duplicate keys). */
+function mergeDecl(base: DerivedDecl | undefined, extra: DerivedDecl): DerivedDecl | undefined {
+  if (!extra.props) return base
+  const props: Record<string, DerivedExpr> = { ...(base?.props ?? {}) }
+  for (const [key, value] of Object.entries(extra.props)) {
+    if (!(key in props)) props[key] = value
+  }
+  return { props }
+}
+
+/** Create the component anchors for the planned bindings (source for a
+ *  provider, target for a consumer) and persist the K5 apply path. */
+function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): void {
+  for (const plan of plans) {
+    const link = hub.linkFor(plan.reference, 'component')
+    const options = plan.applyPath !== undefined ? { applyPath: plan.applyPath } : {}
+    if (plan.role === 'source') {
+      const a = node.addAnchor('source', plan.reference, options, link)
+      if (plan.value !== undefined) a.value = plan.value
+    } else {
+      node.addAnchor('target', plan.reference, options, link)
+    }
+  }
+}
+
 /**
  * Translate one legacy NodeData subtree into Nodes, attaching children via
  * parent-child anchors and materializing placement/component anchors.
@@ -187,9 +417,17 @@ function translateNodeData(
   data: LegacyNodeData,
   hub: LinkConfigNameHub,
   nodes: Node[],
-  opts: { asContentRoot?: boolean } = {},
+  warnings: TranslatedWarning[],
+  path: string,
+  opts: { asContentRoot?: boolean; extraDerived?: DerivedDecl } = {},
 ): Node {
-  const node = new Node(baseFrom(data), hub, mintNodeId(), opts.asContentRoot === true)
+  // component bindings (K1–K8): planned BEFORE construction so the
+  // synthesized derived merge rides the node's base data ("authored-derived
+  // wins", review doc §2.2 K2)
+  const { plans } = planBindings(data.component, data.derived, warnings, path)
+  let derived = mergeSynthesized(data.derived, plans)
+  if (opts.extraDerived) derived = mergeDecl(derived, opts.extraDerived)
+  const node = new Node(baseFrom(data, derived, warnings, path), hub, mintNodeId(), opts.asContentRoot === true)
   nodes.push(node)
 
   // placement (PlacementConfig) → placement anchor
@@ -199,33 +437,18 @@ function translateNodeData(
     node.addAnchor('placement', placement.placementName, {}, plink)
   }
 
-  // component binding (ComponentBinding) → provider/consumer anchors.
-  // A binding that carries a VALUE is a PROVIDER (translate.md §2): the node
-  // provides `reference` = value as a `source` anchor — or, when it also
-  // names a `target`, as a DUPLEX combo (source for `reference` + a `target`
-  // anchor for `target`, the self-providing-consumer shape). A binding with
-  // NO value is a plain `target` consumer.
-  const component = data.component
-  if (component && typeof component.reference === 'string') {
-    const consumed = typeof component.target === 'string' && component.target.length > 0 ? component.target : undefined
-    if (component.value !== undefined) {
-      const clink = hub.linkFor(component.reference, 'component')
-      const a = node.addAnchor('source', component.reference, {}, clink)
-      a.value = component.value
-      if (consumed) {
-        const tlink = hub.linkFor(consumed, 'component')
-        node.addAnchor('target', consumed, {}, tlink)
-      }
-    } else {
-      const clink = hub.linkFor(component.reference, 'component')
-      node.addAnchor('target', component.reference, {}, clink)
-    }
+  // K8 AP5/NP13 — targetPlacement on a component-bearing node: warn, field
+  // ignored (interim policy; the placement feed is a follow-up DECIDED)
+  if (plans.length > 0 && placement && typeof placement.targetPlacement === 'string' && placement.targetPlacement.length > 0) {
+    warn(warnings, 'component-target-placement', path, `targetPlacement "${placement.targetPlacement}" is ignored on component-bearing nodes`)
   }
+
+  applyPlans(node, plans, hub)
 
   // children (NodeData[]) → parent-child anchors in array order (priority)
   if (Array.isArray(data.children)) {
     data.children.forEach((childData, i) => {
-      const child = translateNodeData(childData, hub, nodes)
+      const child = translateNodeData(childData, hub, nodes, warnings, `${path}.children[${i}]`)
       attachChild(node, child, i)
     })
   }
@@ -247,18 +470,30 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   }
   const hub = opts?.hub ?? defaultHub()
   const nodes: Node[] = []
+  const warnings: TranslatedWarning[] = []
   const template = doc.template
 
+  // template.component binding on the root itself (K6/K7): planned before the
+  // root's construction so its synthesis rides the root's base data
+  const rootBinding = template.component
+  const rootPlan = planBindings(rootBinding, template.root.derived, warnings, 'root')
+  const rootSynthesis = mergeSynthesized(undefined, rootPlan.plans)
+
   // root with its own default children (stored in the root itself)
-  const root = translateNodeData(template.root, hub, nodes)
+  const root = translateNodeData(template.root, hub, nodes, warnings, 'root', {
+    ...(rootSynthesis !== undefined ? { extraDerived: rootSynthesis } : {}),
+  })
   attachToPermanentOwner(root, 'rootNode')
 
-  // template.component binding on the root itself
-  if (template.component && typeof template.component.reference === 'string') {
-    const clink = hub.linkFor(template.component.reference, 'component')
-    const a = root.addAnchor('target', template.component.reference, {}, clink)
-    if (template.component.value !== undefined) a.value = template.component.value
+  // K8 AP5/NP13 — targetPlacement on the root's component-bearing config
+  if (rootPlan.count > 0 && typeof template.root.placement?.targetPlacement === 'string' && template.root.placement.targetPlacement.length > 0) {
+    warn(warnings, 'component-target-placement', 'root', `targetPlacement "${template.root.placement.targetPlacement}" is ignored on component-bearing nodes`)
   }
+
+  // K6 — a value-carrying root binding is a SOURCE (provider) anchor; the
+  // dead-value target anchor of the pre-kernel translator is gone. A
+  // value-less binding stays a target consumer.
+  applyPlans(root, rootPlan.plans, hub)
 
   // content nodes: template.children + content payloads — UNPLACED (no
   // parent anchor). metadata/userData surfaced from the first payload.
@@ -268,25 +503,25 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   let metadata: unknown
   let userData: unknown
   if (Array.isArray(template.children)) {
-    for (const childData of template.children) {
-      const n = translateNodeData(childData, hub, nodes, { asContentRoot: true })
+    template.children.forEach((childData, i) => {
+      const n = translateNodeData(childData, hub, nodes, warnings, `template.children[${i}]`, { asContentRoot: true })
       registerContentNode(n)
       content.push(n)
-    }
+    })
   }
   if (Array.isArray(doc.content)) {
-    for (const payload of doc.content) {
+    doc.content.forEach((payload, p) => {
       if (!payload || typeof payload !== 'object' || !Array.isArray(payload.content)) {
         throw new Error('legacy-payload-mismatch: payload requires content: NodeData[]')
       }
       if (metadata === undefined) metadata = payload.metadata
       if (userData === undefined) userData = payload.userData
-      for (const contentData of payload.content) {
-        const n = translateNodeData(contentData, hub, nodes, { asContentRoot: true })
+      payload.content.forEach((contentData, i) => {
+        const n = translateNodeData(contentData, hub, nodes, warnings, `content[${p}].content[${i}]`, { asContentRoot: true })
         registerContentNode(n)
         content.push(n)
-      }
-    }
+      })
+    })
   }
 
   // clientConfig: legacy run* gates → adapter + persistence
@@ -298,7 +533,7 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
     if (cfg.runMonitoring === true) persistence = true
   }
 
-  return { root, nodes, content, metadata, userData, clientConfig: { adapter, persistence } }
+  return { root, nodes, content, warnings, metadata, userData, clientConfig: { adapter, persistence } }
 }
 
 export interface ReversePayloadGroup {
@@ -325,11 +560,34 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   if (node.content !== undefined) data.content = node.content
   if (node.props && Object.keys(node.props).length > 0) data.props = { ...node.props }
   if (node.css && Object.keys(node.css).length > 0) data.css = { ...node.css }
+  // component anchors FIRST — both the N1 derived strip and the K5 emission
+  // key off them (K5: the legacy `target` field is the persisted apply path)
+  const compAnchors = node.anchors.filter(
+    (a) => (a.role === 'target' || a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string',
+  )
   // the MERGED derived declaration ships flat (DECIDED — layers have no
   // legacy home; the round-trip is value-equivalent)
   const derived = node.derived
   if (derived !== undefined) {
-    data.derived = derived.props ? { props: { ...derived.props } } : {}
+    // N1 — strip the translate-synthesized K2 machinery: a derived key whose
+    // name matches a component anchor's applyPath `props.<key>` suffix AND
+    // whose value is the synthesized `{$: 'bindings.<ref>'}` shape was created
+    // at translate, never authored. Authored derived stays. (In every
+    // translate-reachable state synthesis and applyPath coincide — K2's
+    // authored-derived-wins carve-out skips BOTH — so key+shape match is
+    // exact; the shape check guards runtime-added anchors.)
+    const props: Record<string, DerivedExpr> = derived.props ? { ...derived.props } : {}
+    for (const a of compAnchors) {
+      const applyPath = a.options.applyPath
+      if (typeof applyPath !== 'string' || !applyPath.startsWith('props.')) continue
+      const key = applyPath.slice('props.'.length)
+      const v = props[key]
+      if (v !== undefined && typeof v === 'object' && v !== null && !Array.isArray(v)) {
+        const expr = v as { $?: unknown }
+        if (expr.$ === `bindings.${a.target}`) delete props[key]
+      }
+    }
+    data.derived = Object.keys(props).length > 0 ? { props } : {}
   }
   const rawHandlers = node.handlers as unknown as LegacyHandlerDef[] | undefined
   if (rawHandlers && rawHandlers.length > 0) {
@@ -345,24 +603,36 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
       return { name: h.name, ...(h.event ? { event: h.event } : {}), ...(h.phase ? { phase: h.phase } : {}), ...(body !== undefined ? { body } : {}) }
     })
   }
-  // component bindings back: a PROVIDER (source/duplex anchor with a value)
-  // emits `reference` + `value` (+ `target` for the consumed name when the
-  // node also consumes — the duplex shape); a plain consumer emits
-  // `{ reference }` (translate.md §2 mapping).
-  const compAnchors = node.anchors.filter(
-    a => (a.role === 'target' || a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string',
-  )
-  const provider = compAnchors.find(a => a.role === 'source' || a.role === 'duplex')
-  const consumer = compAnchors.find(a => a.role === 'target')
-  if (provider) {
-    const binding: LegacyComponentBinding = { reference: provider.target as string }
-    if (provider.value !== undefined) binding.value = provider.value
-    if (consumer) binding.target = consumer.target as string
-    else if (provider.role === 'duplex') binding.target = provider.target as string
-    data.component = binding
-  } else if (consumer) {
-    data.component = { reference: consumer.target as string }
+  // K5 — component bindings back, ONE binding per component anchor (in anchor
+  // order, preserving the K7 array form). The legacy `target` field is the
+  // persisted apply path, emitted ONLY when `options.applyPath` exists:
+  //   consumer + applyPath → { reference, target }
+  //   provider + applyPath → { reference, value, target }
+  //   no applyPath        → current emission ({ reference } / { reference, value })
+  // Two runtime-only anchor shapes are legacy-unexpressible and are DROPPED:
+  //   - a name-target (no applyPath) coexisting with a provider anchor — the
+  //     old two-name duplex is gone; `target` means apply path, never a
+  //     second component name (never emit a two-name duplex)
+  //   - a second anchor for an already-emitted reference — legacy rejects
+  //     duplicate references (K8 blocks them pre-anchor on re-translate), so
+  //     keep the first and drop the rest
+  const bindings: LegacyComponentBinding[] = []
+  const hasProvider = compAnchors.some((a) => a.role === 'source' || a.role === 'duplex')
+  const seenReferences = new Set<string>()
+  for (const a of compAnchors) {
+    const reference = a.target as string
+    const applyPath = typeof a.options.applyPath === 'string' ? a.options.applyPath : undefined
+    const isProvider = a.role === 'source' || a.role === 'duplex'
+    if (!isProvider && applyPath === undefined && hasProvider) continue
+    if (seenReferences.has(reference)) continue
+    seenReferences.add(reference)
+    const binding: LegacyComponentBinding = { reference }
+    if (isProvider && a.value !== undefined) binding.value = a.value
+    if (applyPath !== undefined) binding.target = applyPath
+    bindings.push(binding)
   }
+  if (bindings.length === 1) data.component = bindings[0]!
+  else if (bindings.length > 1) data.component = bindings
   const placement = node.anchors.find((a) => a.role === 'placement' && typeof a.target === 'string')
   if (placement) data.placement = { placementName: placement.target as string }
   const kids = node.children.filter((c) => !isContentRoot(c))

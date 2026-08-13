@@ -765,14 +765,19 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
 - **DECIDED (legacy source attachment — translate.md §2):** a legacy
   component binding that carries a VALUE is a PROVIDER, not a parked
   binding hint: `component: { reference, value }` (no `target`) translates
-  to a `source` anchor; `{ reference, value, target }` is the DUPLEX combo
-  (source for `reference` + target anchor for `target`); plain `reference`
-  stays a `target` consumer. `reverseTranslate` emits providers back
-  (`{ reference, value }` / `{ reference, value, target }`), and
-  `Node.clone` carries provider VALUES onto the clone (same convention as
-  `hydrateAnchor`), so a cloned data-declared provider resolves depth-0 at
-  itself (S-R2.6) — the fork-stress-data pages rely on this: the page
-  never attaches a single anchor (core-only + legacy data, as intended).
+  to a `source` anchor; plain `reference` stays a `target` consumer.
+  **AMENDED (K1–K8 kernel, landed — supersedes the pre-kernel duplex
+  reading):** `{ reference, value, target }` is NO LONGER a two-name duplex
+  — `target` is the LOCAL apply path (flat `props.<key>`; synthesized
+  `derived.props.<k> = { $: 'bindings.<ref>' }`, self-provider ⇒ own
+  value), the anchor persists it on `options.applyPath`, `component`
+  accepts a binding ARRAY (K7), and `reverseTranslate` emits `target`
+  back only when the apply path exists (K5; the two-name duplex anchor
+  shape is runtime-only and legacy-unexpressible). `Node.clone` carries
+  provider VALUES onto the clone (same convention as `hydrateAnchor`), so
+  a cloned data-declared provider resolves depth-0 at itself (S-R2.6) —
+  the fork-stress-data pages rely on this: the page never attaches a
+  single anchor (core-only + legacy data, as intended).
 - **DECIDED (emitter recursion):** `emitElements` (render-helpers) emits a
   def-covered consumer's `defChildren` UNCONDITIONALLY — the covered-skip
   only suppresses the consumer's STANDALONE element. A def-covered consumer

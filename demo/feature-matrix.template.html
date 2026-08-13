@@ -27,10 +27,9 @@
          envelope below.
       2. The harness completes the graph with the two things legacy data
          cannot express:
-           - component SOURCE anchors (session, theme ×2, loop providers) —
-             legacy `component.reference` is always a TARGET (consumer) anchor
-             (translate.md §2). [ASSUME-1 CORRECTED: `template.component` is
-             the ROOT's own target binding, NOT a provider.]
+           - component SOURCE anchors (theme ×2, loop providers) — the session
+             provider rides the DATA: a value-carrying `template.component` is
+             a SOURCE (provider) anchor (translate.md §2.1, kernel K6).
            - placement ATTACH: content roots are placed into their zones by
              adding parent-child anchors on the zones' family links. Content
              nodes never auto-attach — unplaced content stays out of the tree
@@ -42,9 +41,12 @@
          serialized anchors (S4.2) and re-renders.
 
     CORRECTED AUTHORING FINDINGS (see docs/DEMO-FEEDBACK.md for file:line detail):
-      F1  'template.component' is a target anchor on the root, not a provider.
-          The pane would otherwise never resolve 'session'. Fix: harness adds
-          the real source anchor.
+      F1  'template.component' was a target anchor on the root, not a
+          provider; the pane would otherwise never resolve 'session' and the
+          harness added the real source anchor. SUPERSEDED by kernel K6
+          (translate.md §2.1): a value-carrying root binding IS a provider —
+          the session source is now data-declared and the harness line is
+          gone.
       F2  Content nodes with placement: { placementName: 'theme' } do NOT act
           as component sources; placements and components are orthogonal.
           Fork providers must be real source/duplex anchors. Fix: root sources

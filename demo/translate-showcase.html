@@ -1,0 +1,173 @@
+<!--
+  translate-showcase — data-driven demo of the translate-layer kernel (K1–K8)
+
+  Blind-test WRITER artifact (AGENTS.md item 9, step a): authored from
+  documentation only. Contract sources:
+    docs/specs/translate.md ................ §1 (LegacyInitialData /
+                                         LegacyComponentBinding / TranslatedTree),
+                                         §2 (mapping rows), §2.1 (complete legacy
+                                         target spec: 13-path vocabulary, K1–K8
+                                         semantics, warn codes, reverse emission
+                                         post-K5), §5 (TR-H2 exhaustiveness gate)
+    docs/specs/legacy-component-ref-only-review.md .. K1–K8 kernel (§2.2),
+                                         §5 decisions, Appendix E (parity /
+                                         deliberate-exclusion reclassification,
+                                         guard-shape table E.2)
+    docs/specs/payload.md ................ R-2 (reverse target emission),
+                                         R-5 (round-trip, N1 strip-on-reverse)
+    docs/specs/derived-state.md .......... §3 DSL ({$: 'bindings.<ref>'}), §4
+                                         (applyDerived bake, null omission)
+    docs/specs/fork-stress-data.md ....... data-driven page pattern
+    docs/skills/designing-pages.md ........ §11/§12 (what data-driven pages are)
+    (original Preempt) docs/skills/components.md .. legacy vocabulary
+
+  Section -> translate.md row / review-doc kernel -> guard code -> intended result:
+
+  1. #array-card (root.children[0]) — §2.1 "Array form (REQUIRED feature parity
+     — post-K7)" + legal-matrix row 1 (distinct reference + distinct target =
+     LEGAL). component array of THREE legal bindings:
+       {reference: 'arrConsumer', target: 'props.apply-consumer'} — K1 consumer
+         + synthesis: derived.props['apply-consumer'] = {$: 'bindings.arrConsumer'}
+         -> resolved from the root source (K6) -> bakes the resolved value;
+       {reference: 'rootValue'} — plain consumer (TR-H2) — no warn (reference-only
+         keeps current behavior, review doc §5-A);
+       {reference: 'selfApply', value: 'self-applied', target: 'props.self-apply'}
+         — provider + LOCAL APPLY (translate.md §2 row: legacy "provide and
+         self-apply"; at a self-provider the applied value IS its own value).
+     No warnings. Guards: none (all legal).
+     NOTE (reverse): the plain name-target {rootValue} coexists with the
+     selfApply PROVIDER anchor on this node — legacy-unexpressible, so the
+     reverse DROPS the name-target (K5, landed: "a name-target (no apply path)
+     coexisting with a provider anchor is DROPPED — the reverse never emits a
+     two-name duplex", payload.md R-2). The apply-path bindings (arrConsumer /
+     selfApply) round-trip with `target` intact.
+
+  2. #consumer-card (root.children[1]) — §2 TR-H2 (plain reference -> target
+     anchor, consumer) consuming the root's depth-0 provider (template.component
+     value-bearing -> SOURCE, K6). Result: element text = resolved value
+     "root-provided" (scalar -> text seam, translate.md §2.1 "scalarBinding").
+     Also carries AUTHORED derived (derived-state.md §2) 'authored-bake' ->
+     baked 'authored-literal' (authored derived is NOT stripped on reverse —
+     N1/K5 strips only synthesized keys). Guard: none.
+
+  3. #dup-card (root.children[2]) — §2.1 anti-patterns + Appendix E.1/E.2:
+     duplicate reference / duplicate target within one binding array are
+     DELIBERATE-EXCLUSION -> block + warn (post-K8, pre-anchor):
+       binding 1 {dupRef -> props.keep1}        KEPT (bakes 'dup-ref-value')
+       binding 2 {dupRef -> props.keep2}        skipped (component-duplicate-reference)
+       binding 3 {dupTgt -> props.shared}       KEPT (bakes 'dup-tgt-value')
+       binding 4 {other  -> props.shared}       skipped (component-duplicate-target)
+     Guard codes: component-duplicate-reference + component-duplicate-target
+     (exactly one each). Result: kept bindings bake, dupes bake nothing.
+
+  4. #vacuous-card (root.children[3]) — K3: component {} (no reference) ->
+     warn component-binding-empty, NO anchors created, never throw (TR-F2).
+     Result: own content "vacuous-card-content" renders.
+
+  5. #empty-array-card (root.children[4]) — K3 Array.isArray carve-out (D3/N7):
+     component: [] is a VALID multi-binding form, NOT a vacuous binding — no
+     component-binding-empty warn. Result: own content renders.
+
+  6. #unresolved-card (root.children[5]) — K1 consumer {ghostRef ->
+     props.ghost} with NO provider: synthesis rides the per-arm derived
+     evaluation, missing binding resolves null -> derived key OMITTED
+     (derived-state.md §3/§4; DV-F2). Compile-time unresolved-reference
+     (S-R4.3); the node's OWN content "unresolved-content" renders. Guard: none
+     (no translate-time warn; count check: no code for this node).
+
+  7. #syntax-card (root.children[6]) — target-syntax normalization (D7):
+     'props.name.' (trailing dot) is a DELIBERATE-EXCLUSION edge form ->
+     block + warn, code component-target-skipped (K2 channel). The APPLY is
+     skipped (no synthesis, no bake); the reference remains a plain consumer
+     anchor (unresolved-reference at compile; own content renders).
+
+  8. #gap-card (root.children[7]) — unknown target path 'bogus.path' (outside
+     the closed 13-path vocabulary, translate.md §2.1 table) -> pre-anchor
+     vocabulary pass warn, code component-target-gap (NP1/N2, K8). The apply
+     is skipped (no bake); the reference remains a plain consumer anchor
+     (unresolved; own content renders).
+
+  9. #dotted-card (root.children[8]) — K2 synthesis carve-out: dotted reference
+     name 'dotted.ref.name' with a props.<key> target -> synthesis SKIPPED +
+     component-target-skipped (derived path keys reject dots,
+     derived-state.md §3); the consumer ANCHOR is KEPT (anchor names accept
+     dots, NP4) and resolves the root source — element text = 'dotted-value'.
+     Reverse (K5): no apply path was ever synthesized, so the anchor emits
+     reference-only ({reference: 'dotted.ref.name'}) and the round-trip
+     re-translates clean per R-5.
+
+  10. template.component (root providers) — K6 (value-carrying root bindings
+      become SOURCE providers; the value is published, not dead weight) + K7
+      (array form at template.component, translate.ts:257 fix). The five
+      providers rootValue / arrConsumer / dupRef / dupTgt / dotted.ref.name are
+      each consumed exactly once -> no forks (S-R2.6 depth-0 resolution).
+      NOTE: the root itself is NOT actionable (S-R2.5/F3 — each provider has a
+      same-name consumer in scope; the provider serves its consumers and emits
+      no standalone element), so the rendered tree is the 9 cards.
+
+  Warnings channel (K4): TranslatedTree.warnings: [{code, path}] is rendered
+  into <pre id="warnings"> so the guards are visible. Expected set (6 warns,
+  5 codes): component-binding-empty x1, component-target-skipped x2,
+  component-target-gap x1, component-duplicate-reference x1,
+  component-duplicate-target x1.
+
+  Reverse (K5 + payload.md R-2/R-5, page-side): reverseTranslate(translated.root)
+  -> apply path persists as legacy target (consumer {reference, target},
+  provider {reference, value, target}); anchors without an apply path keep the
+  pre-kernel emission; synthesized bindings.* derived is STRIPPED (N1, authored
+  derived stays); re-translating the reversed doc fires no
+  component-target-skipped / duplicate warnings.
+
+  The expected page (translate-showcase.expected.html) is the SAME envelope
+  rendered through the real SSRFragmentAdapter (PAR-5 parity) — the static
+  server fragment fills <div id="app"> and the markers are asserted against the
+  live render.
+
+  Emission note (observed via both adapters): synthesized/derived props bake as
+  BARE attributes (e.g. apply-consumer="arr-consumed"); the DOM adapter adds a
+  data-wire marker via el.dataset (SSR omits it). The page checks read each
+  attribute under BOTH names.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>translate-showcase</title>
+  <link rel="stylesheet" href="./demo.css">
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #222; }
+    #app { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; }
+    #app > div { border: 1px solid #bbb; border-radius: 6px; padding: 0.5rem 0.75rem; background: #fafafa; }
+    #warnings { white-space: pre-wrap; background: #fff7ed; border: 1px solid #f0c36d; border-radius: 6px; padding: 0.5rem; font-size: 12px; }
+    #sr-expected { white-space: pre-wrap; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem; font-size: 11px; }
+    #results { margin-top: 1rem; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>translate-showcase</h1>
+  <p>
+    Data-driven demo of the translate-layer kernel K1–K8: legacy <code>component</code>
+    arrays, <code>props.&lt;key&gt;</code> local apply paths (consumer / provider +
+    self-apply), root <code>template.component</code> providers, duplicate
+    reference/target blocking, vacuous-binding and target-syntax guards, and the
+    reverse round-trip. Specs: <code>docs/specs/translate.md</code> §2.1 +
+    <code>docs/specs/legacy-component-ref-only-review.md</code> (K1–K8).
+  </p>
+
+  <script id="preempt-initial-data" type="application/json">{"template":{"root":{"type":"app","props":{"id":"showcase-root"},"children":[{"type":"div","props":{"id":"array-card"},"component":[{"reference":"arrConsumer","target":"props.apply-consumer"},{"reference":"rootValue"},{"reference":"selfApply","value":"self-applied","target":"props.self-apply"}]},{"type":"div","props":{"id":"consumer-card"},"component":[{"reference":"rootValue"}],"derived":{"props":{"authored-bake":"authored-literal"}}},{"type":"div","props":{"id":"dup-card"},"content":"dup-card-content","component":[{"reference":"dupRef","target":"props.keep1"},{"reference":"dupRef","target":"props.keep2"},{"reference":"dupTgt","target":"props.shared"},{"reference":"other","target":"props.shared"}]},{"type":"div","props":{"id":"vacuous-card"},"content":"vacuous-card-content","component":{}},{"type":"div","props":{"id":"empty-array-card"},"content":"empty-array-card-content","component":[]},{"type":"div","props":{"id":"unresolved-card"},"content":"unresolved-content","component":[{"reference":"ghostRef","target":"props.ghost"}]},{"type":"div","props":{"id":"syntax-card"},"content":"syntax-card-content","component":[{"reference":"syntaxRef","target":"props.name."}]},{"type":"div","props":{"id":"gap-card"},"content":"gap-card-content","component":[{"reference":"gapRef","target":"bogus.path"}]},{"type":"div","props":{"id":"dotted-card"},"content":"dotted-card-content","component":[{"reference":"dotted.ref.name","target":"props.dot"}]}]},"component":[{"reference":"rootValue","value":"root-provided"},{"reference":"arrConsumer","value":"arr-consumed"},{"reference":"dupRef","value":"dup-ref-value"},{"reference":"dupTgt","value":"dup-tgt-value"},{"reference":"dotted.ref.name","value":"dotted-value"}]},"clientConfig":{"runInstantiation":false,"runMonitoring":true}}</script>
+  <script id="server-data" type="application/json">{"title":"translate-showcase","expectedWarnings":[{"code":"component-duplicate-reference","path":"root.children[2]"},{"code":"component-duplicate-target","path":"root.children[2]"},{"code":"component-binding-empty","path":"root.children[3]"},{"code":"component-target-skipped","path":"root.children[6]"},{"code":"component-target-gap","path":"root.children[7]"},{"code":"component-target-skipped","path":"root.children[8]"}],"expectedHtml":"<div id=\"array-card\" apply-consumer=\"arr-consumed\">arr-consumed</div><div id=\"consumer-card\" authored-bake=\"authored-literal\">root-provided</div><div id=\"dup-card\" keep1=\"dup-ref-value\" shared=\"dup-tgt-value\">dup-ref-value</div><div id=\"vacuous-card\">vacuous-card-content</div><div id=\"empty-array-card\">empty-array-card-content</div><div id=\"unresolved-card\">unresolved-content</div><div id=\"syntax-card\">syntax-card-content</div><div id=\"gap-card\">gap-card-content</div><div id=\"dotted-card\">dotted-value</div>"}</script>
+
+  <h2>Expected server fragment (SSRFragmentAdapter)</h2>
+  <pre id="sr-expected">&lt;div id="array-card" apply-consumer="arr-consumed"&gt;arr-consumed&lt;/div&gt;&lt;div id="consumer-card" authored-bake="authored-literal"&gt;root-provided&lt;/div&gt;&lt;div id="dup-card" keep1="dup-ref-value" shared="dup-tgt-value"&gt;dup-ref-value&lt;/div&gt;&lt;div id="vacuous-card"&gt;vacuous-card-content&lt;/div&gt;&lt;div id="empty-array-card"&gt;empty-array-card-content&lt;/div&gt;&lt;div id="unresolved-card"&gt;unresolved-content&lt;/div&gt;&lt;div id="syntax-card"&gt;syntax-card-content&lt;/div&gt;&lt;div id="gap-card"&gt;gap-card-content&lt;/div&gt;&lt;div id="dotted-card"&gt;dotted-value&lt;/div&gt;</pre>
+
+  <h2>Rendered tree</h2>
+  <div id="app"></div>
+
+  <h2>Translate warnings (K4 channel)</h2>
+  <pre id="warnings"></pre>
+
+  <section id="results"></section>
+
+  <script type="module" src="./translate-showcase.js"></script>
+</body>
+</html>

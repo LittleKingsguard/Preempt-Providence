@@ -138,24 +138,22 @@ export function showcaseLegacyData() {
                   // carries one provider at the root).
                   { type: 'div', props: { id: 'flavor-a' }, component: { reference: 'tenantflavor', value: 'alpha' }, css: { classes: ['chip'] } },
                   { type: 'div', props: { id: 'flavor-b' }, component: { reference: 'tenantflavor', value: 'beta' }, css: { classes: ['chip'] } },
-                  // duplex: reference + value + target → source AND target anchors
-                  // (translate.md §2). A duplex node's SOURCE half provides
-                  // `reference` to depth-0 consumers and its TARGET half consumes
-                  // `target` — the node itself renders from the resolved state
-                  // (binding = target arm; S-R2.6 scope caveat: an in-tree
-                  // source only serves its own subtree). With no depth-0
-                  // 'moodpanel' provider, the target half is the documented
-                  // unresolved-reference fail-state (api.md §4.3) — surfaced via
-                  // derived, own content still renders.
+                  // provide-and-self-apply (translate.md §2.1, K1): reference
+                  // + value + target:'props.<key>' → SOURCE anchor (self-
+                  // provider) + a translate-synthesized derived
+                  // `props.moodPanel = { $: 'bindings.mood' }` — the node's
+                  // own compiled props receive the resolved value ('calm'),
+                  // surfaced via derived (kernel K1/K2; the runtime duplex
+                  // anchor shape is legacy-unexpressible).
                   {
                     type: 'div',
                     props: { id: 'mood' },
-                    component: { reference: 'mood', value: 'calm', target: 'moodpanel' },
-                    content: 'duplex: source=mood(calm) / target=moodpanel (unresolved, no depth-0 provider)',
-                    derived: { props: { 'data-unresolved': { $: 'unresolved.length' } } },
+                    component: { reference: 'mood', value: 'calm', target: 'props.moodPanel' },
+                    content: 'self-apply: source=mood(calm) / props.moodPanel (synthesized derived)',
+                    derived: { props: { 'data-mood-panel': { $: 'bindings.mood' } } },
                   },
-                  // self-provider chip (distinct name so the duplex target's
-                  // 'moodpanel' probe does not fork-collide with it — S-R2.5)
+                  // self-provider chip (distinct name so the mood node's
+                  // apply-path probe does not fork-collide with it — S-R2.5)
                   { type: 'div', props: { id: 'mood-panel' }, component: { reference: 'moodpanelprobe', value: 'panel:ok' }, css: { classes: ['chip'] } },
                   // handlers: event handlers with STRING bodies on input + click
                   {
@@ -204,25 +202,28 @@ export function showcaseLegacyData() {
                     content: 'ghost (no provider -> unresolved)',
                     derived: { props: { 'data-unresolved': { $: 'unresolved.length' } } },
                   },
-                  // loop safety: a REAL borrow-walk cycle (api.md §4.2) — loop-a
-                  // provides loop.x and consumes loop.y; its child loop-b provides
-                  // loop.y and consumes loop.x. Resolution hops consumer → provider
-                  // → the provider's own targets → … and revisits a node already on
-                  // the walk path → the arm drops with reason 'loop' + a
-                  // 'circular-source' diagnostic (api.md §4.2 "Path loops → no
-                  // actionable state"). Dropped arms are NEVER rendered — the pair
-                  // is absent from the output while the page still renders
-                  // everything else (no hang).
+                  // loop safety: a REAL borrow-walk cycle (api.md §4.2) —
+                  // loop-a provides loop.x and consumes loop.y; its child
+                  // loop-b provides loop.y and consumes loop.x. The K7 array
+                  // form expresses provider + consumer on ONE node
+                  // (component: [{reference,value},{reference}]). Resolution
+                  // hops consumer → provider → the provider's own targets →
+                  // … and revisits a node already on the walk path → the arm
+                  // drops with reason 'loop' + a 'circular-source' diagnostic
+                  // (api.md §4.2 "Path loops → no actionable state"). Dropped
+                  // arms are NEVER rendered — the pair is absent from the
+                  // output while the page still renders everything else (no
+                  // hang).
                   {
                     type: 'div',
                     props: { id: 'loop-a' },
-                    component: { reference: 'loop.x', value: 'A', target: 'loop.y' },
+                    component: [{ reference: 'loop.x', value: 'A' }, { reference: 'loop.y' }],
                     content: 'loop-a (circular chain — arm dropped, never rendered)',
                     children: [
                       {
                         type: 'div',
                         props: { id: 'loop-b' },
-                        component: { reference: 'loop.y', value: 'B', target: 'loop.x' },
+                        component: [{ reference: 'loop.y', value: 'B' }, { reference: 'loop.x' }],
                         content: 'loop-b (circular chain — arm dropped, never rendered)',
                       },
                     ],
@@ -303,14 +304,14 @@ export function showcaseLegacyData() {
 export function showcaseServerData() {
   return {
     goals: [
-      'combined set: source/target/duplex components, fork multiplicity, derived bakes, css',
+      'combined set: source/target/self-apply components (K1), fork multiplicity, derived bakes, css',
       'isolation: unresolved fail-state, loop safety, derived DSL, placement, css, phase handler, containment',
     ],
     expected: {
       kpi: '4242',
       flavors: ['alpha', 'beta'],
-      mood: 'duplex',
-      moodPanel: 'panel:ok',
+      mood: 'calm',
+      moodPanel: 'calm', // provide-and-self-apply: synthesized derived props.moodPanel
       placement: 'lab-placement',
       loops: 'dropped', // circular-source pair (api.md §4.2): never rendered
     },
@@ -542,11 +543,11 @@ if (typeof document !== 'undefined') {
       if (!textOf(b).includes('beta')) throw new Error(`flavor-b text ${JSON.stringify(textOf(b))}`)
     })
 
-    await runner.check('duplex (source+target on one node): own content renders; target half = unresolved fail-state', () => {
+    await runner.check('self-apply (provide + local apply): source=mood(calm) bakes props.moodPanel via synthesized derived', () => {
       const mood = findById('mood')
       if (!mood) throw new Error('mood missing')
-      if (!textOf(mood).includes('duplex')) throw new Error(`mood text ${JSON.stringify(textOf(mood))}`)
-      if (Number(mood.getAttribute('data-unresolved') ?? 0) < 1) throw new Error('duplex target half not surfaced as unresolved')
+      if (!textOf(mood).includes('calm')) throw new Error(`mood text ${JSON.stringify(textOf(mood))}`)
+      if (mood.getAttribute('data-mood-panel') !== 'calm') throw new Error(`mood data-mood-panel=${mood.getAttribute('data-mood-panel')}`)
       const panel = findById('mood-panel')
       if (!textOf(panel).includes('panel:ok')) throw new Error(`mood-panel text ${JSON.stringify(textOf(panel))}`)
     })
@@ -558,7 +559,7 @@ if (typeof document !== 'undefined') {
       if (Number(g.getAttribute('data-unresolved') ?? 0) < 1) throw new Error(`ghost data-unresolved=${g.getAttribute('data-unresolved')}`)
     })
 
-    await runner.check('loop safety: circular A->B->A duplex chain drops as loop (never rendered), no hang', () => {
+    await runner.check('loop safety: circular A->B->A provider+consumer chain drops as loop (never rendered), no hang', () => {
       // api.md §4.2: a loop-terminated arm has NO actionable state — the pair is
       // absent from the DOM; the circular-source diagnostic is a compile outcome.
       if (findById('loop-a') || findById('loop-b')) throw new Error('dropped loop arms must never render')

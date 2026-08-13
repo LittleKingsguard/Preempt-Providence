@@ -67,7 +67,8 @@ const badge = childOf(panel, makeNode({ type: 'span', content: 'hi' }), 0)
 | Scenario | Test evidence |
 | --- | --- |
 | placement anchor materialized + renders | `translate.test.ts` TR-H3, demo T3 |
-| component binding → target anchor (+ value) | TR-H2 |
+| component binding → consumer target anchor / value-bearing SOURCE provider (+ `applyPath` when `target: 'props.<k>'` — K1/K2 self-apply); vacuous/duplicate bindings warn on the K4 channel, never throw | TR-H2, `translate.test.ts` K3/K4/K7/K8, `reverse.test.ts` K5/N1 |
+| `component` array form: N bindings per node (K7) | TR-H10, `translate.test.ts` K7 |
 | fork: N arms, distinct path keys | FRK-H2/F6, T12/T20, demo T6 |
 | fork-arm adoption in `childOrder` | a forked node emits `<nodeId>#<i>` arms, never a base-id element; a parent referencing a forked child must list the arm wires (emitter expands them, arm order). All arms are direct children — no per-fork wrapper; `#<i>` single-arm adoption is unsupported (feature-matrix-review.md §4.1) |
 | duplex self-resolution | FRK-H3, T9, probe 3 |
@@ -161,10 +162,22 @@ hard-blocked (`placement-target-blocked`), structural ops return `dirtied`.
 - **Legacy in** (`translateLegacy`): original backend NodeSchema → live
   graph. Root's own children attach; `template.children` + content payloads
   become unplaced content nodes; component/placement/handlers map to
-  anchors/handlers; `run*` gates → adapter/persistence.
+  anchors/handlers; `run*` gates → adapter/persistence. K1–K8 kernel: legacy
+  `component.target` is the LOCAL `props.<key>` apply path (never a second
+  name) — the anchor keeps `options.applyPath` and the node gains a
+  synthesized `bindings.*` derived read (self-provider ⇒ own value);
+  `component` accepts a binding ARRAY (K7); vacuous/duplicate/gap bindings
+  and unknown handler phases/bodies land on the additive `warnings` channel
+  (`translate.md` §2.1 guard list) — warn+skip, never throw (TR-F2).
 - **Reverse out** (`reverseTranslate`): live graph → backend NodeSchema.
   Reverses component/placement-induced tree state, keeps user edits.
-  `opts.payloads` emits each payload as its own ContentPayload.
+  `opts.payloads` emits each payload as its own ContentPayload. K5/N1 (reverse
+  unit): the legacy `target` field round-trips the anchor apply path
+  (`{reference, target}` consumer / `{reference, value, target}` provider —
+  emitted ONLY when `options.applyPath` exists); the translate-synthesized
+  derived keys (`bindings.*` machinery) are stripped on reverse (authored
+  derived stays); a runtime name-target next to a provider anchor is
+  legacy-unexpressible and dropped (never a two-name duplex).
 - **Payload lifecycle** (`src/core/payload.ts`): content payloads can be
   dropped (`dropPayload`), refreshed (`refreshPayload`), and appended to
   (`appendToPayload` — websocket comments; priorities continue via
@@ -216,8 +229,8 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/unit/render.test.ts` | serialization round-trip, fork keys, drop dispositions, SSR/ORD |
 | `tests/unit/adapters.test.ts` | concrete adapter layer: `DomAdapter`/`SSRFragmentAdapter`/render-helpers — §10 DOM/FRG/HLP/PARS matrices of `docs/specs/adapters.md` (fork-arm `wireKey` targeting, D4 undefined-drop, styles coalescing, hydrate seam, parity, compiled-fork `forkKey` ops, `on:*` `escapeAttr`, floating-fragment `toString`) |
 | `tests/unit/handlers.test.ts` / `phases.test.ts` | handler ctx/dispatch; phase ordering |
-| `tests/unit/translate.test.ts` | legacy schema → graph (in) |
-| `tests/unit/payload.test.ts` / `reverse.test.ts` | payload drop/refresh/append; reverse translation (out) |
+| `tests/unit/translate.test.ts` | legacy schema → graph (in); K5 apply-path persistence + K6 root flip (K5 emission contract: `tests/unit/reverse.test.ts`) |
+| `tests/unit/payload.test.ts` / `reverse.test.ts` | payload drop/refresh/append; reverse translation (out) — K5 target emission (consumer/provider/root `template.component`), runtime-duplex name-target drop, N1 synthesized-derived strip, K7 array-form reverse, no-warning re-translate round-trips |
 | `tests/integration/payload-flow.test.ts` | payload lifecycle through the managed channel; edits surviving refresh |
 | `tests/e2e/payload-refresh.test.ts` | full lifecycle: edit + append + refresh → in-place re-render → reverse with live state |
 | `tests/integration/api.test.ts` | ClientAPI T1–T25 (journal, events, forks, gates) |
@@ -230,11 +243,12 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/e2e/legacy-bootstrap.test.ts` | legacy JSON → full render |
 | `tests/e2e/component-handler.test.ts` | component-provided after-compile handler |
 | `tests/e2e/markdown-display.test.ts` | in-place render, focus retention, parent changes |
-| `demo/feature-matrix.js` (smoke) | one page exercising every surface: placements, components/forks, handlers, payload lifecycle (append/refresh/drop), managed updates, reverse translation, loop-safety, PAR-5 parity, SSR hydrate seam |
+| `demo/feature-matrix.js` (smoke) | one page exercising every surface: placements, components/forks, handlers, payload lifecycle (append/refresh/drop), managed updates, reverse translation, loop-safety, PAR-5 parity, SSR hydrate seam. The `session` provider is data-declared on the root via `template.component` (K6 — value-carrying root binding → SOURCE anchor); the root's runtime duplex consumer half of `session`, the theme-fork sources, and the loop providers are runtime-only additions (legacy-unexpressible — `target` is an apply path, never a second name, K1–K8) |
 | `demo/mode-toggle.js` (smoke) | same feature-matrix document driven through the three adapter modes — `?mode=ssr|client|markdown` (every build embeds both payloads, so static serves work; `scripts/serve-demo.mjs` serves per-mode too). **Demo-page test case — NOT expected real-world behavior.** SSR asserts the full well-formed server HTML was received (root-first, presentation ids present, balanced tags — the `validateHtmlShape` scan mirrors the e2e stack validator); markdown asserts the raw editor source is embedded verbatim for inspection alongside the live parsed display; client runs the shared harness with no mode-specific payload |
 | `demo/fork-stress.js` (smoke, depths 2–12) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Each level changes a different css property (L1 background-color, L2 border-style, L3 border-width, L4 text-decoration, cycling) with a value per sibling slot (demo-only helper `levelCss`, NOT a core API). Checks: per-layer node counts, rendered-count, css per-level property + slot pairs, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
 | `demo/fork-stress-data.js` (smoke, depths 2–12) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; self-contained `c.node` bodies fire ONCE per clone — the DERIVED `stress:expanded` (`children.length > 0`, declared on the prototypes, inherited by clones — derived-state.md §9.2) replaces the marker op, so no self-ops, no re-dirties: 4094 handler calls at d12, half the marker era). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes) + the three SINGLE-METHOD d12 variants `fork-stress-data-{placement,values,link}-d12.html` (spec §4): placement-only (pure clone structure), values-only (every prototype declares its scalar VALUE as a legacy `component` source — translate.md §2 — and every clone renders it as text), link-only (every prototype declares its component DEF as the source value; every clone's emission re-types the next layer — the recursive def chain, which exercises the emitter's covered-consumer `defChildren` path). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total, prototypes stay unplaced, css per-level property + slot pairs, `stress:kind` per layer mechanism, values/link method checks (per-node element text vs resolved source value / def content), DOM nesting vs graph children (all sources live on the prototypes, so the root emits like every node — walk from the root element), `stress:layers` ancestry chains (parent-baked at creation), derived idempotency (resolved-state `stress:expanded` true for non-leaves / false for leaves), incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` + `docs/specs/derived-state.md` §9.2 |
-| `demo/feature-showcase.js` (smoke) | the FEATURE SHOWCASE — ONE legacy envelope demonstrating the framework's advertised features both isolated and combined via ONLY the documented core interfaces + JSON handler/derived/anchor data (markdown above in §12). Confirmations: depth-0 scalar resolution into two consumers with derived `bindings.*` bakes, same-name self-provider multiplicity, duplex anchors + scoped unresolved fail-state, `circular-source` A↔B duplex borrow-walk loop pair (dropped at compile — never rendered — no hang), derived-DSL bakes, placement badge, on:input/on:click string-body handlers mutating a sibling preview, one-shot idempotent after-compile stamp via `runPhase`, throwing-handler containment, css id/classes/style, unplaced content payloads, clientConfig gates. PAR-5: the expected-output page is the same envelope through the real `SSRFragmentAdapter`. Checks walk the #app subtree (shim-compatible). Banner: `feature-showcase`. Spec/companion: `docs/framework-feature-summary.md` |
+| `demo/feature-showcase.js` (smoke) | the FEATURE SHOWCASE — ONE legacy envelope demonstrating the framework's advertised features both isolated and combined via ONLY the documented core interfaces + JSON handler/derived/anchor data (markdown above in §12). Confirmations: depth-0 scalar resolution into two consumers with derived `bindings.*` bakes, same-name self-provider multiplicity, provide-and-self-apply (`{reference, value, target: 'props.<k>'}` — K1/K2: the synthesized `props.moodPanel = {$: 'bindings.mood'}` bake reads the node's own published value), scoped unresolved fail-state, `circular-source` A↔B borrow-walk loop pair authored via the K7 ARRAY form (provider + consumer bindings on ONE node — `component: [{reference, value}, {reference}]`; dropped at compile — never rendered — no hang), derived-DSL bakes, placement badge, on:input/on:click string-body handlers mutating a sibling preview, one-shot idempotent after-compile stamp via `runPhase`, throwing-handler containment, css id/classes/style, unplaced content payloads, clientConfig gates. The two-name duplex anchor shape is runtime-only — no legacy data expresses it (K1–K8). PAR-5: the expected-output page is the same envelope through the real `SSRFragmentAdapter`. Checks walk the #app subtree (shim-compatible). Banner: `feature-showcase`. Spec/companion: `docs/framework-feature-summary.md` |
+| `demo/translate-showcase.js` (smoke) | the TRANSLATE-KERNEL showcase (K1–K8): every guard code exercised with its intended result (legal array-form card with K1 synthesis + provide-and-self-apply; plain consumer; duplicate reference + duplicate target pre-anchor blocks; vacuous `{}` warn+skip; `component: []` valid; unresolved consumer key-omission; `props.name.` syntax edge; unknown-path gap; dotted-reference carve-out), the K4 warnings channel rendered into the page, and the K5/N1 reverse round-trip (apply path persists as `target`, synthesized derived stripped, authored derived stays, re-translate fires no warnings). PAR-5 expected-output page via `SSRFragmentAdapter`. Banner: `translate-showcase`. Wired into `npm run demo:build` (page 18) + `demo:smoke` (seeded, `__translateShowcaseDone`, banner assertion) |
 
 ## 12. Demo pages (`npm run demo` → http://localhost:4173/demo/)
 
@@ -245,7 +259,11 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   (in-place, focus-safe), tests as content nodes.
 - `feature-matrix.html` — the single "every surface" document: a legacy
   envelope re-resolved from its serialized anchors (S4.2), session pane +
-  markdown editor via after-compile/input handlers, content/comments payload
+  markdown editor via after-compile/input handlers (the `session` provider
+  is data-declared on the root — `template.component` value binding → SOURCE
+  anchor, K6; the root's runtime duplex consumer half of `session` and the
+  theme-fork/loop providers are runtime-only additions, since `target` is a
+  local apply path and never a second component name), content/comments payload
   lifecycle (append websocket comment, refresh article in place, drop
   comments — sibling payload untouched), theme forks rendering 2 arms each,
   loop-safety drops, reverse translation round-trip, and PAR-5 parity
@@ -351,9 +369,16 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   a data-authoring mistake. Features: root tree/`children` (translate.md
   TR-H1), depth-0 scalar source consumed by two descendants (S-R2.6),
   same-name self-providers rendering their own values (multiplicity,
-  S-R2.5 — no coerced pick), duplex source+target anchors incl. the
+  S-R2.5 — no coerced pick), provide-and-self-apply (K1/K2: the `mood` node
+  carries `{reference, value, target: 'props.moodPanel'}` — its own published
+  value bakes into its compiled props via the synthesized `bindings.*`
+  derived read; the two-name duplex anchor shape is runtime-only and never
+  appears in legacy data), the scoped
   cross-scope unresolved fail-state (api.md §4.3), `unresolved-reference`
-  + `circular-source` A↔B duplex borrow-walk loop pair (both arms dropped at
+  + `circular-source` A↔B borrow-walk loop pair authored via the K7 ARRAY
+  form — loop-a declares `component: [{reference: 'loop.x', value: 'A'},
+  {reference: 'loop.y'}]` (provider + consumer on ONE node) and its child
+  loop-b mirrors the flip (both arms dropped at
   compile — never rendered — while the page still renders, no hang), derived DSL bakes (`bindings.*`,
   `children.length`, `pathKey`, `$concat`/`$if`/`$eq`/`$gt`, `placement`,
   `unresolved.length`), on:input/on:click string-body handlers
@@ -366,6 +391,23 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   page module mirrors the fork-stress-data discipline (core-only, checks
   walk the #app subtree so they run under the smoke shim too). Companion
   summary: `docs/framework-feature-summary.md`.
+- `translate-showcase.html` + `translate-showcase.expected.html` — the
+  TRANSLATE-KERNEL showcase: one legacy envelope exercising every K1–K8
+  behavior with its intended result, driven only through core
+  (`translateLegacy → reverseTranslate` + the render plumbing) with the
+  K4 warnings channel rendered into the page. Cards: legal K7 array form
+  (distinct reference + distinct target; K1 synthesis; provide-and-self-apply),
+  plain consumer of the root's K6 provider, duplicate reference + duplicate
+  target pre-anchor blocks, vacuous `{}` warn+skip (K3), `component: []`
+  valid empty multi-binding form, unresolved consumer with derived
+  key-omission (S-R4.3), `props.name.` syntax-edge skip (D7), unknown-path
+  gap warn (NP1), dotted-reference carve-out (K2), and the K5/N1 reverse
+  round-trip (apply path persists as `target`; synthesized derived stripped,
+  authored derived kept; re-translate fires no warnings). Built by
+  `scripts/translate-showcase-page.mjs` (PAR-5 expected page through the
+  real `SSRFragmentAdapter`). Banner: `translate-showcase`. Wired into
+  `npm run demo:build` (page 18) + `demo:smoke` (seeded,
+  `__translateShowcaseDone` awaited, banner assertion).
 
 ## 13. Running checks
 

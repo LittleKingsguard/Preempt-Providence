@@ -152,3 +152,11 @@ async function emitPage(templateName, outName, doc, serverData) {
   await writeFile(join(ROOT, 'demo', 'feature-showcase.expected.html'), expected)
   console.log('built demo/feature-showcase.expected.html (PAR-5 SSR expected output)')
 }
+
+// ---- page 18: translate-showcase (translate-layer kernel K1–K8, data-only) --
+// ONE legacy envelope exercises the translate kernel cards + the reverse
+// round-trip; the builder writes demo/translate-showcase.html (+ the PAR-5
+// expected page) at import.
+{
+  await import('./translate-showcase-page.mjs')
+}

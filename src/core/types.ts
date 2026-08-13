@@ -58,7 +58,14 @@ interface Link {
   setOrder(a: Anchor, priority: number): void
   destroy(): void
 }
-export interface AnchorOptions { priority?: number; order?: number }
+export interface AnchorOptions {
+  priority?: number
+  order?: number
+  /** K5 — the legacy local-apply path (`props.<key>`) a component binding's
+   *  resolved value is applied to; persisted so reverseTranslate can re-emit
+   *  `target` on the round-trip (translate.ts sets it at synthesis). */
+  applyPath?: string
+}
 export interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link; value?: unknown; owner?: import('./node.js').Node }
 // `value` is the provided/deployed cell for `source`/`duplex` anchors (api.md §4.1: source provides
 // its resolved value; duplex carries BOTH target and value). Resolvers read `anchor.value`.

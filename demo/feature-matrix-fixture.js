@@ -10,14 +10,15 @@
  *
  * The graph is built FROM the legacy envelope via `translateLegacy` (the real
  * boundary), then completed with the two things the boundary does not create:
- *   1. component SOURCE anchors (session/theme/loop providers) — legacy data
- *      only ever declares `target` (consumer) anchors;
+ *   1. component SOURCE anchors (theme ×2 / loop providers) — the session
+ *      provider rides the DATA (K6: `component` with a `value` IS a source
+ *      anchor); theme forks + loop providers are runtime-only additions;
  *   2. placement attachment — content roots are placed into their zones by
  *      adding parent-child anchors on the zones' family links (the explicit
  *      placement step; unplaced content stays out of the tree by design).
  */
 import { translateLegacy } from '../dist/core/translate.js'
-import { addComponentSource } from './demo-fixtures.js'
+import { addComponentSource, targetAnchor } from './demo-fixtures.js'
 
 /** Corrected legacy envelope driving the page (authoring notes in the
  *  template's doc block explain the corrections vs the first draft). */
@@ -150,9 +151,9 @@ export const demoData = {
         },
       ],
     },
-    // root-level component binding → target anchor on the root (a consumer).
-    // The provider is a harness-added SOURCE anchor (legacy data cannot
-    // express providers).
+    // root-level component binding WITH a value → SOURCE anchor on the root
+    // (K6: a legacy value-carrying root binding IS a provider — the harness
+    // no longer needs to add a session source; translate.md §2/§2.1).
     component: { reference: 'session', value: { user: 'ada', role: 'admin' } },
   },
   // unplaced content payloads — placed into their zones by the harness.
@@ -200,10 +201,16 @@ export function buildFeatureMatrix() {
   for (const n of t.nodes) byId.set(n.props?.id, n)
   const root = t.root
 
-  // component SOURCES (providers) — legacy data only declares consumers.
-  addComponentSource(root, 'session', { user: 'ada', role: 'admin' })
+  // component SOURCES (providers) — the session provider is data-declared
+  // (K6); theme forks + loop providers are runtime-only additions.
   addComponentSource(root, 'theme', 'theme: dark')
   addComponentSource(root, 'theme', 'theme: light')
+  // the ROOT's consumer half of 'session' (source+target on one node = the
+  // runtime duplex shape) is legacy-unexpressible post-K5 — the legacy array
+  // form cannot repeat a reference (K8 duplicate-reference guard) and `target`
+  // is a local apply path, not a component name. The runtime shape stays
+  // legal; the harness re-adds the consumer half imperatively.
+  targetAnchor(root, 'session')
   addComponentSource(byId.get('loop-cycle'), 'circ-b', '→')
   addComponentSource(byId.get('loop-nest'), 'circ-a', '→')
 

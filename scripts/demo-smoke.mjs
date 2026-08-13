@@ -214,6 +214,22 @@ for (const method of ['placement', 'values', 'link']) {
   ]).catch(() => {})
 }
 
+// ---- translate-showcase page: translate-layer kernel (K1–K8) + reverse ------
+// ONE legacy envelope; the module translates it, renders the 9 cards through
+// the core path, and checks the reverse round-trip (R-2/R-5).
+{
+  const pageHtml = await readFile(`${base}demo/translate-showcase.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/translate-showcase.js`).catch((e) => {
+    console.error('translate-showcase failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__translateShowcaseDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+}
+
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
 
@@ -278,6 +294,10 @@ for (const method of ['placement', 'values', 'link']) {
 }
 if (!banners.some((b) => b.includes('feature-showcase') && /0 failed/.test(b))) {
   console.error('feature-showcase page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('translate-showcase') && /0 failed/.test(b))) {
+  console.error('translate-showcase page did not complete its checks (banner missing)')
   process.exit(1)
 }
 

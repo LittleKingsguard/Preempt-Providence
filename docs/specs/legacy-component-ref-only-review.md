@@ -13,6 +13,22 @@ explain the correction and why it overturns that verdict. Companion context:
 `docs/specs/compile-horizon-review.md` (format model), `RENDER_PROCESS_NOTES.md`
 §3.1/§6.3/§10.10.1/§10.10.5.
 
+> **STATUS (K1–K8 LANDED — this review is now the historical record + kernel
+> contract):** the full kernel is implemented and green. Translate half
+> (K1–K4, K6–K8, K5 persistence `options.applyPath` — `planBindings` /
+> `classifyTarget` / `applyPlans`, `src/core/translate.ts`) and reverse half
+> (K5 emission + N1 strip-on-reverse — `nodeToLegacy`), behaviorally pinned by
+> `tests/unit/translate.test.ts` (52 tests) + `tests/unit/reverse.test.ts`
+> (K5/N1 unit, 8 tests). Everything §2.2 / §5 / Appendix E.3 marks kernel-scope
+> is LANDED as written. The follow-up DECIDEDs in §E.3 below stay open as listed
+> (emission-layer object fix, targetPlacement feed, payload.component, null
+> injection, >1-def emission guard); the "reverse strip-on-reverse (N1)" item
+> is CONFIRMED LANDED. Appendix B's spot-check line references are
+> PRE-KERNEL — the `translate.ts` they cite was replaced by the kernel; the
+> claims they verify are re-verified by the unit pins. Docs of record for the
+> landed behavior: `docs/specs/translate.md` (§2/§2.1/§5) + `docs/specs/payload.md`
+> (R-2/R-5).
+
 ## 1. What the proposal asks (corrected semantics — authoritative)
 
 1. Legacy `ComponentBinding.target` is **not** a second component name. It is
@@ -215,7 +231,7 @@ consumer equals the provider's resolved value.
 | --- | --- | --- |
 | **(i) Status quo** | `component: {}` / non-string reference invisible forever; `{reference:'',}` degenerate empty-name anchor; `target` field dead in value-less bindings (authors think it does something); root `template.component` value silently dropped | Zero change; zero risk; all contracts/tests/demos untouched |
 | **(ii) Kernel without reverse fix** (K1-K4, K6; no K5) | Same as (iii) minus the options-field work; BUT reverse output ships the synthesized derived as `bindings.*` derived data — legacy-doc pollution the backend cannot interpret; `target` never round-trips; R-2/R-5 hold only via the polluted channel | Local apply works; warnings surface works; no anchor/serialize changes |
-| **(iii) Full kernel** (K1-K6) | **Migration cost:** translate.ts — value-less branch synthesis + warnings array on `TranslatedTree` (+2 codes) + root `template.component` branch; types.ts — one `AnchorOptions` field (`applyPath?`); nodeToLegacy — emit `target` from the field; no derived.ts changes. Tests: translate.test.ts (synthesis; carve-out skips + warn; vacuous warn+ignore; reference-only unchanged; authored-derived wins; `props.id`; root flip; reverse target round-trip; warnings shape) + reverse.test.ts additions; ~6 doc files (translate.md, payload.md R-2/R-5 note, derived-state.md §3 note, designing-pages.md §11/§12, RENDER_PROCESS_NOTES.md §10.10 DECIDED, this review). Re-run loops: validation trio (AGENTS.md 4 — watch the demo:smoke profile totals; synthesis adds per-arm derived eval only for target-bearing nodes, so fork-stress/placement d12 totals must stay flat — flag if they move) + blind-test (item 9) + stress-loop (item 10). Runtime duplex anchors become legacy-unexpressible (doc note only — runtime unaffected) | `target` finally means something in value-less bindings (local apply of the RESOLVED value); value+target self-apply honored; silent data errors visible at the boundary (`component-binding-empty`); root provider asymmetry fixed; clean legacy round-trip (R-2/R-5); never throws; every legal binding shape preserved or upgraded; zero engine change |
+| **(iii) Full kernel** (K1-K6 at pass 2; scope extended to K1–K8 by the multi-binding clarification — Appendix E) | **Migration cost:** translate.ts — value-less branch synthesis + warnings array on `TranslatedTree` (+2 codes) + root `template.component` branch; types.ts — one `AnchorOptions` field (`applyPath?`); nodeToLegacy — emit `target` from the field; no derived.ts changes. Tests: translate.test.ts (synthesis; carve-out skips + warn; vacuous warn+ignore; reference-only unchanged; authored-derived wins; `props.id`; root flip; reverse target round-trip; warnings shape) + reverse.test.ts additions; ~6 doc files (translate.md, payload.md R-2/R-5 note, derived-state.md §3 note, designing-pages.md §11/§12, RENDER_PROCESS_NOTES.md §10.10 DECIDED, this review). Re-run loops: validation trio (AGENTS.md 4 — watch the demo:smoke profile totals; synthesis adds per-arm derived eval only for target-bearing nodes, so fork-stress/placement d12 totals must stay flat — flag if they move) + blind-test (item 9) + stress-loop (item 10). Runtime duplex anchors become legacy-unexpressible (doc note only — runtime unaffected) | `target` finally means something in value-less bindings (local apply of the RESOLVED value); value+target self-apply honored; silent data errors visible at the boundary (`component-binding-empty`); root provider asymmetry fixed; clean legacy round-trip (R-2/R-5); never throws; every legal binding shape preserved or upgraded; zero engine change |
 
 ## 7. Recommended landing plan
 
@@ -344,7 +360,9 @@ Key findings from the source review (all incorporated into translate.md §2.1):
    DECIDED before implementation).
 3. **`component` is an ARRAY in the legacy schema** (multiple bindings per
    node: `[{…,target:"css.style"},{…,target:"handlers.click"}]`). The
-   translator accepts one binding per node — array form is a declared gap.
+   translator accepts one binding per node — array form was a declared gap
+   at this appendix's pass; **reclassified as REQUIRED feature-parity
+   (kernel K7) by the multi-binding clarification — Appendix E**.
 4. **Empty placeholders are legitimate, not vacuous** (§"Applying
    Components" warning): `{reference:"MyComponent"}` without value/target is
    the documented placeholder pattern whose value arrives via SSR payload
@@ -379,10 +397,10 @@ text. No code changed in this pass.
 | # | Anti-pattern | Disposition | Why |
 | --- | --- | --- | --- |
 | AP1 | unresolved-reset (unresolved-reference state + derived null-omit) | REDUNDANT | S-R4.3 unresolved-reference + derived omit-on-null already cover it; a missing provider resolves null and the derived key is omitted. Correction: legacy deep-injects null WITH the key present; the seam omits null keys (derived.ts:242-243) — semantic loss carried as N3 |
-| AP2 | duplicate-target | REDUNDANT — decision divergence noted | single-binding translator: one binding per node ⇒ duplicates unexpressible. DIVERGENCE: legacy errors `[Node] Duplicate target component…` and LAST-wins; K2 synthesis FIRST-wins-silently (authored-derived wins) — needs a DECIDED; no warn path (N2 candidate) |
-| AP3 | array-on-type | REDUNDANT by unexpressibility ONLY — NOT by def-type rejection | `isLinkDef` (render-helpers.ts:287-290) returns false for array values and the scalar path renders nothing — nothing REJECTS arrays. The register must NOT claim a def-type rejection analog; rendered output just never expresses the pattern |
+| AP2 | duplicate-target | DELIBERATE-EXCLUSION → block+warn (**FLIPPED from REDUNDANT** — Appendix E.1) | expressible post-K7 (array form); K8 pre-anchor guard `component-duplicate-target` (warn+skip). Legacy errors `[Node] Duplicate target component…` and LAST-wins; K2 synthesis FIRST-wins-silently — the flip resolves the old N2 decision divergence |
+| AP3 | array-on-type | recognition-only, folds into the N2 gap warn (Appendix E.1) | `isLinkDef` (render-helpers.ts:287-290) returns false for array values and the scalar path renders nothing — nothing REJECTS arrays, so no def-type rejection analog. Post-K8 the `component-target-gap` warn surfaces it |
 | AP4 | self-loops | REDUNDANT | circular-source + cycle rollback in the new engine |
-| AP5 | targetPlacement | REDUNDANT | field ignored (translate.md §2: unknown fields never rejected); placement pipeline is placementName-keyed — targetPlacement has no consumer seam |
+| AP5 | targetPlacement | DELIBERATE-EXCLUSION → block+warn (**FLIPPED from REDUNDANT** — Appendix E.1) | `component-target-placement` warn + field ignored (translate.md §2: unknown fields never rejected); placement pipeline is placementName-keyed — targetPlacement has no consumer seam; the targetPlacement FEED is a separate follow-up DECIDED (NP13, Appendix E.3) |
 | AP6 | placement-bearing type-children | REDUNDANT | children of a node are stored on the node; no placement-bearing child store exists — seam absent |
 | AP7 | placeholder lookup | REDUNDANT (SAFE with caveat) | `value !== undefined` check has the value-set source-provider analog. Caveat: post-K1 the synthesized `bindings.<ref>` read resolves through the consumer's family walk — an UNPLACED payload provider is not in it (translate.md §2.1 placeholder caveat) |
 | AP8 | unmapped handler table | REDUNDANT | source-anchor wiring replaces the legacy table |
@@ -390,7 +408,7 @@ text. No code changed in this pass.
 | AP10 | ancestor drop-zone dup | REDUNDANT | shared walk + depth cap |
 | AP11 | orphaned content | REDUNDANT | unplaced state (S1.1) + payload-owned registration (registry.ts `registerContentNode`) |
 | AP12 | runtime handler compile | REDUNDANT | bodies instantiate at translate (`new Function`), never at dispatch |
-| AP13 | invented phase keys | STILL-VALID | `phase: string` unvalidated, never dispatches — `LegacyHandlerPhase` union exists but translation carries raw strings; no translate-time validation (warn-coverage gap, D2-adjacent) |
+| AP13 | invented phase keys | DELIBERATE-EXCLUSION → block+warn (Appendix E.1) | `phase: string` unvalidated, never dispatches — `LegacyHandlerPhase` is a closed 3-set (translate.ts:25) but translation carries raw strings; post-kernel translate-time guard `handler-phase-unknown` (no compile-time surface exists — the guard must live at translate) |
 | AP14 | DOM-input stash race | STILL-VALID | virtual tree is the source of truth; no DOM-input path |
 | AP15 | style edits | REDUNDANT | state-slice layers (`Css.merge`) |
 | AP16 | hardcoded parent jumps | STILL-VALID | getter still exists (node.parent); documented anti-pattern, no removal |
@@ -441,30 +459,179 @@ text. No code changed in this pass.
 
 ### D.5 Standing decision register
 
-**The K1–K6 kernel fixes** — NP1/NP3/NP8/NP10/NP12, D1/D2/D3 (as scoped in §2.2):
-K1 mapping fix (NP1 partial, NP3 partial, NP12 partial), K2 carve-outs +
-`component-target-skipped` (NP4, NP12 partial), K3 vacuous trigger +
-`component-binding-empty` (NP12; needs the D3/N7 array carve-out), K4 warnings
-channel (NP1 partial — only the two codes), K5 reverse persistence +
-synthesized-strip-on-reverse (NP8, N1), K6 root `template.component` source
-flip (NP10).
+**The K1–K8 kernel fixes** — NP1/NP3/NP8/NP10/NP12, D1/D2/D3 (as scoped in
+§2.2): K1 mapping fix (NP1 partial, NP3 partial, NP12 partial), K2 carve-outs
++ `component-target-skipped` (NP4, NP12 partial; D7 target-syntax edges), K3
+vacuous trigger + `component-binding-empty` (NP12; `Array.isArray` carve-out
+so `component: []` is not misdiagnosed — D3/N7), K4 warnings channel (NP1
+partial), K5 reverse persistence + synthesized-strip-on-reverse (NP8, N1), K6
+root `template.component` source flip (NP10). **K7/K8 added by the
+multi-binding clarification — array form (NP2) and the duplicate
+reference/target guards move INTO the kernel scope; this register is
+superseded by Appendix E.3.**
 
 **Follow-up DECIDEDs required** (each before its feature can land; order
 arbitrary):
 
 1. **Array form (NP2/D3)** — multi-binding per node; `Array.isArray` carve-out
-   + warn code (`component-array-unsupported` candidate).
-2. **Non-props targets (NP1/NP5/NP9)** — `component-target-gap` warn code (N2);
-   object-value baking stays documented until then.
+   + warn code (`component-array-unsupported` candidate). **SUPERSEDED — the
+   array form is kernel K7 (Appendix E.3); `component-array-unsupported` is
+   retired (the form is supported, not warned).**
+2. **Non-props targets (NP1/NP5/NP9)** — `component-target-gap` warn code
+   (N2); object-value baking stays documented until then. **SUPERSEDED —
+   `component-target-gap` is DECIDED and lands in K8's pre-anchor vocabulary
+   pass (Appendix E.3); the NP5/NP9 emission-layer object fix remains a
+   follow-up DECIDED.**
 3. **ContentPayload.component (N4)** — read it, or declare payload-level
-   bindings a permanent drop with a warning.
-4. **Lifecycle-phase mapping (N5)** — components.md numbering vs PhaseRegistry
-   4/5, worker-name canonical.
-5. **Reactive applied-value semantics (NP7)** — per-pass re-evaluation vs
-   one-shot injection; choose and pin.
+   bindings a permanent drop with a warning. TODO.
+4. **Lifecycle-phase mapping (N5)** — **DECIDED: ignored, not supported.**
+   Legacy lifecycle names are deliberately excluded; `handler-phase-unknown`
+   warn at translate (K8). No mapping.
+5. **Reactive applied-value semantics (NP7)** — DECIDED: keep per-pass
+   reactive evaluation (divergence-in-favor); documented, no action.
 6. **Null injection (N3)** — key-present-null on the seam, or document the
-   loss as accepted.
-7. **targetPlacement routing (NP13)** — wire the legacy routing field or close
-   it as permanently unexpressible.
+   loss as accepted. TODO.
+7. **targetPlacement routing (NP13)** — interim keep-unplaced + warn is
+   DECIDED; feed wiring TODO.
 8. **Reverse strip-on-reverse (N1)** — folded into K5; confirm at kernel
    implementation.
+
+---
+
+## Appendix E — Feature-parity & deliberate-exclusion reclassification (multi-binding clarification)
+
+Step-3 CHANGE-ANALYSIS reclassification (this pass, over Appendix D). Trigger:
+the authoritative format clarification — **"Multiple components are allowed
+on the same prop in legacy (and this should have feature parity), but not
+with the same reference or target."** Consequences: the legacy `component`
+ARRAY (multiple bindings per node) is a **REQUIRED feature-parity item**;
+within one node's binding array, a duplicate REFERENCE or duplicate TARGET is
+deliberately-unsupported bad practice that must be blocked and warned
+against. This appendix supersedes the Appendix D rows it touches (D.1
+AP2/AP3/AP5/AP13, D.5 register items 1-2) and the pass-2 §6 K1-K6 costing.
+No engine code changed — this is a contract reclassification; implementation
+lands with the K1–K8 kernel on user go-ahead (TDD order, §7).
+
+**Guard shape (all new guards):** translate-time, warn+skip, never throw
+(TR-F2), on the K4 additive warnings channel — prerequisite. Duplicate
+detection MUST run **pre-anchor** (before any anchor is created for the
+array): compile is blind — a duplicate target silently last-wins
+(`resolve.ts:239`) and two providers on one name produce phantom-forks
+(stress probes C2/C4).
+
+### E.1 Three-bucket reclassification
+
+**FEATURE-PARITY** (claimed as parity — scoped):
+
+| Item | Scope / status |
+| --- | --- |
+| NP2 array form | REQUIRED parity — graph-level N bindings per node + `props.<key>` apply paths only. Translate-only change: the engine already supports N component anchors per node (only `child` is restricted, `node.ts:416-419`) and compile cross-products multiple target names (`node.ts:651-666`, `resolve.ts:186-199`); today `translate.ts:209` + `template.component` `:257` skip arrays silently. Kernel **K7** |
+| NP5/NP9 emission-layer | object values bake `[object Object]` via `String()` coercion in both adapters — emission-layer parity gap, confirmed. Accepted for now; follow-up DECIDED (emission-layer object fix) |
+| N3 null (scoped) | null-injection loss confirmed: `applyDerived` omits null keys (`derived.ts:242-243`), `publishOwn` publishes null (`:644`) but the bake drops it. Accepted known gap; follow-up DECIDED |
+| NP13 feed | `targetPlacementResolution` phase exists (`pipeline.ts:78`) but translate never feeds it (`translate.ts:196-200` reads `placementName` only). Interim policy DECIDED: keep-unplaced + warn (`component-target-placement`); auto-attach at the boundary is a graph-mutation policy call, deferred to the kernel. Feed wiring = follow-up DECIDED |
+| N4 payload component | `ContentPayload.component` declared but never read (`translate.ts:277-290`) — payload-level bindings dropped at translate. Follow-up DECIDED |
+| N5 phase mapping | doc-level — legacy components.md Phase 3/4 vs PhaseRegistry 4/5, worker NAMES canonical; full lifecycle mapping is a documentation DECIDED |
+| NP6 placeholder semantics | modern semantics ARE the parity (unplaced provider not in family walk; in-tree same-name forks — api.md F4); documented, no machinery |
+| NP7 per-pass | DECIDED: **keep reactive** — synthesized-derived re-evaluation overrides handler-layer writes every pass (`applyDerived` spreads after `cs.props`, `derived.ts:246`); one seam, documented as divergence-in-favor. One-shot parity would need new machinery — rejected |
+
+**DELIBERATE-EXCLUSION → block + warn** (never claimed as parity; all
+translate-time, warn+skip, never throw — TR-F2, on the K4 channel):
+
+| Item | Code / mechanism |
+| --- | --- |
+| duplicate reference (new) | `component-duplicate-reference` — pre-anchor (K8) |
+| duplicate target (AP2 FLIPPED: REDUNDANT → DELIBERATE-EXCLUSION) | `component-duplicate-target` — pre-anchor (K8); legacy `[Node] Duplicate target component…` now expressible + blocked |
+| AP3 array-on-type | recognition-only — nothing rejects arrays, `isLinkDef` renders nothing for array values; folds into the N2 gap warn (`component-target-gap`) |
+| AP5 targetPlacement-on-component | `component-target-placement` — warn + field ignored (FLIPPED from REDUNDANT) |
+| NP12 vacuous | `component-binding-empty` (K3, existing) |
+| D7 syntax edges | `component-target-skipped` (K2 existing skip+warn channel; `props.`, `props:name`, `props.name.`, bare `props`) |
+| NP1 unknown target path | `component-target-gap` (N2 code — now DECIDED), pre-anchor vocabulary pass (K8) |
+| AP13 unknown phase | `handler-phase-unknown` — translate-time (closed 3-set, `translate.ts:25`; raw legacy names never dispatch — no compile-time surface) |
+| NP11 body invalid | `handler-body-invalid` — TODAY's non-function-body THROW is DOWNGRADED to warn+skip (TR-F2); flagged kernel change |
+| AP4 self-loops | existing engine circular-source + cycle rollback (no new code) |
+
+**ADVISORY** (documented, no block/warn): AP14 (DOM-input stash race), AP16
+(hardcoded parent jumps), AP17 (template-content blur). AP6 stays REDUNDANT
+(the anchor model has no subtree-replacement harm — no flip).
+
+### E.2 Legal/illegal matrix + guard-shape table
+
+**Legal/illegal matrix** (one node's binding array — pinned):
+
+| Binding set | Verdict | Mechanism |
+| --- | --- | --- |
+| distinct reference + distinct target | LEGAL | anchor + K2 synthesis per binding |
+| same reference (any target) | ILLEGAL → block + warn | `component-duplicate-reference` |
+| distinct references + same EXACT target path | ILLEGAL → block + warn | `component-duplicate-target` |
+| distinct references + same family, different paths (`props.x` + `props.y`) | LEGAL | K2 synthesis handles |
+| `css.*` family, different paths | legal legacy but NO seam | excluded from parity claims |
+
+**Guard-shape table** (K4 additive channel is the prerequisite for every
+translate-time guard; per-binding warn+skip, never throw — TR-F2):
+
+| Guard | Code | Pre-anchor | Time |
+| --- | --- | --- | --- |
+| duplicate reference | `component-duplicate-reference` | YES | translate (K8) |
+| duplicate exact target path | `component-duplicate-target` | YES | translate (K8) |
+| unknown target path | `component-target-gap` | YES | translate (K8 vocabulary pass) |
+| target-syntax edges (D7) | `component-target-skipped` | YES | translate (K2 channel) |
+| vacuous binding | `component-binding-empty` | YES | translate (K3; `Array.isArray` carve-out first) |
+| targetPlacement on component | `component-target-placement` | — | translate |
+| unknown handler phase | `handler-phase-unknown` | — | translate |
+| non-function handler body | `handler-body-invalid` | — | translate (throw→warn downgrade) |
+| >1 def-shaped binding | `component-multiple-definitions` | n/a | emission (render) — NOT on the K4 channel |
+
+### E.3 Partial-parity scoping, emission decisions, updated register
+
+**Partial parity:** full 13-path parity is NOT claimed. `type` / `content`:
+PARTIAL — value-shape seams only (def→re-type via `isLinkDef`, scalar→text
+via `scalarBinding`, render-helpers.ts:270-277 / :221); path-level injection
+not implemented. `handlers.<event>`: PARTIAL — **NO engine seam**; the
+component-handler e2e wires the resolved handler MANUALLY
+(`tests/e2e/component-handler.test.ts:101`, `panel.addLayer`) — no engine
+code moves a binding value into `node.handlers`; claiming full parity there
+would be a CATASTROPHIC over-claim. `css.*` family: excluded from the parity
+claim entirely.
+
+**Emission first-wins (legal multi-binding):** `scalarBinding` picks the
+first scalar (`render-helpers.ts:270-277`) and `isLinkDef` the first def
+(`:221`) — 2+ def-shaped bindings on one node silently drop the rest → new
+guard: >1 def → warn (`component-multiple-definitions`); scalar text
+first-wins is documented as intended (no warn).
+
+**NP3/NP7 applied-value semantics — DECIDED: keep reactive.** The synthesized
+read re-evaluates every compile pass and overrides handler-layer writes
+(`applyDerived` spreads after `cs.props`, `derived.ts:246`) — documented as a
+divergence-in-favor (fresh value each pass beats stale one-shot injection);
+one-shot parity would require new machinery and is rejected.
+
+**Updated standing-decision register** (supersedes D.5):
+
+Kernel scope — now **K1–K8**: K1 mapping fix, K2 synthesis carve-outs, K3
+vacuous trigger, K4 warnings channel, K5 reverse persistence, K6 root
+`template.component` source flip (all unchanged), plus —
+
+- **K7 — array form (NP2):** translate accepts `component:
+  LegacyComponentBinding[]` (graph-level N bindings per node + `props.<key>`
+  apply paths only; `component: []` is valid — K3's `Array.isArray` carve-out).
+  Translate-only; no engine change.
+- **K8 — pre-anchor guard pass:** `component-duplicate-reference` +
+  `component-duplicate-target` (block+warn), `component-target-gap` (NP1/N2
+  code, decided), `component-target-skipped` (D7 syntax edges). The remaining
+  translate-time guards land with the kernel's K4-channel work: the NP11
+  body-invalid throw→warn downgrade (flagged kernel change, TR-F2
+  compliance), `handler-phase-unknown` (AP13), `component-target-placement`
+  (AP5 block+warn + NP13 interim warn).
+
+Follow-up DECIDEDs (stay open; each needs its own DECIDED before landing):
+emission-layer object fix (NP5/NP9 — `[object Object]` bake), targetPlacement
+feed (NP13 — interim keep-unplaced + warn), payload.component (N4), null
+injection (N3), emission >1-def guard (`component-multiple-definitions`).
+**Reverse strip-on-reverse (N1 — folded into K5): CONFIRMED LANDED** — the
+synthesized `bindings.*` derived keys are stripped in `nodeToLegacy` and the
+K5/N1 reverse unit (`tests/unit/reverse.test.ts`) pins the round-trip
+(authored derived stays; re-translate fires no warnings).
+**N5 lifecycle-phase mapping: DECIDED — legacy lifecycle names (e.g.
+`beforeAssembly`, `beforePreprocess`, `afterAssembly`) are deliberately NOT
+supported in the new version; no mapping table is provided. The translate-time
+`handler-phase-unknown` guard (K8) warns and the binding is skipped.**

@@ -27,11 +27,12 @@
     1. Tree building             template.root.children (array order = priority) -- translate.md §2 TR-H1
     2. Components (values/link)  #ops: root component binding (depth-0 source),
                                  kpi-a/kpi-b (target, shared per-name link TR-2),
-                                 mood (duplex), mood-panel                    -- translate.md §2 TR-H2
+                                 mood (provide + self-apply to props.moodPanel)  -- translate.md §2 TR-H2 / §2.1 (K1)
     3. Fork multiplicity         #flavor-a/#flavor-b same-name self-providers
                                  (each renders its OWN value — no coerced pick) -- api.md §4.2 / S-R2.5
     4. Fail-states               #ghost unresolved-reference; #loop-a/#loop-b
-                                 duplex borrow-walk cycle -> circular-source,
+                                 borrow-walk cycle (K7 array form: provider +
+                                 consumer bindings per node) -> circular-source,
                                  dropped, never rendered (page still renders)   -- api.md §4.3/§4.2
     5. Derived state (DSL)       #ops/#dsl-card/#kpi-a/#cmd-echo:
                                  children.length, pathKey, bindings.<ref>,

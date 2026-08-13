@@ -519,7 +519,10 @@ export async function runFeatureMatrixTests({
     }
     const again = translateLegacy(out)
     if (!again.content.some((c) => c.content === 'breaking news')) throw new Error('reversed doc round-trips (article missing)')
-    if (!again.root.anchors.some((a) => a.role === 'target' && a.target === 'session')) throw new Error('template.component reference lost')
+    // K6: the value-carrying root binding round-trips as a SOURCE (provider)
+    // anchor — reverse emits { reference, value }, translate re-creates the
+    // root provider (translate.md §2/§2.1, kernel K6)
+    if (!again.root.anchors.some((a) => a.role === 'source' && a.target === 'session')) throw new Error('template.component provider lost')
   })
 
   // ------------------------------------------------------------------
