@@ -198,6 +198,22 @@ for (const method of ['placement', 'values', 'link']) {
   ]).catch(() => {})
 }
 
+// ---- feature-showcase page: one legacy envelope, every feature, data-only ---
+// The page input is a LEGACY JSON envelope (translateLegacy input). Handler
+// bodies ship as function-STRING data; the module is core-only plumbing.
+{
+  const pageHtml = await readFile(`${base}demo/feature-showcase.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/feature-showcase.js`).catch((e) => {
+    console.error('feature-showcase failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__featureShowcaseDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+}
+
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
 
@@ -259,6 +275,10 @@ for (const method of ['placement', 'values', 'link']) {
     console.error(`fork-stress-data (${method}-only d12) page did not complete its checks (banner missing)`)
     process.exit(1)
   }
+}
+if (!banners.some((b) => b.includes('feature-showcase') && /0 failed/.test(b))) {
+  console.error('feature-showcase page did not complete its checks (banner missing)')
+  process.exit(1)
 }
 
 // component-driven page: every test is a content node — no FAIL text anywhere,

@@ -26,6 +26,7 @@ import { buildFeatureMatrixPage } from './feature-matrix-server.mjs'
 import { buildModeTogglePage } from './mode-toggle-page.mjs'
 import { buildForkStressPage } from './fork-stress-page.mjs'
 import { buildForkStressDataPage } from './fork-stress-data-page.mjs'
+import { buildFeatureShowcasePage, buildFeatureShowcaseExpectedPage } from './feature-showcase-page.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -136,4 +137,18 @@ async function emitPage(templateName, outName, doc, serverData) {
     await writeFile(join(ROOT, 'demo', `fork-stress-data-${method}-d12.html`), html)
     console.log(`built demo/fork-stress-data-${method}-d12.html (${2 ** 12 - 1} nodes, ${method}-only legacy envelope)`)
   }
+}
+
+// ---- page 17: feature showcase (DATA-DRIVEN, legacy JSON input only) ---------
+// ONE legacy envelope demonstrates the framework's features both in isolation
+// (feature-lab section) and combined (ops-dashboard). Handler bodies ship as
+// function-STRING data; the page module is core-only plumbing. The expected
+// final output page is the SAME data through the SSRFragmentAdapter (PAR-5).
+{
+  const { html } = await buildFeatureShowcasePage()
+  await writeFile(join(ROOT, 'demo', 'feature-showcase.html'), html)
+  console.log('built demo/feature-showcase.html (legacy envelope + SSR expected)')
+  const expected = await buildFeatureShowcaseExpectedPage()
+  await writeFile(join(ROOT, 'demo', 'feature-showcase.expected.html'), expected)
+  console.log('built demo/feature-showcase.expected.html (PAR-5 SSR expected output)')
 }

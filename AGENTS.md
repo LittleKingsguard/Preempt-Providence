@@ -87,3 +87,41 @@ Context management guidelines for agents working in this repository:
    horizon-review.md format: status / what the proposal asks / feasibility
    verdict / gaps + costs-benefits). Only a passing review plus the user's
    go-ahead may proceed to the item 6 step gates.
+
+9. **Blind-test → subagent review loop (documentation test + error checking/
+   consistency tool — run after ANY major feature update)**: when a feature
+   or behavior change ships, its documentation, demo, and test claims must be
+   verified by agents who did NOT write them (the feature-showcase blind test,
+   `docs/test-findings.md` §"Blind test #1", is the pattern):
+   a. A **writer** produces the artifact from the DOCUMENTATION ONLY
+      (specs + skill docs; no implementation reading). For a demo page this
+      means: legacy-JSON envelope input, handler bodies as function-STRING
+      data, core-only page module. Any use case that ends up needing an
+      outside script/function is a data-authoring mistake — re-express in
+      data or drop the claim.
+   b. A **proofreader agent** audits the docs against code+specs and fixes
+      doc inconsistencies (spec refs, section numbers, claims vs behavior).
+   c. A **page reviewer agent** tests the render (full validation trio,
+      item 4), verifies intended-vs-actual output, and fixes **data only**
+      to produce the intended output.
+   Findings land in `docs/test-findings.md` (append; latest on top), and
+   new rules from the findings go back into `docs/skills/designing-pages.md`
+   §14-style lessons + the relevant specs. The trio must be green before the
+   loop is reported complete.
+
+10. **Stress-test review loop (after major features — break the pipeline
+    on purpose)**: run three sequential sub-agents to hunt compile/render
+    breakage with VALID legacy-JSON data:
+    a. **Scenario agent** — frames N specs for valid legacy envelope data
+       that should break or surprise the compile/render pipeline; each
+       scenario records the example situation, the expected output, and the
+       suspected failure stage. Artifact: `docs/specs/stress-test-scenarios.md`.
+    b. **Probe agent** — completes every scenario using ONLY core
+       (`dist/core/*`) + legacy JSON (probe scripts, no page-side logic);
+       records real vs expected output.
+    c. **Review agent** — analyzes failure states; any real-vs-expected
+       mismatch is either a doc/spec bug (fix the doc), a data-authoring bug
+       (fix the scenario data), or a genuine engine defect (report —
+       do not fix engine code in this loop). Findings append to
+       `docs/test-findings.md` §"Stress-test review loop".
+    Each agent verifies the validation trio (item 4) after its work.

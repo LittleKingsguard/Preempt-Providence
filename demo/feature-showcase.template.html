@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Feature Showcase (data-only legacy JSON input)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .doc { background:#0c1220; border:1px solid #345; padding:10px; overflow:auto; font-size:12px; }
+    pre.doc { white-space:pre-wrap; }
+    .goals { max-width: 60em; }
+    .expect { font-size: 13px; color:#9ac; }
+  </style>
+</head>
+<body data-page="feature-showcase">
+  <!--
+    ============================================================================
+    FEATURE SHOWCASE — a single test page that drives as many framework
+    features as possible from ONLY the legacy JSON envelope
+    (docs/specs/translate.md §1 `LegacyInitialData`) + the documented core
+    interfaces. There is NO page-side feature logic: the demo module
+    (demo/feature-showcase.js) is core-only plumbing. Every use case is
+    expressed in the DATA below; any feature that would require an outside
+    script or hand-written function is a mistake on the data author's part.
+
+    SECTION MAP (feature -> where demonstrated -> documentation)
+    ----------------------------------------------------------------------------
+    1. Tree building             template.root.children (array order = priority) -- translate.md §2 TR-H1
+    2. Components (values/link)  #ops: root component binding (depth-0 source),
+                                 kpi-a/kpi-b (target, shared per-name link TR-2),
+                                 mood (duplex), mood-panel                    -- translate.md §2 TR-H2
+    3. Fork multiplicity         #flavor-a/#flavor-b same-name self-providers
+                                 (each renders its OWN value — no coerced pick) -- api.md §4.2 / S-R2.5
+    4. Fail-states               #ghost unresolved-reference; #loop-a/#loop-b
+                                 duplex borrow-walk cycle -> circular-source,
+                                 dropped, never rendered (page still renders)   -- api.md §4.3/§4.2
+    5. Derived state (DSL)       #ops/#dsl-card/#kpi-a/#cmd-echo:
+                                 children.length, pathKey, bindings.<ref>,
+                                 $concat, $if/$eq/$gt, placement                -- derived-state.md §3
+    6. Handlers (STRING bodies)  #cmd-input (on:input), #run-btn (on:click),
+                                 #stamp-lab (after-compile), #risk-lab (throwing) -- handlers.md / translate.md §2
+    7. Placement anchor          #placement-lab + derived placement badge         -- translate.md §2 / api.md §5
+    8. CSS (id/classes/style)    #css-lab, #ops, header/footer                   -- adapters.md §3
+    9. Content payloads          envelope `content` -> 2 UNPLACED nodes          -- translate.md §2 TR-5/TR-6
+    10. clientConfig gates        runInstantiation:false (DOM), runMonitoring:true (persistence) -- translate.md §2
+
+    INTENDED RESULT: every element below the <main> is framework-rendered from
+    this data; the "Expected output (SSR parity)" section is the SAME data run
+    through the SSRFragmentAdapter (PAR-5 parity — `demo/feature-showcase.expected.html`).
+    ============================================================================
+  -->
+
+  <main>
+    <h1>Feature Showcase — data-only (<code>preempt-initial-data</code> = legacy JSON)</h1>
+    <p class="goals">
+      A combined ops dashboard + an isolation lab, both built ENTIRELY from the
+      legacy envelope below and the documented core interfaces
+      (<code>translateLegacy → Supervisor → createClient → DomAdapter →
+      emitElements / diffMinimal / applyOps → dispatchEvent</code> /
+      <code>runPhase</code>). Each section's data is annotated with the
+      documentation it exercises and the intended rendered result.
+    </p>
+
+    <!-- Framework input: the LEGACY envelope. Everything visible in #app comes
+         from this JSON — including the handler bodies (function-STRING bodies
+         are instantiated by translateLegacy; translate.md §2). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <!-- The expected final output: the SAME envelope rendered through the
+         SSRFragmentAdapter at build time (PAR-5: client re-resolution from the
+         same data must match this exactly). Live DOM mirrors it in #app. -->
+    <section>
+      <h2>Expected output (SSR parity snapshot)</h2>
+      <p class="expect">
+        Built by <code>scripts/feature-showcase-page.mjs</code> with
+        <code>SSRFragmentAdapter</code> — identical ops to the live DOM's
+        bootstrap render (<code>renderShowcaseSsrHtml</code>). This is the
+        STATIC SSR snapshot: runtime mutations the data's handlers perform
+        (the stamp badge, the input echo, the authorize toggle) exist only in
+        the live DOM and are asserted by the runner checks below, not mirrored
+        here.
+      </p>
+      <pre class="doc" id="sr-expected">__SR_EXPECTED__</pre>
+    </section>
+
+    <!-- Live render root. Intended result:
+           #ops sections with resolved values / fork arms / derived badges;
+           #labs cards each showing one feature; footer line. -->
+    <section>
+      <h2>Live DOM (data-driven)</h2>
+      <div id="app"></div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="feature-showcase.js"></script>
+</body>
+</html>

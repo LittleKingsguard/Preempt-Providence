@@ -234,6 +234,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `demo/mode-toggle.js` (smoke) | same feature-matrix document driven through the three adapter modes — `?mode=ssr|client|markdown` (every build embeds both payloads, so static serves work; `scripts/serve-demo.mjs` serves per-mode too). **Demo-page test case — NOT expected real-world behavior.** SSR asserts the full well-formed server HTML was received (root-first, presentation ids present, balanced tags — the `validateHtmlShape` scan mirrors the e2e stack validator); markdown asserts the raw editor source is embedded verbatim for inspection alongside the live parsed display; client runs the shared harness with no mode-specific payload |
 | `demo/fork-stress.js` (smoke, depths 2–12) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Each level changes a different css property (L1 background-color, L2 border-style, L3 border-width, L4 text-decoration, cycling) with a value per sibling slot (demo-only helper `levelCss`, NOT a core API). Checks: per-layer node counts, rendered-count, css per-level property + slot pairs, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
 | `demo/fork-stress-data.js` (smoke, depths 2–12) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; self-contained `c.node` bodies fire ONCE per clone — the DERIVED `stress:expanded` (`children.length > 0`, declared on the prototypes, inherited by clones — derived-state.md §9.2) replaces the marker op, so no self-ops, no re-dirties: 4094 handler calls at d12, half the marker era). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes) + the three SINGLE-METHOD d12 variants `fork-stress-data-{placement,values,link}-d12.html` (spec §4): placement-only (pure clone structure), values-only (every prototype declares its scalar VALUE as a legacy `component` source — translate.md §2 — and every clone renders it as text), link-only (every prototype declares its component DEF as the source value; every clone's emission re-types the next layer — the recursive def chain, which exercises the emitter's covered-consumer `defChildren` path). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total, prototypes stay unplaced, css per-level property + slot pairs, `stress:kind` per layer mechanism, values/link method checks (per-node element text vs resolved source value / def content), DOM nesting vs graph children (all sources live on the prototypes, so the root emits like every node — walk from the root element), `stress:layers` ancestry chains (parent-baked at creation), derived idempotency (resolved-state `stress:expanded` true for non-leaves / false for leaves), incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` + `docs/specs/derived-state.md` §9.2 |
+| `demo/feature-showcase.js` (smoke) | the FEATURE SHOWCASE — ONE legacy envelope demonstrating the framework's advertised features both isolated and combined via ONLY the documented core interfaces + JSON handler/derived/anchor data (markdown above in §12). Confirmations: depth-0 scalar resolution into two consumers with derived `bindings.*` bakes, same-name self-provider multiplicity, duplex anchors + scoped unresolved fail-state, `circular-source` A↔B duplex borrow-walk loop pair (dropped at compile — never rendered — no hang), derived-DSL bakes, placement badge, on:input/on:click string-body handlers mutating a sibling preview, one-shot idempotent after-compile stamp via `runPhase`, throwing-handler containment, css id/classes/style, unplaced content payloads, clientConfig gates. PAR-5: the expected-output page is the same envelope through the real `SSRFragmentAdapter`. Checks walk the #app subtree (shim-compatible). Banner: `feature-showcase`. Spec/companion: `docs/framework-feature-summary.md` |
 
 ## 12. Demo pages (`npm run demo` → http://localhost:4173/demo/)
 
@@ -339,6 +340,32 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   attaches an anchor. The root carries no sources and emits like every
   node; nesting walks from the root, 2^depth − 1 elements. Banner:
   `Fork Stress (data: <method>) — depth 12`.
+- `feature-showcase.html` + `feature-showcase.expected.html` — the FEATURE
+  SHOWCASE: ONE legacy envelope demonstrating the framework's advertised
+  features BOTH isolated (feature-lab cards) and combined (ops dashboard),
+  driven ENTIRELY from the JSON + the documented core interfaces
+  (`translateLegacy → Supervisor → createClient → DomAdapter →
+  emitElements/diffMinimal/applyOps → dispatchEvent`/`runPhase`). Handler
+  bodies ship as function-STRING data (translate.md §2), so there is NO
+  page-side feature logic — anything that would need an outside script is
+  a data-authoring mistake. Features: root tree/`children` (translate.md
+  TR-H1), depth-0 scalar source consumed by two descendants (S-R2.6),
+  same-name self-providers rendering their own values (multiplicity,
+  S-R2.5 — no coerced pick), duplex source+target anchors incl. the
+  cross-scope unresolved fail-state (api.md §4.3), `unresolved-reference`
+  + `circular-source` A↔B duplex borrow-walk loop pair (both arms dropped at
+  compile — never rendered — while the page still renders, no hang), derived DSL bakes (`bindings.*`,
+  `children.length`, `pathKey`, `$concat`/`$if`/`$eq`/`$gt`, `placement`,
+  `unresolved.length`), on:input/on:click string-body handlers
+  (state-slice to a sibling preview), one-shot idempotent after-compile
+  phase handler (`runPhase`), throwing-handler containment, placement
+  anchor badge, css id/classes/style, unplaced content payloads (keep
+  unplaced per TR-6), clientConfig adapter/persistence gates. The expected
+  output page is generated from the SAME envelope through the real
+  `SSRFragmentAdapter` (PAR-5 parity). Banner: `feature-showcase`. The
+  page module mirrors the fork-stress-data discipline (core-only, checks
+  walk the #app subtree so they run under the smoke shim too). Companion
+  summary: `docs/framework-feature-summary.md`.
 
 ## 13. Running checks
 
