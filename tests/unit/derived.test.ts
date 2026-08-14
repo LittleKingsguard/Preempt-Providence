@@ -62,7 +62,7 @@ function evalCtx(): { node: Node; cs: CompiledState } {
   targetAnchor(n, 'theme')
   targetAnchor(n, 'nope') // never provided → unresolved arm entry
   childOf(n, makeNode({ type: 'inner' }))
-  n.addAnchor('placement', 'slot-main', {}, new Link({ name: 'placement' }))
+  n.addAnchor('container', 'slot-main', {}, new Link({ name: 'placement' }))
   const cs = statesFor([root, n], n.id)[0]!
   return { node: n, cs }
 }
@@ -144,6 +144,107 @@ describe('DV-H1 — expression semantics (§3)', () => {
   })
 })
 
+describe('P3 §2.3/§2.5 — the derived placement root is per-path (Unit 10)', () => {
+  /** Two sibling containers sharing ONE zone name (the R2.2 shape) + a second
+   *  zone with a different name: path-states with distinct chosen names. */
+  function pathTree(): { root: Node; A: Node; B: Node; E: Node; C: Node; D: Node } {
+    const root = makeRoot()
+    const A = childOf(root, makeNode({ type: 'div' }, 'A'))
+    const B = childOf(root, makeNode({ type: 'div' }, 'B'))
+    const z1 = new Link({ name: 'placement' })
+    A.addAnchor('container', 'slot-a', {}, z1)
+    B.addAnchor('container', 'slot-a', {}, z1)
+    const C = makeNode({ type: 'button', content: 'Go' }, 'C')
+    C.addAnchor('content', 'slot-a', {}, z1)
+    const E = childOf(root, makeNode({ type: 'aside' }, 'E'))
+    const z2 = new Link({ name: 'placement' })
+    E.addAnchor('container', 'slot-b', {}, z2)
+    const D = makeNode({ type: 'button' }, 'D')
+    D.addAnchor('content', 'slot-b', {}, z2)
+    return { root, A, B, E, C, D }
+  }
+
+  it('(a) a path-state placement read = its activePlacement (the chosen zone name), per path', () => {
+    const t = pathTree()
+    const csC = t.C.compilePath().actionable
+    expect(csC).toHaveLength(2)
+    for (const cs of csC) {
+      expect(cs.activePlacement).toBe('slot-a')
+      expect(evaluateDerived({ $: 'placement' }, { node: t.C, cs })).toBe('slot-a')
+    }
+    const csD = t.D.compilePath().actionable
+    expect(csD).toHaveLength(1)
+    expect(csD[0]!.activePlacement).toBe('slot-b')
+    expect(evaluateDerived({ $: 'placement' }, { node: t.D, cs: csD[0]! })).toBe('slot-b')
+  })
+
+  it('(b) family states keep the container-anchor-target read — the runtime data-placement bakes stay identical', () => {
+    const { node, cs } = evalCtx()
+    expect(evaluateDerived({ $: 'placement' }, { node, cs })).toBe('slot-main')
+    // no container anchor → null (unchanged)
+    const root = makeRoot()
+    const m = childOf(root, makeNode({ type: 'plain' }))
+    const cs2 = statesFor([root, m], m.id)[0]!
+    expect(evaluateDerived({ $: 'placement' }, { node: m, cs: cs2 })).toBe(null)
+  })
+
+  it('(b2) the feature-showcase #placement-lab bake (data-placement = the container anchor target) survives', () => {
+    const root = makeRoot()
+    const lab = childOf(root, makeNode({
+      type: 'div',
+      props: { id: 'placement-lab' },
+      derived: { props: { 'data-placement': { $: 'placement' } } },
+    }))
+    lab.addAnchor('container', 'lab-placement', {}, new Link({ name: 'placement' }))
+    const cs = statesFor([root, lab], lab.id)[0]!
+    expect(cs.props['data-placement']).toBe('lab-placement')
+  })
+
+  it('(c) a family-first path-state (no activePlacement) falls back to the container anchor target', () => {
+    const root = makeRoot()
+    const A = childOf(root, makeNode({}, 'A'))
+    const B = childOf(A, makeNode({}, 'B'))
+    // B is a producer (container anchor) AND a placement consumer (content anchor)
+    B.addAnchor('container', 'slot-x', {}, new Link({ name: 'placement' }))
+    const z1 = new Link({ name: 'placement' })
+    A.addAnchor('container', 'z1', {}, z1)
+    B.addAnchor('content', 'z1', {}, z1)
+
+    const cr = B.compilePath()
+    const viaFamily = cr.actionable.find(s => s.pathKey === 'root/A/B')!
+    const viaZ1 = cr.actionable.find(s => s.pathKey === 'root/z1/A/B')!
+    expect(viaFamily.activePlacement).toBeUndefined()
+    expect(viaZ1.activePlacement).toBe('z1')
+    // family-first: legacy container-anchor read
+    expect(evaluateDerived({ $: 'placement' }, { node: B, cs: viaFamily })).toBe('slot-x')
+    // placement-routed: the CHOSEN name wins over the node's own container anchor
+    expect(evaluateDerived({ $: 'placement' }, { node: B, cs: viaZ1 })).toBe('z1')
+  })
+
+  it('(d) children.length on a path-state reads the path-derived children (Unit 4 seam)', () => {
+    const root = makeRoot()
+    const P1a = childOf(root, makeNode({ type: 'div' }, 'P1a'))
+    const P1b = childOf(root, makeNode({ type: 'div' }, 'P1b'))
+    const z1 = new Link({ name: 'placement' })
+    P1a.addAnchor('container', 'zone-1', {}, z1)
+    P1b.addAnchor('container', 'zone-1', {}, z1)
+    const P2 = makeNode({ type: 'button', derived: { props: { n: { $: 'children.length' } } } }, 'P2')
+    P2.addAnchor('content', 'zone-1', {}, z1)
+
+    const csP1 = P1a.compilePath().actionable[0]!
+    expect(csP1.children).toEqual([P2.id])
+    expect(evaluateDerived({ $: 'children.length' }, { node: P1a, cs: csP1 })).toBe(1)
+
+    const csP2 = P2.compilePath().actionable
+    expect(csP2).toHaveLength(2)
+    for (const cs of csP2) {
+      expect(cs.children).toEqual([])
+      expect(evaluateDerived({ $: 'children.length' }, { node: P2, cs })).toBe(0)
+      expect(cs.props.n).toBe(0)
+    }
+  })
+})
+
 describe('DV-H2 — base + layer merge (§2)', () => {
   it('derived merges like props; layer wins per key; the public getter exposes the merged declaration', () => {
     const n = makeNode({
@@ -165,12 +266,16 @@ describe('DV-H2 — base + layer merge (§2)', () => {
 describe('DV-H3 — per-arm evaluation (§4)', () => {
   it('fork arms with different bindings bake different props per arm', () => {
     const root = makeRoot({ type: 'root' })
-    addComponentSource(root, 'color', 'red')
-    addComponentSource(root, 'color', 'blue')
     const n = childOf(root, makeNode({ type: 'swatch', derived: { props: { swatch: { $: 'bindings.color' } } } }))
     targetAnchor(n, 'color')
+    // two provider NODES under the consumer — the legitimate multiplicity
+    // (§10.ab #4); same-node same-name sources are the guarded anti-pattern
+    const pRed = childOf(n, makeNode({ type: 'pRed' }), 0)
+    const pBlue = childOf(n, makeNode({ type: 'pBlue' }), 1)
+    addComponentSource(pRed, 'color', 'red')
+    addComponentSource(pBlue, 'color', 'blue')
 
-    const arms = statesFor([root, n], n.id)
+    const arms = statesFor([root, n, pRed, pBlue], n.id)
     expect(arms).toHaveLength(2)
     const byBinding = new Map(arms.map(a => [a.bindings.color, a.props.swatch]))
     expect(byBinding.get('red')).toBe('red')
@@ -375,19 +480,22 @@ describe('DV-H11 — no-target branch (self-provided bindings only, §4)', () =>
 describe('DV-H12 — per-arm states + diff stability (D4)', () => {
   it('fork arms carry per-arm baked props and a re-render emits no spurious set churn', () => {
     const root = makeRoot({ type: 'root' })
-    addComponentSource(root, 'color', 'red')
-    addComponentSource(root, 'color', 'blue')
     const n = childOf(root, makeNode({ type: 'swatch', derived: { props: { swatch: { $: 'bindings.color' } } } }))
     targetAnchor(n, 'color')
+    // two provider NODES under the consumer (legitimate multiplicity, §10.ab #4)
+    const pRed = childOf(n, makeNode({ type: 'pRed' }), 0)
+    const pBlue = childOf(n, makeNode({ type: 'pBlue' }), 1)
+    addComponentSource(pRed, 'color', 'red')
+    addComponentSource(pBlue, 'color', 'blue')
 
-    const arms = statesFor([root, n], n.id)
+    const arms = statesFor([root, n, pRed, pBlue], n.id)
     expect(arms.map(a => a.props.swatch).sort()).toEqual(['blue', 'red'])
 
     // D4: re-derivation is deterministic per arm — two renders carry the
     // same baked values (fork arms are same-wire elements; diffMinimal's
     // bare-wire prev lookup cannot distinguish them — the framework's fork
     // diff path is out of scope here, so pin per-arm stability instead)
-    const render = () => root.compile([root, n]).actionable.map(minimalFromState)
+    const render = () => root.compile([root, n, pRed, pBlue]).actionable.map(minimalFromState)
     expect(render()).toEqual(render())
     expect(render().map(e => e.props['prop:swatch'])).toEqual(render().map(e => e.props['prop:swatch']))
   })

@@ -4,13 +4,15 @@
  * assembled through the public fixtures (tests/helpers/fixtures.ts) and
  * observed only via the `Node`/`Link` surface in contract.md.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Node, mintNodeId, MAX_COMPILE_DEPTH, reconcileParentTargets } from '../../src/core/node.js'
 import { Link } from '../../src/core/link.js'
 import { LinkConfigError, SingleParentError, CycleError } from '../../src/core/errors.js'
 import { applyStateSlice } from '../../src/core/ops.js'
 import { SliceLock } from '../../src/core/pipeline.js'
 import { serializeNode } from '../../src/core/serialize.js'
+import { translateLegacy, reverseTranslate } from '../../src/core/translate.js'
+import { emitElements } from '../../src/core/render-helpers.js'
 import type { NodeBaseData, NodeState, Anchor, CompileResult, LayerMutation } from '../../src/core/types.js'
 import {
   makeRoot,
@@ -592,7 +594,7 @@ describe('two-pass compile — §8.1–§8.4', () => {
     consumer.addAnchor('target', 'ghost', {}, h.linkFor('ghost', 'component'))
     const proto = new Node({ type: 'section' }, h)
     familyLink(proto, 'component')
-    const src = proto.addAnchor('source', 'ghost', {}, h.linkFor('ghost', 'component'))
+    const src = proto.addAnchor('source', 'ghost', {}, h.linkFor('ghost', 'component'))!
     src.value = { from: 'proto' }
 
     // the slice deliberately EXCLUDES the provider (walk path only)
@@ -1127,7 +1129,7 @@ describe('serialization — §10', () => {
     const doc = serializeNode(root)
     expect(doc.anchors.length).toBeGreaterThan(0)
     for (const a of doc.anchors) {
-      expect(['child', 'parent', 'source', 'target', 'duplex', 'placement', 'component']).toContain(a.role)
+      expect(['child', 'parent', 'source', 'target', 'duplex', 'container', 'content', 'component']).toContain(a.role)
       expect(typeof a.target).toBe('string')
       expect(typeof a.link).toBe('string')
       expect(
@@ -1157,6 +1159,357 @@ describe('serialization — §10', () => {
     for (const arm of arms) {
       expect(arm.pathKey.startsWith('root/')).toBe(true)
       expect(arm.pathKey.includes(dock.id)).toBe(true)
+    }
+  })
+
+  it('S4 a container-role placement anchor round-trips through serialize → load → rehydrate (P3 §1.1 role rename)', () => {
+    const root = makeRoot()
+    const zone = childOf(root, makeNode())
+    const plink = new Link({ name: 'placement' })
+    zone.addAnchor('container', 'slot-alpha', {}, plink)
+
+    const doc = serializeNode(zone)
+    const container = doc.anchors.find((a) => a.role === 'container' && a.target === 'slot-alpha')!
+    expect(container).toBeDefined()
+
+    const seeded = new Node(JSON.parse(JSON.stringify(doc)) as NodeBaseData, hub())
+    const rehydrated = seeded.anchors.find((a) => a.role === 'container' && a.target === 'slot-alpha')
+    expect(rehydrated).toBeDefined()
+    // the rehydrated anchor re-mints onto the placement-kind Link (the seed
+    // path regenerates link ids; the KIND and the role must round-trip)
+    expect(rehydrated!.link.config.name).toBe('placement')
+    expect(seeded.anchors.find((a) => a.role === 'placement' as never)).toBeUndefined()
+  })
+})
+
+describe('placement roles surface — container/content (P3 §1.1)', () => {
+  it('Role union accepts container AND content anchors on the shared per-name placement Link', () => {
+    const link = new Link({ name: 'placement' })
+    const zone = makeNode()
+    const consumer = makeNode()
+    expect(() => zone.addAnchor('container', 'slot-a', {}, link)).not.toThrow()
+    expect(() => consumer.addAnchor('content', 'slot-a', {}, link)).not.toThrow()
+    expect(link.anchorsOf('container')).toHaveLength(1)
+    expect(link.anchorsOf('content')).toHaveLength(1)
+  })
+
+  it("the legacy 'placement' role is gone from the union — rejected with role-mismatch at runtime", () => {
+    const link = new Link({ name: 'placement' })
+    let err: unknown
+    try {
+      // @ts-expect-error -- P3 §1.1: 'placement' is RENAMED to 'container'; not a Role
+      link.addAnchor({ role: 'placement', target: 'slot-a', options: {}, link })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(LinkConfigError)
+    expect((err as LinkConfigError).code).toBe('role-mismatch')
+  })
+
+  it('a content anchor stays a peripheral edge — never a child/parent anchor (SI-3)', () => {
+    const root = makeRoot()
+    const consumer = childOf(root, makeNode())
+    const link = new Link({ name: 'placement' })
+    consumer.addAnchor('content', 'slot-a', {}, link)
+    expect(consumer.childAnchor()).not.toBeNull() // family edge untouched
+    expect(consumer.parent).toBe(root)
+    expect(root.children).toContain(consumer)
+    expect(link.anchorsOf('content')).toHaveLength(1)
+  })
+})
+
+describe('engine defect #1 — publishOwn bypass on mixed nodes (own-value seed into resolveArms bindings)', () => {
+  // docs/test-findings.md §"Stress-test review loop #2" DEFECT #1: a node
+  // carrying ANY target (consumer) anchor routed through resolveArms never
+  // published its own source/duplex values, so synthesized `{$:'bindings.B'}`
+  // reads (K2 self-apply) and authored `bindings.*` reads evaluated null on a
+  // LEGAL K7 mix (consume A + provide B + self-apply B). Spec: translate.md
+  // §2.1 "at a self-provider the applied value IS its own `value`" (unqualified).
+  //
+  // The shipped showcase envelope: array-card = mixed node (consumes
+  // arrConsumer + rootValue from root depth-0 providers, provides selfApply).
+  const MIXED_ENVELOPE: Parameters<typeof translateLegacy>[0] = {
+    template: {
+      root: {
+        type: 'app',
+        props: { id: 'showcase-root' },
+        children: [
+          {
+            type: 'div',
+            props: { id: 'array-card' },
+            component: [
+              { reference: 'arrConsumer', target: 'props.apply-consumer' },
+              { reference: 'rootValue' },
+              { reference: 'selfApply', value: 'self-applied', target: 'props.self-apply' },
+            ],
+          },
+        ],
+      },
+      component: [
+        { reference: 'rootValue', value: 'root-provided' },
+        { reference: 'arrConsumer', value: 'arr-consumed' },
+      ],
+    },
+    clientConfig: { runInstantiation: false, runMonitoring: true },
+  }
+
+  it('T1 mixed node (consume A + provide B + self-apply B): bindings.B === ownValue, synthesized bake present, zero warnings', () => {
+    const translated = translateLegacy(MIXED_ENVELOPE)
+    expect(translated.warnings).toEqual([])
+    const card = translated.nodes.find(n => n.props.id === 'array-card')!
+    const res = card.compile(translated.nodes)
+    const cs = res.actionable.find(s => s.nodeId === card.id)
+    expect(cs).toBeDefined()
+    expect(cs?.bindings['arrConsumer']).toBe('arr-consumed')
+    expect(cs?.bindings['rootValue']).toBe('root-provided')
+    expect(cs?.bindings['selfApply']).toBe('self-applied')
+    expect(cs?.props['apply-consumer']).toBe('arr-consumed')
+    expect(cs?.props['self-apply']).toBe('self-applied')
+    expect(res.warnings).toEqual([])
+    expect(res.dropped).toEqual([])
+  })
+
+  it('T2 authored bindings.B derived read on a mixed node returns the own value', () => {
+    const root = makeRoot({ type: 'app' })
+    const mixed = childOf(root, makeNode({
+      type: 'div',
+      derived: { props: { 'self-bake': { $: 'bindings.B' } } },
+    }))
+    targetAnchor(mixed, 'A')
+    addComponentSource(mixed, 'B', 'bv')
+    addComponentSource(root, 'A', 'av')
+
+    const res = root.compile([root, mixed])
+    const cs = res.actionable.find(s => s.nodeId === mixed.id)
+    expect(cs).toBeDefined()
+    expect(cs?.bindings['A']).toBe('av')
+    expect(cs?.bindings['B']).toBe('bv')
+    expect(cs?.props['self-bake']).toBe('bv')
+    expect(res.warnings).toEqual([])
+  })
+
+  it('T3 fork: consumer of A with TWO providers + own B — EVERY arm carries B AND its arm-specific A', () => {
+    const root = makeRoot()
+    const mixed = childOf(root, makeNode())
+    targetAnchor(mixed, 'A')
+    addComponentSource(mixed, 'B', 'bv')
+    const p1 = childOf(mixed, makeNode())
+    const p2 = childOf(mixed, makeNode())
+    addComponentSource(p1, 'A', 'a1')
+    addComponentSource(p2, 'A', 'a2')
+
+    const res = root.compile([root, mixed, p1, p2])
+    const arms = res.actionable.filter(s => s.nodeId === mixed.id)
+    expect(arms.length).toBe(2)
+    expect(arms.map(a => a.bindings['A']).sort()).toEqual(['a1', 'a2'])
+    for (const arm of arms) {
+      expect(arm.bindings['B']).toBe('bv')
+      expect(Object.keys(arm.bindings)).toEqual(['A', 'B'])
+    }
+  })
+
+  it('T4 pure provider (no targets): bindings unchanged — spot-check-7 regression pin', () => {
+    const root = makeRoot()
+    const prov = childOf(root, makeNode())
+    addComponentSource(prov, 'X', 'xv')
+
+    const res = root.compile([root, prov])
+    const cs = res.actionable.find(s => s.nodeId === prov.id)
+    expect(cs).toBeDefined()
+    expect(cs?.bindings).toEqual({ X: 'xv' })
+  })
+
+  it('T5 same-name runtime duplex (source + target for X, no applyPath): seeding must NOT overwrite the resolved value (skip-if-present pin)', () => {
+    const root = makeRoot()
+    const d = childOf(root, makeNode())
+    targetAnchor(d, 'X')
+    addComponentSource(d, 'X', 'dx', 'duplex')
+
+    const res = root.compile([root, d])
+    const cs = res.actionable.find(s => s.nodeId === d.id)
+    expect(cs).toBeDefined()
+    // the arm-resolved value (own provider hit wins depth-0) is the current
+    // contract — the own-value seed must leave it untouched
+    expect(cs?.bindings['X']).toBe('dx')
+    expect(Object.keys(cs?.bindings ?? {})).toEqual(['X'])
+  })
+
+  it('T6 mixed-node emitted TEXT stays the first scalar (consumed value) — scalarBinding insertion order', () => {
+    const root = makeRoot()
+    const mixed = childOf(root, makeNode())
+    targetAnchor(mixed, 'A')
+    addComponentSource(mixed, 'B', 'bv')
+    addComponentSource(root, 'A', 'av')
+
+    const res = root.compile([root, mixed])
+    const cs = res.actionable.find(s => s.nodeId === mixed.id)
+    expect(cs).toBeDefined()
+    expect(cs?.bindings['A']).toBe('av')
+    expect(cs?.bindings['B']).toBe('bv')
+    const els = emitElements([cs!])
+    expect(els).toHaveLength(1)
+    expect(els[0]!.props['text']).toBe('av')
+  })
+
+  it('T7 reverse round-trip on a fixed mixed node: applyPath preserved as target; re-translate warning-clean', () => {
+    const translated = translateLegacy(MIXED_ENVELOPE)
+    const reversed = reverseTranslate(translated.root)
+    const rCard = reversed.template.root.children?.find(c => c.props?.id === 'array-card')
+    expect(rCard).toBeDefined()
+    const arr = rCard!.component as Array<{ reference: string; value?: unknown; target?: string }>
+    expect(Array.isArray(arr)).toBe(true)
+    // consumer apply path persists as `target`; provider keeps {reference, value, target}
+    expect(arr.some(b => b.reference === 'arrConsumer' && b.target === 'props.apply-consumer' && !('value' in b))).toBe(true)
+    expect(arr.some(b => b.reference === 'selfApply' && b.value === 'self-applied' && b.target === 'props.self-apply')).toBe(true)
+    // the applyPath-less plain consumer is R-2-dropped next to the provider
+    expect(arr.some(b => b.reference === 'rootValue')).toBe(false)
+
+    const again = translateLegacy(reversed)
+    expect(again.warnings.some(w => w.code === 'component-target-skipped')).toBe(false)
+    expect(again.warnings.some(w => w.code === 'component-duplicate-reference' || w.code === 'component-duplicate-target')).toBe(false)
+    expect(again.warnings).toEqual([])
+  })
+})
+
+describe('component-source-duplicate guard (placement-path-spec §2.2/§10.ab/ae, Unit 8)', () => {
+  /** Spy console.warn; returns the spy (restore in finally). */
+  function spyWarn() {
+    return vi.spyOn(console, 'warn').mockImplementation(() => {})
+  }
+
+  /** node.ts warn style is multi-arg ('circular-source at', pathKey) — the
+   *  guard warns ('component-source-duplicate at', nodeId, role, target). */
+  function warnedGuard(warn: ReturnType<typeof spyWarn>): boolean {
+    return warn.mock.calls.some(c => String(c[0]).includes('component-source-duplicate'))
+  }
+
+  it('G1 (a) imperative: a second same-name source anchor via addAnchor warns component-source-duplicate, keeps the first, and is NOT added', () => {
+    const warn = spyWarn()
+    try {
+      const node = makeNode()
+      const l1 = new Link({ name: 'component' })
+      const l2 = new Link({ name: 'component' })
+      const first = node.addAnchor('source', 'refX', {}, l1)!
+      first.value = 'A'
+      const second = node.addAnchor('source', 'refX', {}, l2)
+      expect(second).toBeNull()
+      expect(anchorsOf(node, 'source')).toHaveLength(1)
+      expect(anchorsOf(node, 'source')[0]).toBe(first)
+      expect(anchorsOf(node, 'source')[0]!.value).toBe('A')
+      expect(warnedGuard(warn)).toBe(true)
+      // the skipped anchor must not exist on any link either (per-link NO
+      // carve-out — §10.ac.2 #4: the guard matches across ALL anchors)
+      expect(l2.anchors.some(a => a.role === 'source' && a.target === 'refX')).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('G2 (b) constructor seed path: a serialized doc carrying the pattern loads with ONE source and a warn (keep-first)', () => {
+    const warn = spyWarn()
+    try {
+      const n = new Node(
+        {
+          type: 'div',
+          anchors: [
+            { role: 'source', target: 'refX', value: 'A' },
+            { role: 'source', target: 'refX', value: 'B' },
+          ],
+        } as unknown as NodeBaseData,
+        hub(),
+        'seeded-dup',
+      )
+      const sources = anchorsOf(n, 'source')
+      expect(sources).toHaveLength(1)
+      expect(sources[0]!.target).toBe('refX')
+      expect(sources[0]!.value).toBe('A')
+      expect(warnedGuard(warn)).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('G3 (c) duplex duplicates are covered by the same guard (keep-first)', () => {
+    const warn = spyWarn()
+    try {
+      const node = makeNode()
+      const l1 = new Link({ name: 'component' })
+      const l2 = new Link({ name: 'component' })
+      const first = node.addAnchor('duplex', 'session', {}, l1)!
+      first.value = 'S'
+      const second = node.addAnchor('duplex', 'session', {}, l2)
+      expect(second).toBeNull()
+      expect(anchorsOf(node, 'duplex')).toHaveLength(1)
+      expect(anchorsOf(node, 'duplex')[0]).toBe(first)
+      expect(warnedGuard(warn)).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('G4 (d) same-name CONTAINER anchors are unaffected (placement multiplicity is legal); different-name sources are fine', () => {
+    const warn = spyWarn()
+    try {
+      const zone = makeNode()
+      const plink = hub().linkFor('slot-alpha', 'placement')
+      const c1 = zone.addAnchor('container', 'slot-alpha', {}, plink)
+      const c2 = zone.addAnchor('container', 'slot-alpha', {}, plink)
+      expect(c1).not.toBeNull()
+      expect(c2).not.toBeNull()
+      expect(anchorsOf(zone, 'container')).toHaveLength(2)
+
+      const node = makeNode()
+      const l1 = new Link({ name: 'component' })
+      const l2 = new Link({ name: 'component' })
+      const s1 = node.addAnchor('source', 'a', {}, l1)
+      const s2 = node.addAnchor('source', 'b', {}, l2)
+      expect(s1).not.toBeNull()
+      expect(s2).not.toBeNull()
+      expect(anchorsOf(node, 'source')).toHaveLength(2)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('G5 (e) regression pin: the Unit-11 re-expressed fixtures (distinct names / single sources) never trip the guard', () => {
+    const warn = spyWarn()
+    try {
+      // feature-matrix re-expression (§10.ac.2 #3): theme-dark / theme-light
+      // are TWO DISTINCT names on the same node — the anti-pattern-compliant
+      // shape Unit 11 shipped
+      const root = makeRoot({ type: 'app' })
+      addComponentSource(root, 'theme-dark', 'theme: dark')
+      addComponentSource(root, 'theme-light', 'theme: light')
+      const consumer = childOf(root, makeNode({ type: 'swatch' }))
+      targetAnchor(consumer, 'theme-dark')
+      targetAnchor(consumer, 'theme-light')
+
+      const res = root.compile([root, consumer])
+      expect(res.warnings).toEqual([])
+      expect(warn).not.toHaveBeenCalled()
+      // distinct names resolve side by side (the K7 multi-binding surface)
+      const cs = res.actionable.find(s => s.nodeId === consumer.id)
+      expect(cs?.bindings['theme-dark']).toBe('theme: dark')
+      expect(cs?.bindings['theme-light']).toBe('theme: light')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('G6 materializeAnchors interaction: the decl-path dedup is complementary, not the enforcement point', () => {
+    const warn = spyWarn()
+    try {
+      // a layer decl carrying the pattern: materializeAnchors' role+target
+      // dedup pre-filters (decl-path duplicates never reach the guard —
+      // §10.ac.2 #4); reconcileAnchors stays idempotent
+      const node = makeNode()
+      node.addLayer({ id: 'l', anchors: [{ role: 'source', target: 'refX' }, { role: 'source', target: 'refX' }] })
+      node.reconcileAnchors()
+      expect(anchorsOf(node, 'source')).toHaveLength(1)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
     }
   })
 })

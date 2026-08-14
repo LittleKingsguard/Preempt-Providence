@@ -278,11 +278,11 @@ describe('g — Link/Anchor graph matrix (G1–G20)', () => {
     const component = new Link(DEFAULT_COMPONENT)
 
     const err = assertLinkError(
-      () => component.addAnchor({ role: 'placement', target: 'slot-a', options: {}, link: component }),
+      () => component.addAnchor({ role: 'content', target: 'slot-a', options: {}, link: component }),
       component,
       'role-mismatch',
       {
-        intended: { role: 'placement', target: 'slot-a', options: {} },
+        intended: { role: 'content', target: 'slot-a', options: {} },
         conflicts: c => expect(c).toEqual([]),
       },
     )

@@ -8,7 +8,7 @@
 import type { Node } from './node.js'
 import type { ChainKind } from './node.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
-import type { Anchor, NodeId } from './types.js'
+import type { Anchor, CompiledState, NodeId, UnresolvedRef } from './types.js'
 
 export interface ProviderHit {
   anchor: Anchor
@@ -162,6 +162,86 @@ export function kindDropReason(kind: ChainKind | undefined): 'prototype-terminat
   if (!kind) return 'owner-terminated'
   if (kind.kind === 'token' && kind.token === 'component') return 'prototype-terminated'
   return 'owner-terminated'
+}
+
+/**
+ * P3 §2.5/Q8 — per-path component-target resolution for a path-state. The
+ * state's OWN node is resolved first (depth-0), then ITS PATH's ancestors —
+ * the walk hop owners, nearest first — with NEAREST-WINS: at most one hit per
+ * name per path. The graph node's family chain beyond the path is NEVER
+ * consulted (path-only — a multi-path prototype's family anchors lead to a
+ * DIFFERENT parent than the path being compiled; identical ancestor trees ⇒
+ * identical bindings, which is why identity = pathKey alone, §2.2). Names
+ * with no provider on the path record an unresolved-reference entry. In-place
+ * on the state's `bindings`/`unresolved`; own published values seed later
+ * (seedOwnBindings, skip-if-present).
+ */
+export function resolvePathTargets(
+  node: Node,
+  pathAncestors: Node[],
+  bindings: Record<string, unknown>,
+  unresolved: UnresolvedRef[],
+): void {
+  for (const a of node.anchors) {
+    if (a.role !== 'target' || typeof a.target !== 'string') continue
+    if (bindings[a.target] !== undefined) continue
+    const hit = nearestPathProvider(node, pathAncestors, a.target)
+    if (hit) bindings[a.target] = hit.anchor.value
+    else unresolved.push({ referenceName: a.target, code: 'unresolved-reference' })
+  }
+}
+
+function nearestPathProvider(node: Node, pathAncestors: Node[], name: string): ProviderHit | undefined {
+  const own = providersOn(node, name)
+  if (own.length > 0) return own[0]!
+  for (const anc of pathAncestors) {
+    const hit = providersOn(anc, name)
+    if (hit.length > 0) return hit[0]!
+  }
+  return undefined
+}
+
+/**
+ * P3 §1.2 (C-2) — the relevance pre-check for the silent abort: given a
+ * placement-routed node, its CURRENT chosen name (the first-match result;
+ * null = no satisfied request), and the name of the placement link an update
+ * trigger names — can the changed link alter the node's first-match choice?
+ *
+ * Irrelevant (⇒ abort: no state regeneration, no events) exactly when the
+ * changed link is NOT the chosen name AND ranks BELOW it in the node's
+ * ordered request list (a change there cannot move the choice, and no
+ * higher-rank link changed — the trigger names one link). Everything else is
+ * conservatively RELEVANT: the chosen link itself (the instance set can
+ * change), a higher-ranked link (a container can appear above the choice),
+ * a link the node never requests, a stale/missing choice, and
+ * non-placement-routed nodes.
+ *
+ * Unit 6 passes the trigger identity through `supervisor.apply` and gates
+ * `node.compilePath` on this predicate; this unit is the pure decision.
+ */
+export function placementChangeIrrelevant(node: Node, chosenName: string | null, changedLinkName: string): boolean {
+  if (chosenName === null) return false
+  if (changedLinkName === chosenName) return false
+  const names: string[] = []
+  for (const a of node.anchors) {
+    if (a.role !== 'content' || typeof a.target !== 'string') continue
+    names.push(a.target)
+  }
+  const chosenIdx = names.indexOf(chosenName)
+  if (chosenIdx === -1) return false
+  const changedIdx = names.indexOf(changedLinkName)
+  return changedIdx !== -1 && changedIdx > chosenIdx
+}
+
+/** P3 §2.5 — the silent-abort pre-check's chosen-name source (C-2): a node's
+ *  LAST compiled states' `activePlacement` (all of a node's path-states share
+ *  the chosen name; family-first states carry none and are skipped). null ⇒
+ *  no satisfied choice yet — the update is conservatively RELEVANT. */
+export function activePlacementOf(states: readonly CompiledState[]): string | null {
+  for (const cs of states) {
+    if (cs.activePlacement !== undefined) return cs.activePlacement
+  }
+  return null
 }
 
 export function resolveArms(target: Node, names: string[], slice: Node[], viable: ReadonlySet<NodeId>, kinds: ReadonlyMap<NodeId, ChainKind>): ArmState[] {

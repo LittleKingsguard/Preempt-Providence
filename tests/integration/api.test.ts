@@ -405,7 +405,7 @@ describe('ClientAPI.apply — api.md §8 exhaustiveness', () => {
     register(zone)
     targetAnchor(zone, 'slot2') // component borrow; only placement anchors exist
     const plink = hub().linkFor('slot2', 'placement')
-    root.addAnchor('placement', 'slot2', {}, plink)
+    root.addAnchor('container', 'slot2', {}, plink)
 
     const exposed = clientAPI.getState(zone.id)
     expect(exposed[0]?.status).toBe('unresolved-reference') // placement never satisfies a component target

@@ -400,7 +400,7 @@ Strongest form of Pillar B: **store no structural relationship on the node at al
     name: 'parent-child' | 'component' | 'placement' | …  // prototype/assembly compose from these
     parent: { count: 1 }            // parent-child only
     children: { min: 1; max: Infinity; orderKey: 'unique' }
-    roles: Array<'parent' | 'child' | 'source' | 'target' | 'duplex' | 'placement' | 'component'> // roles this link admits (S-R3.9)
+    roles: Array<'parent' | 'child' | 'source' | 'target' | 'duplex' | 'container' | 'content' | 'component'> // roles this link admits (S-R3.9; P3 §1.1: 'placement' renamed 'container', consumer role 'content' added)
   }
   interface Link {
     id: string
@@ -426,7 +426,7 @@ Strongest form of Pillar B: **store no structural relationship on the node at al
 - `Anchor` = the helper value on a node describing "this node at one end of a `Link`". Anchors **live on-node** as `node.anchors: Anchor[]`, but the **canon is the layer stack** (which may carry `AnchorLayer`s): `compileLocal` reconciles the node's behavior *including its anchors* against the current layer stack, and those reconciled anchors are what any walk reads. No independent write path besides the layers (S-R3.8 confirmed). Each `Anchor` back-references its `Link`. **Role holders (S-R2.1):** `anchorsOf('parent')` returns the anchor that defines *this node AS A PARENT* — a parent holds the single `'parent'` anchor on its family `Link`; each child holds its single `'child'` anchor on that same `Link`. The `node.parent` getter reads the ≤1 `'child'` anchor → its `link` → the link's `parent` anchor → its node. A tree anchor sits on its family `'parent-child'` `Link` (the edge lives on the `Link`, reached via `anchor.link`); its `target` is the resolved owner from the union below — never the `Link` itself (C2):
   ```ts
   type AnchorTarget = Node | 'rootNode' | 'component' | 'contentNodes' | string /* referenceName token (§10.8.2) */
-  type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'placement' | 'component'
+  type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'container' | 'content' | 'component'   // P3 §1.1 role rename
   interface AnchorOptions { /* child anchors carry priority/order */ priority?: number; order?: number }
   interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link }
   ```
@@ -438,7 +438,7 @@ Strongest form of Pillar B: **store no structural relationship on the node at al
   - a **prototype's** parent-**link** (its ≤1 `'child'` anchor → its `Link` → the `'parent'` anchor) has the family `'parent'` anchor target `'component'` (attached to the component prototype) → `prototype`;
   - the **root's** parent-**link** has its `'parent'` anchor target `'rootNode'` (**not** a node) → unambiguous `root`;
   - everything with **no `'child'` anchor, or whose parent-link chain terminates at no permanent owner** (the root's chain is fine because it legitimately ends at `'rootNode'` — C1) and not inside a prototype → `unplaced`. No `parent === null` vs `parent === undefined` ambiguity anywhere.
-- Components and placements resolve in the same manner — resolution = presence/absence of their anchors/links (`placement` anchor reflects the zone being populated; `component` anchor reflects the aggregation target), as a plain graph query (§10.8.2).
+- Components and placements resolve in the same manner — resolution = presence/absence of their anchors/links (`container`/`content` anchors reflect the zone registry and its routing requests, P3 §1.1; `component` anchor reflects the aggregation target), as a plain graph query (§10.8.2).
 - `Supervisor.compile()` becomes strictly a graph resolution: walk from the supervisor's root anchor outward through links; local state (`in-tree`/`unplaced`/`prototype`, parenting, order) is *derived*, immutable-within-compile, and impossible to desynchronize.
 - **Root-out deep compile is one option, not the only one.** A **node-local compile** stays in the model for the event-emission system's cheap minimal-element updates: resolve only the affected node/subtree's slice of the graph (its anchors, links, and the ancestors needed for source/duplex borrow) and emit diffed render ops just for that slice (§10.6) — no full supervisor walk per update. The graph model keeps both viable: the same `compile(slice)` primitive, parameterized by an entry point (root anchor vs. a node's anchors).
 
@@ -461,9 +461,9 @@ Rejections are **structured and actionable**, never silent:
   - `target` — a component *consumes* a value with that `referenceName` (waits until a source is present);
   - `duplex` — **one anchor carrying BOTH a target and a value** (self-providing consumer; mirrors legacy `Component.isAppliedInAncestors`).
 - **Compile-time resolve = populate the node's OWN targets first (S-R2.6).** Compiling a node means: "populate our declared target anchors, using source component providers, using the **value of the first source** we can find." The search base is the node itself — **if the node already carries a source/value anchor for that `referenceName`, it resolves at itself (depth 0), before any walk.** Only unresolved targets then walk **toward the root**, taking the **first** `source`/`duplex` match — nearest shadows far; a root-level component is only used if nothing closer exists. A `target` with no match on the way up → unresolved-reference compile state with a clear code.
-- **Placement ≠ component (S-R2.8).** Two distinct behaviors: component resolution = the `source`/`target`/`duplex` maps above; **placement** = a `'placement'`-role anchor on the zone's family `Link`, applied by `attach` and populated by compile — it shares the borrow algorithm but NOT the component role semantics. Legacy `Placement*` is not carried over (S3.6).
+- **Placement ≠ component (S-R2.8).** Two distinct behaviors: component resolution = the `source`/`target`/`duplex` maps above; **placement** = a two-sided role pair on the **shared per-name placement Link** — the ZONE REGISTRY (P3 §1.1/§2.1): `'container'`-role anchors (producers; legacy `placementName`, the `'placement'` role renamed) OFFER a zone, `'content'`-role anchors (consumers; minted from legacy `targetPlacement: string[]`, preference-ordered) REQUEST routing into every zone of the matched name. Resolution shares the borrow algorithm but NOT the component role semantics. **REVISED (P3 — supersedes S3.6):** legacy `Placement*` IS carried over — the consumer feed (`targetPlacement`) is implemented; static multiplicity is path-multiplicative (one path-state per zone of the chosen name, P3 §1.2/§2).
 - Same invariants apply through `LinkConfig` (`roles` whitelist, `count`); the unresolved-target state above is part of that `config`, not a validation-layer catch.
-- **Multiple nodes may share a `referenceName`/`placementName` — the compiler forks.** Every candidate resolution is a separate **compiled state, identified by its path back to the root node**. If a fork-arm's path **does not terminate at the root**, the arm returns **no actionable compiled state** and is dropped, never rendered: **loop-terminated arms log a `circular-source` warning (S-R2.5)**, prototype-terminated arms fail compile silently. Actionable forks render; ambiguous-but-terminating cases therefore surface as *multiple valid states* rather than an arbitrary pick (§10.8.4).
+- **Multiple nodes may share a `referenceName`/`placementName` — the compiler forks.** Every candidate resolution is a separate **compiled state, identified by its path back to the root node**. If a fork-arm's path **does not terminate at the root**, the arm returns **no actionable compiled state** and is dropped, never rendered: **loop-terminated arms log a `circular-source` warning (S-R2.5)**, prototype-terminated arms fail compile silently. Actionable forks render; ambiguous-but-terminating cases therefore surface as *multiple valid states* rather than an arbitrary pick (§10.8.4). **P3 §2 (implemented):** for PLACEMENT the fork is static — the path-enumeration compile mode (`compilePath`) walks both edge kinds toward root (placement edges + family edges, per-walk visit set P3 §1.4) and produces one state per (node, path-to-root) — the fork-stress tree's 4095 states from 23 nodes, `forkKey = pathKey` on every state, no `#<i>` arms (P3 §2.2/§10.ab; the runtime page's after-compile expansion stays the documented alternative — P3 §9-Q4).
 
 ### 10.8.3 Anchor/edge storage summary
 
@@ -473,7 +473,7 @@ Rejections are **structured and actionable**, never silent:
 | `Link.anchors` | the link's anchor set | `Link` |
 | parent–child | 1 link = 1 parent anchor + ≥1 child | `LinkConfig 'parent-child'` |
 | component refs | 1 link per `referenceName` | `LinkConfig 'component'`, roles source/target/duplex |
-| placement | resolution link at the zone | `LinkConfig` |
+| placement | the per-name placement Link — the ZONE REGISTRY: `'container'` producers + `'content'` consumers on the shared per-name Link (P3 §1.1/§2.1; was "resolution link at the zone") | `LinkConfig 'placement'`, roles container/content |
 
 ### 10.8.4 Two-phase compile: local state first, remote walks second
 
@@ -498,7 +498,7 @@ compile(slice) {
 - **Pass 2 `compileRemote`** performs the walks for values that *depend on other nodes' state*: `parent` (via the parent-role anchor's Link), `children` (aggregate the parent Link's child anchors, ordered by `priority`), and component/placement bindings (walk toward root, borrow encountered `source`/`duplex` `referenceName` values — §10.8.2). It only runs after pass 1 so the anchor arrays it reads are current.
 - **Why separate**: a node-local update (`state-slice` from a handler or `ClientAPI.apply`, the `receiveNextState` successor) runs pass 1 on just that node + a *bounded* pass 2 (its ancestor chain for parent/bindings), producing the cheap minimal-element render (§10.6, §10.8 compile bullet). A root-out deep compile runs pass 1 on the whole slice, then pass 2 as one coherent walk. Interleaving would force every node-local update to re-derive remote values on stale anchors.
 - **Dirty propagation — post-op, microtask-backed (decided)**: pass 1 runs synchronously inside the structural op; the dependents whose *remote* values changed (A's children, C's parent/bindings) are marked dirty and their **pass 2 is scheduled on the existing render microtask queue**. Synchronous propagation is out — we coalesce: everyone dirtied by a batch request compiles remote in the same sweep, right before the render emit. One microtask per tick; no whole-tree recompile, no mid-op walk.
-- **Forked compiled states (§10.8.2)**: pass 2 may branch into multiple compiled states when several sources/placements share a name — each fork is **keyed by its path back to the root node** (`root / a / b …`). Arm disposition: an arm that terminates at a permanent owner other than the root (component prototype, `contentNodes`) or is prototype-tailed **fails silently and contributes no actionable state** (S-R2.5); only a **looped** arm logs a `circular-source` warning. A coerced pick is never synthesized.
+- **Forked compiled states (§10.8.2)**: pass 2 may branch into multiple compiled states when several sources/placements share a name — each fork is **keyed by its path back to the root node** (`root / a / b …`). Arm disposition: an arm that terminates at a permanent owner other than the root (component prototype, `contentNodes`) or is prototype-tailed **fails silently and contributes no actionable state** (S-R2.5); only a **looped** arm logs a `circular-source` warning. A coerced pick is never synthesized. **P3 §2 (implemented):** for PLACEMENT the fork is STATIC — the `compilePath` path-enumeration mode walks both edge kinds toward root (per-walk visit set, P3 §1.4) and mints one state per (node, path-to-root) with `forkKey = pathKey` on every path-state, children attached at mint time (P3 §2.3); the two per-node focused / root-out scopes stay for the non-placement world (P3 §2.1 — a third mode, not a replacement).
 
 Trade-offs to lock down before adoption:
 1. **O(1) `parent` access** — **decided**: anchors materialize on the node (`node.anchors: Anchor[]`, one local write per node only when *its own* reconciled anchors change); add a per-parent link index only if hot-path reads need it.
@@ -531,7 +531,7 @@ fold INTO the pillars above on the next consistency pass.
 | S3.3 | **Link destroys itself and cascades to anchors**; parent/child participants call link destruction. Nodes **cascade-delete** when they can't resolve a path to a permanent owner — the root node, a component prototype, or the `contentNodes` array (S-R2.2; "persistence" removed, S-R3.7). Covers both parent-first and child-first underflow cases. |
 | S3.4 | **Compile-time tree traversal loop detection** doubles as op-time guard: `attach`/`move` run the same detector off the destination's parent-chain; a detected cycle rolls the op back (test-and-rollback). |
 | S3.5 | **Prototype and loop both fail compile** — both are non-actionable, same outcome; no per-cause warning channel required. **SUPERSEDED by S-R2.5** (S-R3.6): prototype-terminated arms fail silently; loop-terminated arms log `circular-source` — a per-cause channel was added. |
-| S3.6 | **Placement is attachment/compile only — no legacy `Placement`.** Legacy placement (parse/config) is not carried over; placement is expressed as `'parent-child'`/`'placement'`-role anchors via attach + compile. `Placement`/`PlacementConfig`/`placement` schema legacy footnotes are removed references for the rewrite. |
+| S3.6 | **Placement is attachment/compile only — no legacy `Placement`.** Legacy placement (parse/config) is not carried over; placement is expressed as `'parent-child'`/`'placement'`-role anchors via attach + compile. `Placement`/`PlacementConfig`/`placement` schema legacy footnotes are removed references for the rewrite. **REVISED (P3 §1.1 — superseded):** the legacy consumer feed IS carried over — `targetPlacement: string[]` mints ordered `'content'` anchors on the shared per-name placement Link (the `'placement'` producer role renamed `'container'`), and the path-enumeration compile resolves them statically (placement-path-spec §1.1/§1.2/§2.1). |
 | S4.1 | **Depth-0 self-resolution, not a failure.** A node with a `duplex` anchor (both `target` and `value` for the same `referenceName`) resolves **at itself — the search base at its own node — before any upward walk (S-R2.6).** Two same-`referenceName` components splitting target/value resolve by closest-first; same-node pairs resolve at depth 0. |
 | S4.2 | **Client re-resolves.** After hydrate the client **re-resolves** from the serialized anchors (re-runs same pipeline) rather than materializing shipped forks blindly. SSR and client run the same resolve-on-anchors pipeline; SSR emits HTML, client re-resolves. |
 | S4.3 | **PARKED** — whether the legacy `run*` config gates survive/re-exported is deferred; Pillar F currently says "adapter + persistence flags" only. |
@@ -545,7 +545,7 @@ fold INTO the pillars above on the next consistency pass.
 | S-R2.3 | **`unplaced` is transient; cascade-destroy is async** (outstanding post-op microtask sweep). Synchronous `attach` before the sweep resolves the tree and prevents destruction. |
 | S-R2.5 | **Loop-terminated fork-arms warn** (`circular-source`); prototype-terminated arms fail compile silently. |
 | S-R2.6 | **Duplex = one anchor carrying BOTH target and value.** Resolve = populate the node's OWN targets; if the node already has a source for the `referenceName` it resolves at depth 0 (itself) before any upward walk. |
-| S-R2.8 | **Placement ≠ component** (distinct behaviors): component = `source`/`target`/`duplex` maps; placement = `'placement'`-role anchor on the zone's family Link via `attach` + compile — sharing the borrow algorithm, not the role semantics. |
+| S-R2.8 | **Placement ≠ component** (distinct behaviors): component = `source`/`target`/`duplex` maps; placement = two-sided roles (`'container'` producer / `'content'` consumer) on the shared per-name placement Link — the ZONE REGISTRY — resolved by the path-enumeration compile (P3 §1.1/§2.1; REVISED from the earlier `'placement'`-role-anchor-on-the-zone's-family-Link-via-attach + compile wording), sharing the borrow algorithm, not the role semantics. |
 | S-R2.9 | **Anchor layers**: an `AnchorLayer` (`NodeLayer` carrying anchors) lets a resolving component (e.g. `'type'`) inject additional anchors/component-maps so a second compile pass populates them — **idempotent** (traceable back to the generating anchor, removed with it). |
 
 ### §10.9 addendum — reviewer round-3 resolutions (S-R3.x)
@@ -562,7 +562,7 @@ Round-3 found drift from earlier decisions rather than new design gaps. All rows
 | S-R3.6 | S3.5 formally **superseded** by S-R2.5. |
 | S-R3.7 | Permanent owners collapse to **root node / component prototype / `contentNodes` array**; "persistence" dropped, singular "contentNode" fixed. |
 | S-R3.8 | **Confirmed (user): canon is the layer stack.** Anchors live on the node, but the source of truth is the **layer stack** (which can include `AnchorLayer`s). `compileLocal` **reconciles the node's behavior — including its anchors — against the current layer stack**; the on-node `Anchor[]` is reconciled materialization, not an independent write path. |
-| S-R3.9 | `LinkConfig.roles` union widened to include `'placement'` / `'component'`. |
+| S-R3.9 | `LinkConfig.roles` union widened to include `'placement'` / `'component'`; **P3 §1.1 (implemented):** the union now carries `'container'` / `'content'` / `'component'` — the legacy `'placement'` member is renamed `'container'` and the consumer role `'content'` added (`DEFAULT_PLACEMENT.roles = ['container', 'content']`, link.ts:23-26). |
 | S-R3.10 | **Confirmed (user): correct.** Non-root owner-terminated arms drop silently (`contentNodes` → not-in-tree per S1.1, no actionable state); fork path-keys are only material for actionable, root-terminated forks. |
 | S-R3.11 | Canonical entry is `ClientAPI.apply(nodeRef, mutation)`, journaling through `supervisor.apply`. |
 | S-R3.12 | **Confirmed (user): correct, and broadened.** Injected/materialized anchors are populated by a **new dirty sweep** — and this holds for **any effect that adds anchors, including a new layer**, not just `AnchorLayer`s. |
@@ -618,16 +618,59 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   parsed directly: `src/core/translate.ts` maps
   `TemplateData/ContentPayload/NodeData/ComponentBinding/PlacementConfig/
   HandlerDef/run* gates` onto live nodes (component binding → `target`
-  anchor, placement config → `placement` anchor, children arrays → parent-
+  anchor, placement config → `'container'`/`'content'` anchors on the shared
+  per-name placement Link — P3 §1.1, REVISED from the earlier "placement
+  config → `placement` anchor", children arrays → parent-
   child anchors in array order, handlers carried on the node, `run*` gates →
   `{adapter,persistence}`).
 - **DECIDED:** the root node stores its OWN default children
   (`template.root.children`, attached in-tree via parent-child anchors).
-  `template.children` and content-payload items are the **UNPLACED content
-  nodes** — translated with NO parent anchor (awaiting placement), returned
-  in `TranslatedTree.content`; payload `metadata`/`userData` surface on the
-  translated result (first payload wins), not on nodes. Content nodes stay
-  dropped from compile (S1.1) until attached into a placement zone.
+  `template.children` and content-payload items are the content nodes —
+  **contentNodes-owned**: each content root receives the `contentNodes`
+  permanent-owner parent anchor at translate (placement-path-spec §10.ad/
+  F-13), so content roots are family-'in-tree' (node.ts:213) yet the token
+  terminates the compile walk (never actionable until a real parent edge
+  supersedes the token on attach — the F-13 re-verification of the
+  legacy-bootstrap "attach makes content render" e2e). `nodeToLegacy` STRIPS
+  the minted token anchor on reverse (round-trips stay clean). Payload
+  `metadata`/`userData` surface on the translated result (first payload
+  wins), not on nodes. (REVISES the earlier "UNPLACED content nodes with NO
+  parent anchor" wording — superseded by the P3 minting.)
+- **DECIDED (P3 placement feed — placement-path-spec §1.1/§1.2/§2.5/§6.2):**
+  `targetPlacement` is `string[]` and mints ONE ORDERED `content` anchor per
+  requested name on the shared per-name placement Link (preference order
+  preserved through serialization — content anchors are excluded from the
+  serialize target sort); `activePlacement` is DERIVED (`string` type, never
+  minted — the reverse emits the derived read); `#`-containing names warn
+  `placement-name-invalid` + skip; duplicated names in the list warn
+  `placement-duplicate-reference` (keep-first — K8-class guard); a bare
+  string (old mis-typed shape) coerces to `[string]` with
+  `placement-string-coerced`; the interim `component-target-placement`
+  ignore-warn (NP13/AP5) is REMOVED.
+- **DECIDED (Unit 5 — resolve-side first-match, §1.2/§2.5/Q8):** the
+  preference-ordered first-match prunes the COMPILED node's own `content`
+  anchors only — `compilePath` keeps exactly the walks whose first hop is
+  the chosen name (the most preferred name with a root-viable container);
+  later names are never consulted (silent — no drops, no warnings), names
+  with no viable container are skipped, a whole-array miss forks nothing.
+  Intermediate walk hops keep walking ALL their edges (family + every
+  content anchor) — the R2.2 sibling-shared census (4095 = Σ 2^k) is a
+  fan-out over the chosen name's zones, so the fork-stress fixture must be
+  the R2.2 topology (both level-(k−1) prototypes own ONE name; consumers
+  target it) — the earlier per-slot zone-name fixture undercounts to 2049
+  and was corrected in path-enum.test.ts. `activePlacement` = the chosen
+  name (the state's own first placement hop's zone) is SET on every
+  placement-routed path-state (never authored); the derived `placement`
+  root's per-path read of it (derived.ts §2.3) is a later unit. Per-path
+  component resolution is Q8 path-only: own → path ancestors (nearest-wins,
+  ≤1 hit per name per path, never the family chain beyond the path);
+  unresolved names record `unresolved-reference` per state. The silent-abort
+  RELEVANCE PREDICATE is `placementChangeIrrelevant(node, chosenName,
+  changedLinkName)` in resolve.ts: irrelevant (⇒ abort: no states, no
+  events) exactly when the changed link is NOT the chosen name and ranks
+  BELOW it in the ordered request list; Unit 6 wires the trigger identity
+  (`{ kind: 'placement', linkName, direction }`) through supervisor.apply
+  into this predicate before `node.compilePath`.
 - **DECIDED:** the translated tree is a normal graph — it compiles, forks,
   and serializes through the existing pipeline; no legacy code path survives
   past translation (PAR-4).
@@ -697,6 +740,14 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   nodes that self-provide a resolved referenceName (`source`/`duplex`
   anchor): such unplaced content nodes resolve depth-0 (S-R2.6) and yield a
   compiled state. Pure consumers (target-only) stay dropped until placed.
+  **P3 §2.4 (implemented):** the `selfProviding` branch grows a
+  `placementRouted` sibling — a node whose placement path enumerates to
+  `'rootNode'` is viable output (its path-states are actionable); the
+  ancestor-name veto (§1.3) + per-walk visit set (§1.4) guard the paths.
+  (P3 note: with the contentNodes-ownership minting, TRANSLATE-produced
+  content roots are family-'in-tree' and never reach this branch — the
+  token terminates the compile walk as owner-terminated, placement-path-spec
+  §2.4; the carve-out now covers only non-translate unplaced nodes.)
 - **DECIDED:** `CompiledState.state` reflects the node's DERIVED state
   (`node.state`), never a hardcoded `'in-tree'` — a self-providing unplaced
   node compiles with `state: 'unplaced'`, keeping the label honest.

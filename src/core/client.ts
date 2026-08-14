@@ -35,8 +35,10 @@ export function createClient(supervisor: Supervisor): ClientAPI {
           op.kind = 'state-slice'
           op.mutation = [m]
         }
-        // resolve string refs to Node objects
-        for (const refKey of ['to', 'source'] as const) {
+        // resolve string refs to Node objects (P3 §3.3: placement-attach's
+        // `container` joins the family-op refs; the op spread above already
+        // carried the trigger-identity fields through untouched)
+        for (const refKey of ['to', 'source', 'container'] as const) {
           if (typeof op[refKey] === 'string') {
             const resolved = supervisor.getNode(op[refKey] as NodeId)
             if (resolved) op[refKey] = resolved

@@ -5,7 +5,7 @@
 // node.ts / link.ts, which this module is not allowed to import). Kept
 // minimal: `isNode` distinguishes a Node from a Link structurally, which the
 // C2 contract relies on (a Link can never fill AnchorTarget).
-export type Role = 'parent'|'child'|'source'|'target'|'duplex'|'placement'|'component'
+export type Role = 'parent'|'child'|'source'|'target'|'duplex'|'container'|'content'|'component'
 export type AnchorTarget = Node | 'rootNode' | 'component' | 'contentNodes' | string
 export interface Node {
   readonly isNode: true
@@ -33,13 +33,16 @@ export interface Node {
   destroyLinks(): void
   markDestroyed(): void
   markDirty(scope: DirtyScope): void
-  addAnchor(role: Role, target: AnchorTarget | string, options?: AnchorOptions, link?: unknown): Anchor
+  addAnchor(role: Role, target: AnchorTarget | string, options?: AnchorOptions, link?: unknown): Anchor | null
   removeAnchor(anchor: Anchor): void
   familyLinkFor(): Link
   reconcileAnchors(): void
   compileLocal(): void
   compileRemote(visited?: Set<string>, depth?: number): void
   compile(slice: Node[]): CompileResult
+  /** Placement-path enumeration compile mode (P3 §2) — the third compile
+   *  scope: mints one CompiledState per valid (node, owner-path) pair. */
+  compilePath(): CompileResult
   applySlice(mutation: LayerMutationList): void
   orphan(childAnchor: Anchor): void
   __onLinkDissolve?(anchor: Anchor): void
@@ -90,7 +93,30 @@ export interface DetachOp { kind: 'detach'; node: Node; from?: Link }
 export interface MoveOp   { kind: 'move'; node: Node; to: { parent: Node; priority?: number } }
 export interface CloneInstanceOp { kind: 'clone-instance'; source: Node; slot: string; priority?: number }
 export interface DestroyOp { kind: 'destroy'; node: Node }
-export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp
+/** P3 §3.3/§9-Q2 — the silent-abort carrier (C-2/10.ac.2 #7): which placement
+ *  link an update changed and how. Passed into the pass-2 dispatch through
+ *  `supervisor.apply`; the compiler entry evaluates `placementChangeIrrelevant`
+ *  per affected node before any state regeneration. */
+export interface PlacementTrigger {
+  kind: 'placement'
+  linkName: string
+  direction: 'container-added' | 'container-removed' | 'content-added'
+}
+/** P3 §3.3 — the dedicated placement-attach op (F-4): registers the node if
+ *  new, mints its `content` anchor(s) per `names` (preference order), mints/
+ *  ensures the `container` anchor on the target container node (with the §1.3
+ *  ancestor-name veto), and marks pass-2 dirty ONLY the container node + the
+ *  added node (E2E-4's ideal affected set). `attach` stays family-only;
+ *  `AttachOp.zone` is superseded by this kind. The op payload carries the
+ *  trigger-identity fields; `supervisor.apply` derives them when absent. */
+export interface PlacementAttachOp {
+  kind: 'placement-attach'
+  node: Node
+  container: Node
+  names: string[]
+  trigger?: PlacementTrigger
+}
+export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp
 
 export interface LayerMutation {
   targetProp: 'type'|'content'|'handlers'|`props.${string}`|`css.${string}`
@@ -108,7 +134,14 @@ export interface WireDetachOp { kind:'detach'; node: NodeRef; from?: LinkId }
 export interface WireMoveOp   { kind:'move'; node: NodeRef; to: { parent: NodeRef; priority?: number } }
 export interface WireCloneInstanceOp { kind:'clone-instance'; source: NodeRef; slot: string; priority?: number }
 export interface WireDestroyOp { kind:'destroy'; node: NodeRef }
-export type WireStructuralOp = WireAttachOp|WireDetachOp|WireMoveOp|WireCloneInstanceOp|WireDestroyOp
+export interface WirePlacementAttachOp {
+  kind: 'placement-attach'
+  node: NodeRef
+  container: NodeRef
+  names: string[]
+  trigger?: PlacementTrigger
+}
+export type WireStructuralOp = WireAttachOp|WireDetachOp|WireMoveOp|WireCloneInstanceOp|WireDestroyOp|WirePlacementAttachOp
 export interface WireStateSliceOp { kind:'state-slice'; node: NodeRef; mutation: LayerMutationList; actor?: string }
 export type WireMutationOp = WireStructuralOp | WireStateSliceOp
 export type MutationInput = LayerMutationList | WireStructuralOp
@@ -130,6 +163,12 @@ export interface CompiledState {
   bindings: Record<string, unknown>; unresolved: UnresolvedRef[]
   trace?: NodeRef[]
   forkKey?: PathKey
+  /** P3 §2.5 — the derived `activePlacement` read source: the CHOSEN name
+   *  (the zone name of the path-state's own first placement hop) on
+   *  placement-routed path-states. Never authored; absent on non-path and
+   *  non-placement states. The derived `placement` root reads it per-path
+   *  (derived.ts §2.3 — Unit 10 wiring). */
+  activePlacement?: string
 }
 export interface CompileResult {
   actionable: CompiledState[]

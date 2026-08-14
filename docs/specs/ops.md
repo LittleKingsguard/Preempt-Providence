@@ -10,11 +10,19 @@ Source: `RENDER_PROCESS_NOTES.md` §10.2, §10.8.1, §10.8.4, §10.9 (S1.x–S4.
 type MutationOp = StructuralOp | StateSliceOp
 
 type StructuralOp =
-  | { kind: 'attach';          node: Node; to: Node; zone?: string; priority?: number }
+  | { kind: 'attach';          node: Node; to: Node; zone?: string; priority?: number }  // zone: declared but SUPERSEDED by
+                                                                                         // 'placement-attach' (P3 §9-Q2) — attach stays family-only
   | { kind: 'detach';          node: Node; from?: Link }
   | { kind: 'move';            node: Node; to: { parent: Node; priority?: number } }
   | { kind: 'clone-instance';  source: Prototype; slot: PlacePointer; priority?: number }
   | { kind: 'destroy';         node: Node }
+  | { kind: 'placement-attach'; node: Node; container: Node; names: string[];
+      trigger?: { kind: 'placement'; linkName: string; direction: 'container-added' | 'container-removed' | 'content-added' } }
+      // P3 §3.3/§9-Q2 — the dedicated placement-attach op (F-4). `AttachOp.zone`
+      // is superseded by this kind; `attach` stays family-only. The op payload
+      // carries the trigger-identity fields (C-2/10.ac.2 #7); supervisor.apply
+      // derives them when absent (container anchor newly minted ⇒
+      // 'container-added', else 'content-added').
 
 interface StateSliceOp {
   kind: 'state-slice'
@@ -31,6 +39,7 @@ type Actor = string
 | --- | --- | --- |
 | `state-slice` | S2.1 | Successor to `receiveNextState`. Synchronous `compileLocal` + queued pass-2. **Joins the same replayable journal** as structural ops. |
 | structural kinds | notes §10.2 | Each kind = one executor writing anchors/links under `LinkConfig` enforcement. |
+| `placement-attach` | P3 §3.3/§9-Q2 | Dedicated placement op: register-if-new, mint ordered `content` anchor(s) + `container` anchor (with the §1.3 ancestor-name veto), dirty = container + added node only (E2E-4). Trigger identity rides the payload into the pass-2 dispatch (silent abort). |
 
 `NodeState` (`'prototype' | 'unplaced' | 'in-tree' | 'destroyed'`) is **derived from the anchor graph per `compile(slice)`** (notes §10.1) — ops never write state fields; state transitions are side effects of graph ops.
 
@@ -73,12 +82,31 @@ Synchronous re-`attach` before the sweep resolves the tree and **blocks destruct
 
 - Clone subtree + its link family from a `Prototype` into a `PlacePointer` slot.
 - Clone machinery per Pillar D (notes §10.4): default copy = base + layers + anchor profile (S1.4); `CloneUtils` registry includes `Link`/`Anchor` fns so a deep clone recreates the whole family; fresh `'parent-child'` priority anchors auto-derived; `_referencingNodes` does not exist (S2.2).
-- Placement expressed via the cloned subtree's anchors (`'placement'`-role anchor on the zone's family Link, populated by compile) — **no legacy `Placement*` types** (S3.6, S-R2.8).
+- **Not the placement mechanism** (P3 §9-Q2/F-4): placement goes through the dedicated `placement-attach` op (§2.6); clone-instance stays the component-instantiation / after-compile-expansion path only.
 
 ### 2.5 `destroy`
 
 - Dissolve the node's links (notes §10.8.1 erase semantics): link destroys itself and cascades to anchors; parent/child participants call link destruction (S3.3).
 - **Async cascade** via post-op sweep (notes §10.8.1, S-R2.3): every descendant that cannot resolve a path to a permanent owner at sweep time cascade-destroys; `'destroyed'` is the terminal outcome of that cascade, not a stored tombstone (S1.2, S3.3).
+
+### 2.6 `placement-attach` (P3 §3.3/§9-Q2 — E2E-4)
+
+| Step | Action | Ledger ref |
+| --- | --- | --- |
+| 1 | **Register the node if new** (supervisor.registerNode — idempotent); the added node is a consumer that was not (or is no longer) part of the tree | P3 §3.3 |
+| 2 | Mint the node's **`content` anchor(s)** on the shared per-name placement Link — one per requested container name in `names`, **preference order preserved** (dedup keep-first — re-attach is idempotent); `#`-containing names are skipped | P3 §1.1/§1.3 |
+| 3 | **Mint/ensure the `container` anchor** on the target container node for the attach zone (`names[0]`) — under the **§1.3 ancestor-name veto** (an ancestor of the container node already offering the zone ⇒ warn `placement-name-vetoed`, warn+skip, never a throw) | P3 §1.3, F-4 |
+| 4 | Mark pass-2 dirty **only the container node + the added node** — E2E-4's ideal affected set (nothing at depth>4 recalcs for a depth-4 add) | P3 §3.3, §9-Q2 |
+| 5 | **Journal + replay**: node-scoped like the other structural ops (state-slice placement block unchanged — P4). The journal entry carries the op verbatim, trigger identity fields included | notes §10.2, 10.ac.2 #7 |
+
+**Trigger identity (silent-abort carrier, C-2):** the op payload carries
+`{ kind: 'placement', linkName, direction }` — which placement link the update
+changed; `supervisor.apply` derives it when absent (container anchor newly
+minted ⇒ `container-added`, else `content-added`) and passes it into the
+pass-2 dispatch, where the compiler entry evaluates the relevance pre-check
+(`placementChangeIrrelevant`, chosen name from the node's last states'
+`activePlacement`) per affected node BEFORE any state regeneration —
+irrelevant ⇒ silent abort: no states, no events (P3 §1.2/§3.3).
 
 ---
 
@@ -86,8 +114,8 @@ Synchronous re-`attach` before the sweep resolves the tree and **blocks destruct
 
 | Legacy concept | Decomposes to | Ledger ref |
 | --- | --- | --- |
-| `Placement` | `attach` + `'placement'`-role anchor on the zone's family `Link` (populated by compile; shares the borrow algorithm, not component role semantics) | S-R2.8, S3.6 |
-| Clone-into-zone | `clone-instance` + `attach` (with `zone`) | notes §10.2 |
+| `Placement` | the **`placement-attach` op** (§2.6): `content` anchors minted per `targetPlacement` name (preference order) + `container` anchor ensured on the target container node, on the shared per-name placement Link; attach stays family-only | P3 §1.1/§3.3, §9-Q2 |
+| Clone-into-zone | `clone-instance` + `attach` — component instantiation only; placement no longer decomposes through clone-instance | notes §10.2, P3 §9-Q2 |
 | Component instantiation | `attach` + `clone-instance` on `'parent-child'` Links | notes §10.2 |
 | `parent` setter side effects | **Deleted.** No `parent` field; `parent` is a getter only (≤1 `'child'` anchor → its `Link` → the Link's `'parent'` anchor → its node) | notes §10.2, S-R2.1 |
 
@@ -125,7 +153,7 @@ class LinkConfigError extends Error {
 
 1. **Synchronous pass 1**: `compileLocal(node)` — reconcile against the node's own layer stack (canon, S-R3.8): props/css/content/type + the anchor array (materialized from layers incl. `AnchorLayer`s).
 2. **Queued pass 2**: remote-dependent values marked dirty → microtask sweep (§5 below).
-3. **In-tree gating** (S1.1): compile attempt on a node not in-tree returns **no usable compiled state** (not partial).
+3. **In-tree gating** (S1.1): compile attempt on a node not in-tree returns **no usable compiled state** (not partial). P3 §2.4 carve-out: a placement-ROUTED node (enumerated placement path to root) compiles actionable path-states via `compilePath` — the gate keys on the family-derived `NodeState`, which content roots clear through the contentNodes-ownership minting at translate (P3 §10.ad/F-13).
 4. Journaled identically to structural ops for replay/undo.
 
 ---
@@ -195,7 +223,7 @@ interface Supervisor {
 | G6 | Orphan still ownerless at sweep time | Async cascade-destroy fires; descendants without permanent-owner path destroyed | S-R2.3, S1.2, S3.3 |
 | G7 | Mid-op rejection | **Atomicity**: link in pre-call state; no partial application | notes §10.8.1 |
 | G8 | `state-slice` on in-tree node | Sync `compileLocal`; dirty pass-2 queued; journaled | S2.1 |
-| G9 | `state-slice` / compile on not-in-tree node | **No usable compiled state** (not partial) | S1.1 |
+| G9 | `state-slice` / compile on not-in-tree node | **No usable compiled state** (not partial). P3 §2.4 carve-out: placement-routed nodes compile actionable path-states via `compilePath` — viability is a property of the path, not the family label | S1.1, P3 §2.4 |
 | G10 | Pass-2 fork with multiple same-name sources | Multiple compiled states keyed by path-to-root; ambiguous-terminating cases surface as multiple states, never a coerced pick | notes §10.8.4 |
 | G11 | Fork arm terminating at prototype/`contentNodes` | Fails silently; contributes no actionable state | S-R2.5, S-R3.3, S-R3.10 |
 | G12 | Fork arm looping | Logs `circular-source` warning; arm dropped | S-R2.5 |
@@ -207,6 +235,8 @@ interface Supervisor {
 | G18 | Batch with multiple dirtied dependents | One microtask; one coalesced pass-2 sweep; no whole-tree recompile | notes §10.8.4 |
 | G19 | `destroy` on node with descendants | Link dissolve + async cascade over descendants lacking permanent-owner path | notes §10.8.1, S3.3 |
 | G20 | Slice unlock before final resolution | Not allowed; unlock only after every fork emitted/dropped | S2.3 |
+| G21 | `placement-attach` (E2E-4) | Node registered if new; ordered `content` anchors minted (dedup keep-first); `container` anchor minted/ensured under the §1.3 ancestor-name veto (`placement-name-vetoed` warn+skip); pass-2 dirty = container + added node only — a depth-4 add recalcs nothing at depth>4; journaled verbatim (trigger fields included), replay idempotent | P3 §3.3/§9-Q2/F-4 |
+| G22 | Trigger identity / silent abort | Placement-affecting ops pass `{ kind: 'placement', linkName, direction }` through `supervisor.apply` into the pass-2 dispatch; the compiler entry evaluates `placementChangeIrrelevant` (chosen name from the node's last states' `activePlacement`) before `compilePath` — an irrelevant (less-favored) update ⇒ zero state regeneration, zero events; a relevant (chosen-link) update regenerates | P3 §1.2/§3.3, C-2/10.ac.2 #7 |
 
 ---
 

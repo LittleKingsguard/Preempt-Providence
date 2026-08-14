@@ -117,17 +117,24 @@ describe('e2e — legacy data → complete render (Step 7)', () => {
     expect(cr.warnings.filter((w) => w.code === 'circular-source')).toHaveLength(0)
   })
 
-  it('attaching an unplaced content node into its placement zone makes it render', () => {
+  it('attaching a content root into its placement zone adds a placement path to an already-in-tree content node (F-13 re-verification)', () => {
     const t = translateLegacy(richLegacy())
     const card = t.content[1]!
-    expect(card.state).toBe('unplaced')
-    expect(card.anchors.some((a) => a.role === 'placement' && a.target === 'slot-alpha')).toBe(true)
+    // contentNodes-ownership minting (P3 §10.ad/F-13): the content root is
+    // family-'in-tree' via the permanent-owner token from translate — the
+    // token terminates the compile walk, so it is NOT yet actionable
+    expect(card.state).toBe('in-tree')
+    expect(card.anchors.some((a) => a.role === 'container' && a.target === 'slot-alpha')).toBe(true)
+    const cr0 = t.root.compile(t.nodes)
+    expect(cr0.actionable.map((s) => s.nodeId)).not.toContain(card.id)
 
-    // place the card under the root (the zone) — attach via the shared family link
+    // place the card under the root (the zone) — attach via the shared family
+    // link; the real parent edge SUPERSEDES the contentNodes placeholder
     const family = t.root.anchors.find((a) => a.role === 'parent')!.link as never
     card.addAnchor('child', card, { priority: 5 }, family)
 
     expect(card.state).toBe('in-tree')
+    expect(card.childAnchor()!.link.anchorsOf('parent')[0]!.target).not.toBe('contentNodes')
     const cr = t.root.compile(t.nodes)
     expect(cr.actionable.map((s) => s.nodeId)).toContain(card.id)
   })

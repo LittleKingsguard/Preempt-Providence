@@ -467,20 +467,21 @@ export async function runFeatureMatrixTests({
   })
 
   // ------------------------------------------------------------------
-  // 4. FORKS — N providers ⇒ N actionable arms, no coerced pick
-  await runner.check('forks: each theme consumer resolves 2 distinct arms; both render', () => {
+  // 4. PROVIDERS — two DISTINCT names, one arm each, no same-name fork claims
+  await runner.check('providers: each theme consumer resolves its own distinct provider; both values render', () => {
     for (const c of ['fork-a', 'fork-b']) {
       const arms = statesOf(byName[c])
-      if (arms.length !== 2) throw new Error(`${c}: expected 2 arms, got ${arms.length}`)
-      if (new Set(arms.map((a) => a.pathKey)).size !== 2) throw new Error(`${c}: path keys not distinct`)
-      const themes = arms.map((a) => a.bindings['theme'])
-      if (!themes.includes('theme: dark') || !themes.includes('theme: light')) {
-        throw new Error(`${c}: bindings missing candidates: ${JSON.stringify(themes)}`)
-      }
+      if (arms.length !== 1) throw new Error(`${c}: expected 1 arm, got ${arms.length}`)
+      const b = arms[0].bindings
+      const wanted = c === 'fork-a' ? 'theme-dark' : 'theme-light'
+      const unwanted = c === 'fork-a' ? 'theme-light' : 'theme-dark'
+      const expectedVal = c === 'fork-a' ? 'theme: dark' : 'theme: light'
+      if (b[wanted] !== expectedVal) throw new Error(`${c}: ${wanted} binding missing (got ${JSON.stringify(b)})`)
+      if (b[unwanted] !== undefined) throw new Error(`${c}: must NOT consume ${unwanted} — distinct names, no same-name sources`)
     }
     if (serverData.forkArms.length !== expected.forkCount) throw new Error('server forkArms count mismatch')
     const domText = allText(adapter.wires.get(byName['fork-demo']))
-    if (!domText.includes('theme: dark') || !domText.includes('theme: light')) throw new Error('fork arms not rendered into the DOM')
+    if (!domText.includes('theme: dark') || !domText.includes('theme: light')) throw new Error('provider values not rendered into the DOM')
   })
 
   // ------------------------------------------------------------------

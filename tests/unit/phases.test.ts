@@ -214,7 +214,7 @@ describe('focusedSliceFor — bounded pass-2 slices stay bounded (no all-tree sc
     // an off-path prototype provider sharing the SAME hub: the link knows it
     const provider = new Node({ type: 'section' }, h)
     familyLink(provider, 'component')
-    const src = provider.addAnchor('source', 'theme', {}, h.linkFor('theme', 'component'))
+    const src = provider.addAnchor('source', 'theme', {}, h.linkFor('theme', 'component'))!
     src.value = 'dark'
     const slice = focusedSliceFor(child, [root, child, provider])
     expect(slice.map((n) => n.id).sort()).toEqual([root.id, child.id].sort())

@@ -36,7 +36,7 @@
       <h2>2 · Expected behavior (mirror of the e2e goals)</h2>
       <ul class="expect-list">
         <li><strong>SSR-H1 / PAR-5</strong> — the in-browser render tree must be structurally equal to the server render tree (same input ⇒ same output).</li>
-        <li><strong>Fork</strong> — <em>dock</em> consumes <code>feed</code> provided twice at <em>app</em>: two fork arms render as multiple valid states, never a coerced pick.</li>
+        <li><strong>Providers</strong> — <em>dock</em> consumes <code>feed-a</code> + <code>feed-b</code>: two DISTINCT provider names resolve into ONE dock state carrying both bindings (the same-name fork claim is an anti-pattern — placement-path-spec §10.ad).</li>
         <li><strong>Nesting</strong> — <em>badge</em> renders nested inside <em>dock</em>; <em>zone</em> renders with its placement anchor.</li>
         <li><strong>SSR-H3 / S4.2</strong> — the client re-resolves from anchors; shipped fork traces are inputs, not conclusions.</li>
         <li><strong>SSR-H2</strong> — hydration reuses SSR DOM via the <code>css.id</code> seam.</li>
@@ -48,8 +48,9 @@
       <h2>3 · Expected document tree structure</h2>
       <p class="expect">
         Expected behavior: the rendered document tree below is the structure the browser
-        must produce — <em>dock</em> (with both fork arms resolved from <code>feed</code>),
-        its nested <em>badge</em>, and the <em>zone</em> node.
+        must produce — <em>dock</em> (with both distinct <code>feed-a</code>/<code>feed-b</code>
+        providers resolved into its single state), its nested <em>badge</em>, and the
+        <em>zone</em> node.
       </p>
       <div id="expected-tree" class="tree-view"></div>
     </section>
@@ -66,7 +67,7 @@
     </section>
 
     <section>
-      <h2>5 · Fork arms — both candidate resolutions render</h2>
+      <h2>5 · Resolved providers — both candidate values render</h2>
       <div id="fork-arms" class="fork-arms"></div>
     </section>
 

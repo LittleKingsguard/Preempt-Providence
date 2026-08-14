@@ -16,7 +16,8 @@
     in docs/DEMO-FEEDBACK.md and summarized next to each assumption below.
 
     The page exercises, in one document: placements (content/comments zones),
-    components (session + theme forks), event + phase handlers (session
+    components (session + two DISTINCT theme providers), event + phase
+    handlers (session
     populate, markdown render), managed updates (ClientAPI.apply — journaled),
     in-place render with focus retention (markdown), payload lifecycle
     (drop/refresh/append), reverse translation, loop-safety (circular-source
@@ -27,7 +28,9 @@
          envelope below.
       2. The harness completes the graph with the two things legacy data
          cannot express:
-           - component SOURCE anchors (theme ×2, loop providers) — the session
+           - component SOURCE anchors (theme-dark/theme-light — DISTINCT
+             names, never two same-name sources on one node; loop providers) —
+             the session
              provider rides the DATA: a value-carrying `template.component` is
              a SOURCE (provider) anchor (translate.md §2.1, kernel K6).
            - placement ATTACH: content roots are placed into their zones by
@@ -49,17 +52,21 @@
           gone.
       F2  Content nodes with placement: { placementName: 'theme' } do NOT act
           as component sources; placements and components are orthogonal.
-          Fork providers must be real source/duplex anchors. Fix: root sources
-          'theme' ×2 (FRK-H2) instead of a theme content payload.
+          Providers must be real source/duplex anchors. Fix: root sources
+          two DISTINCT theme names — theme-dark + theme-light (the same-name
+          'theme' ×2 fork claim is an ANTI-PATTERN, placement-path-spec
+          §10.ad — each consumer resolves its own provider).
       F3  Loop safety trips on the borrow-walk/ancestry cycles and depth caps
           (S-R2.5/F11), NOT on sibling-provider pairs — siblings are outside a
           node's resolution scope (own → descendants → ancestors). The draft's
           sibling A⇄B 'circular' pair would just be unresolved. Fix: an
           ancestry resolution cycle (loop-cycle ⇄ loop-nest) that genuinely
           re-enters the walk.
-      F4  Fork arms: N providers render N arms for EACH consumer (FRK-H2) —
-          never one arm per consumer. The draft's "fork-a → dark, fork-b →
-          light" implied a coerced pick. Fix: both consumers render both arms.
+      F4  RE-EXPRESSED (placement-path-spec §10.ad, Unit 11): the draft's
+          "N providers render N arms for EACH consumer" fork claim is
+          anti-patterned. Fix: fork-a → 'theme-dark', fork-b → 'theme-light'
+          — two distinct providers, one resolved state each, never a fork arm,
+          never a coerced pick.
       F5  Markdown display re-parses **bold** into structured nodes via an
           after-compile handler (markdown-display e2e/demo T8); the draft's
           expected DOM showed the raw text. Fix: structured parts + corrected
@@ -90,7 +97,8 @@
       <p class="expect">
         Every element below is framework-rendered: placements, the session
         pane (component + after-compile handler + click events), the markdown
-        editor → display (in-place), the two theme fork consumers (2 arms
+        editor → display (in-place), the two DISTINCT theme providers
+        (fork-a → theme-dark, fork-b → theme-light — one resolved state
         each), and the loop probe (circular-source arm dropped, siblings
         survive).
       </p>

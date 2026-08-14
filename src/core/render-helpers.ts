@@ -3,6 +3,7 @@ import type { NodeRef } from './types.js'
 
 export interface MinimalElementSource {
   nodeId: string
+  pathKey?: ForkPathKey
   type: string
   props?: Record<string, unknown>
   css?: Record<string, unknown>
@@ -24,6 +25,48 @@ export function wireKey(wire: NodeRef, forkKey?: ForkPathKey): string {
   return forkKey === undefined ? wire : `${wire}\x00${forkKey}`
 }
 
+/** ForkKey-aware element lookup: exact (wire, forkKey) match first, then —
+ *  for a BARE wire (append/remove ops carry the arm wire without its
+ *  forkKey, render.ts:57/71) — any element stored under `wireKey(wire, …)`
+ *  (DEFECT #1 completion: fork arms reach the adapter's wires map under
+ *  composite keys, so bare-wire ops must resolve them by prefix). */
+export function findEl<P>(
+  stores: Array<Map<string, P> | undefined>,
+  wire: NodeRef,
+  forkKey?: ForkPathKey,
+): P | undefined {
+  const exact = wireKey(wire, forkKey)
+  for (const store of stores) {
+    const hit = store?.get(exact)
+    if (hit !== undefined) return hit
+  }
+  if (forkKey !== undefined) return undefined
+  const prefix = `${wire}\x00`
+  for (const store of stores) {
+    if (!store) continue
+    for (const [k, v] of store) {
+      if (k.startsWith(prefix)) return v
+    }
+  }
+  return undefined
+}
+
+/** P3 §2.2 path-state test: identity = pathKey ALONE — `forkKey === pathKey`
+ *  and the key carries NO arm-suffix grammar. The only other forkKey-bearing
+ *  states are component fork arms, whose keys always contain `#f:`; placement
+ *  pathKeys are `#`-free by the `placement-name-invalid`/`#`-check guards
+ *  (§1.3). The root path-state ('root') and family-first path-states count. */
+export function isPathState(s: { pathKey?: ForkPathKey; forkKey?: ForkPathKey }): boolean {
+  return s.forkKey !== undefined && s.pathKey === s.forkKey && !s.pathKey.includes('#')
+}
+
+/** Wire scheme (§4.1): path-states emit on their pathKey wire (identity =
+ *  pathKey alone); everything else emits on the nodeId wire (component fork
+ *  arms get the `nodeId#<i>` suffix at emitOne). */
+function pathWireOf(s: { nodeId: string; pathKey?: ForkPathKey; forkKey?: ForkPathKey }): string {
+  return isPathState(s) ? s.pathKey! : s.nodeId
+}
+
 /** Compiled-state reducer: props → `prop:*`, css → `css:*` EXCLUDING cssDef, content → `text`. */
 export function minimalFromState(cs: MinimalElementSource): MinimalElement {
   const props: Record<string, unknown> = {}
@@ -33,7 +76,11 @@ export function minimalFromState(cs: MinimalElementSource): MinimalElement {
     props[`css:${k}`] = v
   }
   if (cs.content !== undefined) props['text'] = cs.content
-  const me: MinimalElement = { wire: cs.nodeId, type: cs.type, props, childOrder: [...(cs.children ?? [])] }
+  // P3 §4.1: a path-state's wire is its pathKey; family/non-path states keep
+  // the nodeId wire. childOrder reads the state as-is (§4.2 — the per-path
+  // conversion to child pathKey wires is the emitElements seam, which has the
+  // full actionable set; single-state callers have no sibling context).
+  const me: MinimalElement = { wire: pathWireOf(cs), type: cs.type, props, childOrder: [...(cs.children ?? [])] }
   if (cs.forkKey !== undefined) me.forkKey = cs.forkKey
   return me
 }
@@ -57,7 +104,8 @@ type ForkAware<P, E> = RenderAdapter<P, E> & {
 export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): void {
   const fk = adapter as unknown as ForkAware<P, E>
   const created = new Map<string, P>()
-  const has = (w: NodeRef): P | undefined => created.get(w) ?? (fk.wires ?? fk.fragments)?.get(w)
+  const persistent = (fk.wires ?? fk.fragments)
+  const has = (w: NodeRef, forkKey?: ForkPathKey): P | undefined => findEl([created, persistent], w, forkKey)
   for (const op of ops) {
     switch (op.kind) {
       case 'create':
@@ -73,7 +121,7 @@ export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): v
         break
       }
       case 'remove': {
-        const w = has(op.wire)
+        const w = has(op.wire, op.forkKey)
         if (w && fk.removeEl) fk.removeEl(op.wire, op.forkKey)
         created.delete(wireKey(op.wire, op.forkKey))
         break
@@ -115,8 +163,10 @@ export function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => b
   }
   for (const [key, tree] of byWire) tree.props = propVals.get(key) ?? {}
   for (const e of edges) {
-    const owner = byWire.get(e.owner)
-    const child = byWire.get(e.child)
+    // forkKey-aware resolution: append edges carry the bare arm wire while
+    // create entries live under wireKey(wire, forkKey) (DEFECT #1 completion)
+    const owner = findEl([byWire], e.owner)
+    const child = findEl([byWire], e.child)
     if (owner && child) owner.children.push(child)
   }
   const childWires = new Set(edges.map((e) => e.child))
@@ -191,53 +241,98 @@ export interface EmitNodeSource {
 export function emitElements(
   actionable: Array<{
     nodeId: string
+    pathKey?: ForkPathKey
+    trace?: string[]
     type: string
     props?: Record<string, unknown>
     css?: Record<string, unknown>
     content?: unknown
     children?: string[]
     bindings?: Record<string, unknown>
+    forkKey?: ForkPathKey
   }>,
   nodeById?: Map<string, EmitNodeSource> | null,
 ): MinimalElement[] {
+  // P3 §4.1 — group by WIRE, not nodeId: a path-state's wire is its pathKey
+  // (identity = pathKey alone, §2.2), so every path-state forms its OWN
+  // single-state group — it can never be armIdx'd. Only genuine component
+  // forks (several `#f:`-keyed states of one node) stay multi-state groups
+  // and emit the `nodeId#<i>` arms.
   const groups = new Map<string, EmitState[]>()
   for (const s of actionable) {
-    const arr = groups.get(s.nodeId)
+    const wire = pathWireOf(s)
+    const arr = groups.get(wire)
     if (arr) arr.push(s)
-    else groups.set(s.nodeId, [s])
+    else groups.set(wire, [s])
   }
-  const els: MinimalElement[] = []
   // fork arms are wired `<nodeId>#<i>`; a parent referencing a forked node id
   // must adopt the arm wires so `diffMinimal` can attach them (FRK-H2).
   const armWires = new Map<string, string[]>()
-  for (const [nodeId, states] of groups) {
-    if (states.length > 1) armWires.set(nodeId, states.map((_, i) => `${nodeId}#${i}`))
+  for (const [wire, states] of groups) {
+    if (states.length > 1) armWires.set(wire, states.map((_, i) => `${wire}#${i}`))
   }
+  const els: MinimalElement[] = []
+  // P3 §2.3/§4.2 — per-path child conversion: a path-state's compiled
+  // `children` are the child NODES' ids (path-derived at mint time); the
+  // emitted childOrder must reference the CHILD STATES' pathKey wires. The
+  // child state that extends a parent path-state's path is the one whose
+  // trace = the parent's trace + the child's own id (mintPathState sets
+  // `trace = [...hop owners root-down, nodeId]`), so the index buckets child
+  // states by their parent's trace.
+  const pathChildIndex = new Map<string, Map<string, string>>()
+  const pathStateChildren = new Map<string, string[]>()
+  const pathNodeOf = new Map<string, string>()
+  for (const s of actionable) {
+    if (!isPathState(s) || !s.pathKey || !s.trace) continue
+    pathNodeOf.set(s.pathKey, s.nodeId)
+    const parentTrace = s.trace.slice(0, -1).join('\u0000')
+    let m = pathChildIndex.get(parentTrace)
+    if (!m) {
+      m = new Map()
+      pathChildIndex.set(parentTrace, m)
+    }
+    m.set(s.nodeId, s.pathKey)
+  }
+  for (const s of actionable) {
+    if (!isPathState(s) || !s.pathKey || !s.trace) continue
+    const m = pathChildIndex.get(s.trace.join('\u0000'))
+    if (m) pathStateChildren.set(s.pathKey, (s.children ?? []).map((c) => m.get(c) ?? c))
+  }
+  const convertedOf = (s: EmitState): string[] | undefined =>
+    s.pathKey ? pathStateChildren.get(s.pathKey) : undefined
   // component-link layers: wires the def re-types are emitted ONLY through the
   // def (prototype-as-child) — their standalone states must not double-emit.
+  // The covered set holds child WIRES (pathKey for path-state children).
   const defCovered = new Set<string>()
-  for (const [nodeId, states] of groups) {
+  for (const [wire, states] of groups) {
     const base = states[0]!
     const def = Object.values(base.bindings ?? {}).find(isLinkDef)
     if (!def) continue
     const offset = def.childOffset ?? 0
+    const children = convertedOf(base) ?? base.children ?? []
     for (let i = 0; i < def.children.length; i += 1) {
-      const cw = (base.children ?? [])[offset + i]
+      const cw = children[offset + i]
       if (cw) defCovered.add(cw)
     }
   }
-  for (const [, states] of groups) {
+  for (const [wire, states] of groups) {
     const multi = states.length > 1
     const base = states[0]!
-    const emitted = emitOne(base, multi ? 0 : undefined, nodeById)
-    const covered = states.length === 1 && defCovered.has(base.nodeId)
+    // P3 §4.2: the path-state emits with its converted child wires (read-only
+    // states: a copy, never mutating the compiled state)
+    const converted = convertedOf(base)
+    const emitBase = converted ? { ...base, children: converted } : base
+    const pathCtx: PathEmitContext | undefined =
+      pathNodeOf.size > 0 || pathStateChildren.size > 0 ? { pathNodeOf, pathStateChildren } : undefined
+    const emitted = emitOne(emitBase, multi ? 0 : undefined, nodeById, pathCtx)
+    const covered = states.length === 1 && defCovered.has(wire)
     if (!covered) {
       const el = emitted.el
       if (multi) {
         el.childOrder = []
         // one element per arm; the first arm carries the full el, the rest are leaf dupes
         els.push(el)
-        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nodeById).el)
+        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nodeById, pathCtx).el)
       } else {
         // remap any forked child references to their arm wires in arm order
         el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])
@@ -256,12 +351,15 @@ export function emitElements(
 
 type EmitState = {
   nodeId: string
+  pathKey?: ForkPathKey
+  trace?: string[]
   type: string
   props?: Record<string, unknown>
   css?: Record<string, unknown>
   content?: unknown
   children?: string[]
   bindings?: Record<string, unknown>
+  forkKey?: ForkPathKey
 }
 
 /** First resolved binding whose value is a scalar (string/number) — the
@@ -289,12 +387,25 @@ function isLinkDef(v: unknown): v is LinkDefSpec {
     Array.isArray((v as { children?: unknown }).children)
 }
 
+/** Per-path emit context passed down from emitElements (the full actionable
+ *  set is the only place the child-state wires are knowable — §4.2). */
+interface PathEmitContext {
+  /** pathKey → the child state's node id (for the def branch's node lookup). */
+  pathNodeOf: Map<string, string>
+  /** pathKey → the path-state's converted child wires (def re-typed children
+   *  adopt the child state's own path-derived childOrder). */
+  pathStateChildren: Map<string, string[]>
+}
+
 function emitOne(
   s: EmitState,
   armIdx: number | undefined,
   nodeById?: Map<string, EmitNodeSource> | null,
+  pathCtx?: PathEmitContext,
 ): { el: MinimalElement; defChildren?: MinimalElement[] } {
-  const wire = armIdx !== undefined ? `${s.nodeId}#${armIdx}` : s.nodeId
+  // P3 §4.1 wire scheme: a path-state emits on its pathKey wire; a component
+  // fork arm on `nodeId#<i>`; a family/non-path state on its nodeId.
+  const wire = isPathState(s) ? s.pathKey! : armIdx !== undefined ? `${s.nodeId}#${armIdx}` : s.nodeId
   const props: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(s.props ?? {})) props[`prop:${k}`] = v
   for (const [k, v] of Object.entries(s.css ?? {})) props[`css:${k}`] = v
@@ -320,11 +431,15 @@ function emitOne(
       // them. (Per-node unique stress css is authored on the child node.)
       // It ALSO keeps its OWN children: a real child may itself have a child
       // subtree (the next layer), which the emitted element must adopt so
-      // diffMinimal nests them (the "boxes must nest" contract).
-      const childNode = nodeById?.get(cw) as unknown as { css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> } | undefined
+      // diffMinimal nests them (the "boxes must nest" contract). For a
+      // path-state child the wire is its pathKey — the node id comes from the
+      // emit context, and its own children are its path-derived child wires.
+      const childNodeId = pathCtx?.pathNodeOf.get(cw) ?? cw
+      const childNode = nodeById?.get(childNodeId) as unknown as { css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> } | undefined
       for (const [k, v] of Object.entries(childNode?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
       for (const [k, v] of Object.entries(childNode?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
-      const childOrder = childNode ? (childNode.children ?? []).map((c) => c.id) : []
+      const childOrder = pathCtx?.pathStateChildren.get(cw)
+        ?? (childNode ? (childNode.children ?? []).map((c) => c.id) : [])
       return { wire: cw, type: spec.type, props: cprops, childOrder }
     })
     // full child order: untouched children (before the def slice) + def-typed
@@ -332,7 +447,9 @@ function emitOne(
     const bound = scalarBinding(s.bindings)
     if (bound !== undefined) props['text'] = bound
     const type = bound !== undefined ? s.type : def.type
-    return { el: { wire, type, props, childOrder: order }, defChildren: reTyped }
+    const el: MinimalElement = { wire, type, props, childOrder: order }
+    if (s.forkKey !== undefined) el.forkKey = s.forkKey
+    return { el, defChildren: reTyped }
   }
 
   const bound = scalarBinding(s.bindings)
@@ -344,8 +461,12 @@ function emitOne(
     for (const h of handlers) {
       if (h && typeof h === 'object' && typeof h.event === 'string') props[`on:${h.event}`] = true
     }
-    return { el: { wire, type: s.type, props, childOrder: [...(s.children ?? [])] } }
+    const el: MinimalElement = { wire, type: s.type, props, childOrder: [...(s.children ?? [])] }
+    if (s.forkKey !== undefined) el.forkKey = s.forkKey
+    return { el }
   }
   // fork arms are leaves in this page (no children on the themed divs)
-  return { el: { wire, type: s.type, props, childOrder: [] } }
+  const el: MinimalElement = { wire, type: s.type, props, childOrder: [] }
+  if (s.forkKey !== undefined) el.forkKey = s.forkKey
+  return { el }
 }

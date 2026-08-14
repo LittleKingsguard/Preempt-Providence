@@ -34,18 +34,20 @@ const SPECIAL = 'a < b & c > d "q"'
 // Scenario builders (reconstructed exactly as each e2e suite builds them)
 // ---------------------------------------------------------------------------
 
-/** ssr-render.test.ts buildNestedPane — root provider + forked dock + zone. */
+/** ssr-render.test.ts buildNestedPane — forked dock (two provider NODES) + zone. */
 function buildNestedPane() {
   const root = makeRoot({ type: 'app', content: 'shell', css: { id: 'css-app' } })
   const dock = childOf(root, makeNode({ type: 'dock', props: { role: 'main' }, css: { id: 'css-dock' } }), 0)
   const inner = childOf(dock, makeNode({ type: 'badge', content: 'inner', css: { id: 'css-inner' } }), 0)
-  const zone = childOf(root, makeNode({ type: 'zone', content: 'slot', css: { id: 'css-zone' } }), 1)
-  addComponentSource(root, 'feed', { label: 'A' })
-  addComponentSource(root, 'feed', { label: 'B' })
+  const fA = childOf(dock, makeNode({ type: 'feedA' }), 1)
+  const fB = childOf(dock, makeNode({ type: 'feedB' }), 2)
+  addComponentSource(fA, 'feed', { label: 'A' })
+  addComponentSource(fB, 'feed', { label: 'B' })
   targetAnchor(dock, 'feed')
+  const zone = childOf(root, makeNode({ type: 'zone', content: 'slot', css: { id: 'css-zone' } }), 1)
   const plink = hub().linkFor('slot-alpha', 'placement')
-  zone.addAnchor('placement', 'slot-alpha', {}, plink)
-  return { root, dock, inner, zone }
+  zone.addAnchor('container', 'slot-alpha', {}, plink)
+  return { root, dock, inner, zone, fA, fB }
 }
 
 /** markdown-display.test.ts buildMarkdown — editor textarea + display parts. */
@@ -134,8 +136,8 @@ function legacyDoc(): Record<string, unknown> {
 describe('e2e — SSR HTML output validity (real SSRFragmentAdapter)', () => {
   describe('ssr-render.test.ts scenario (SSR-H1 + placements + components + nested)', () => {
     it('SSR-V1 server stream: emitted HTML is well-formed and begins with the first-created wire', () => {
-      const { root, dock, inner, zone } = buildNestedPane()
-      const slice = [root, dock, inner, zone]
+      const { root, dock, inner, zone, fA, fB } = buildNestedPane()
+      const slice = [root, dock, inner, zone, fA, fB]
       const ops = diffMinimal(null, root.compile(slice).actionable.map(minimalFromState))
       const html = renderOps(ops)
       expect(validateHtml(html)).toEqual([])
@@ -149,8 +151,8 @@ describe('e2e — SSR HTML output validity (real SSRFragmentAdapter)', () => {
     })
 
     it('SSR-V2 client re-render: serialized doc re-compiles to the identical emitted HTML (PAR-5)', () => {
-      const { root, dock, inner, zone } = buildNestedPane()
-      const slice = [root, dock, inner, zone]
+      const { root, dock, inner, zone, fA, fB } = buildNestedPane()
+      const slice = [root, dock, inner, zone, fA, fB]
       const serverOps = diffMinimal(null, root.compile(slice).actionable.map(minimalFromState))
       const serverHtml = renderOps(serverOps)
 

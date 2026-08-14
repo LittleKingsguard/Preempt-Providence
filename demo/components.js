@@ -182,9 +182,11 @@ async function handleDomEvent(wire, domEvent) {
 // ---- component expansion (emission layer) --------------------------------
 /**
  * Expand one compiled state into renderable elements.
- * - A state whose 'panel' target resolved: the component reference drives the
- *   element TYPE and populates DESCENDANT nodes from the definition; each
- *   child's value comes from its SOURCE reference binding.
+ * - A state whose 'panel-a'/'panel-b' target resolved: the component
+ *   reference drives the element TYPE and populates DESCENDANT nodes from the
+ *   definition; each child's value comes from its SOURCE reference binding.
+ *   The two defs are DISTINCT names (anti-pattern compliance — no same-name
+ *   sources), so the consumer's single state carries both bindings.
  * - The user pane resolves the 'user-panel' component → after-compile handler
  *   label; its buttons carry `on:click` bindings dispatched by the adapter.
  * - Placement states render their resolution label.
@@ -196,11 +198,13 @@ function expandState(state, armIdx) {
     els.push({ wire: `${wire}:label`, type: 'span', props: { 'css:classes': cls ?? ['res-label'], text }, childOrder: [] })
   }
   const classes = state.css?.classes ? [...state.css.classes] : []
-  const def = state.bindings['panel']
+  const def = state.bindings['panel-a'] ?? state.bindings['panel-b']
 
   if (def) {
-    // component reference for type/children → populated descendant nodes
-    const wire = `${state.nodeId}#${armIdx}`
+    // component reference for type/children → populated descendant nodes.
+    // The consumer carries a single state (distinct provider names), so its
+    // wire is the plain node id — no arm suffix.
+    const wire = state.nodeId
     const children = def.children.map((spec) => {
       const cw = `${wire}:${spec.bind}`
       els.push({ wire: cw, type: spec.type, props: { text: state.bindings[spec.bind] ?? '(missing)', 'css:classes': ['bound-value'] }, childOrder: [`${cw}:label`] })
@@ -210,14 +214,14 @@ function expandState(state, armIdx) {
     els.push({
       wire,
       type: def.type,
-      props: { 'css:classes': ['panel'], 'prop:data-resolution': 'component:panel' },
+      props: { 'css:classes': ['panel'], 'prop:data-resolution': 'component:panel-a/panel-b' },
       childOrder: [...children, `${wire}:label`],
     })
     label(wire, def.label, ['res-label', 'panel-label'])
     return els
   }
 
-  const placement = state.anchors.find((a) => a.role === 'placement')
+  const placement = state.anchors.find((a) => a.role === 'container')
   const unresolved = state.unresolved.length > 0
   const userPanel = state.bindings['user-panel']
   const node = wireToNode.get(state.nodeId)
@@ -349,22 +353,23 @@ async function main() {
 
   const checks = [
     {
+      // T1/T6 — two DISTINCT panel providers (panel-a/panel-b) resolve into
+      // ONE consumer state carrying both def bindings; the single element
+      // renders as a SECTION (anti-pattern compliance: no same-name sources)
       run: () => {
         const arms = statesOf(panelId)
-        if (arms.length !== 2) throw new Error(`expected 2 panel arms, got ${arms.length}`)
-        if (!arms.every((a) => a.bindings['panel']?.type === 'section')) throw new Error('resolved panel type missing')
-        const p0 = adapter.wires.get(`${panelId}#0`)
-        const p1 = adapter.wires.get(`${panelId}#1`)
-        if (!p0 || p0.tagName !== 'SECTION') throw new Error('arm A panel element not rendered')
-        if (!p1 || p1.tagName !== 'SECTION') throw new Error('arm B panel element not rendered')
+        if (arms.length !== 1) throw new Error(`expected 1 panel state (two distinct providers), got ${arms.length}`)
+        if (arms[0].bindings['panel-a']?.type !== 'section') throw new Error('panel-a def binding missing')
+        if (arms[0].bindings['panel-b']?.type !== 'section') throw new Error('panel-b def binding missing')
+        const p0 = adapter.wires.get(panelId)
+        if (!p0 || p0.tagName !== 'SECTION') throw new Error('panel element not rendered as a section')
       },
     },
     {
       run: () => {
-        if (!nodeText(`${panelId}#0:heading`).includes('Hello from a component source')) throw new Error('heading source value not populated')
-        if (!nodeText(`${panelId}#0:body`).includes('Values resolve from source anchors')) throw new Error('body source value not populated')
-        if (!nodeText(`${panelId}#1:heading`).includes('Hello from a component source')) throw new Error('arm B heading not populated')
-        if (adapter.wires.get(`${panelId}#0:heading`)?.tagName !== 'H2') throw new Error('populated child wrong type')
+        if (!nodeText(`${panelId}:heading`).includes('Hello from a component source')) throw new Error('heading source value not populated')
+        if (!nodeText(`${panelId}:body`).includes('Values resolve from source anchors')) throw new Error('body source value not populated')
+        if (adapter.wires.get(`${panelId}:heading`)?.tagName !== 'H2') throw new Error('populated child wrong type')
       },
     },
     {
@@ -402,8 +407,8 @@ async function main() {
     {
       run: () => {
         const arms = statesOf(panelId)
-        if (arms.length !== 2) throw new Error(`expected 2 arms, got ${arms.length}`)
-        if (new Set(arms.map((a) => a.pathKey)).size !== 2) throw new Error('fork arms not distinct')
+        if (arms.length !== 1) throw new Error(`expected 1 panel state, got ${arms.length}`)
+        if (!arms[0].pathKey) throw new Error('panel state missing its pathKey')
       },
     },
     {

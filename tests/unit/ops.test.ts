@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mintNodeId, Node, Supervisor, findCycle } from '../../src/core/node.js'
-import { execute, applyStateSlice, type OpContext } from '../../src/core/ops.js'
+import { execute, applyStateSlice, placementAttach, derivePlacementTrigger, type OpContext } from '../../src/core/ops.js'
 import { LinkConfigError, SingleParentError, CycleError, PipelineLockError } from '../../src/core/errors.js'
 import { Link, DEFAULT_COMPONENT, DEFAULT_PARENT_CHILD } from '../../src/core/link.js'
 import { SliceLock } from '../../src/core/pipeline.js'
@@ -250,14 +250,15 @@ describe('ops — structural executors (O1–O7, O16, O17, O19)', () => {
 
     let err: LinkConfigError | undefined
     try {
-      link.addAnchor({ role: 'placement', target: 'slot-a', options: {}, link })
+      // P3 §1.1: a placement-side role ('content') never satisfies a component link
+      link.addAnchor({ role: 'content', target: 'slot-a', options: {}, link })
     } catch (e) {
       err = e as LinkConfigError
     }
     expect(err).toBeInstanceOf(LinkConfigError)
     expect(err?.code).toBe('role-mismatch')
     expect(err?.linkId).toBe(link.id)
-    expect(err?.detail.intendedAnchor?.role).toBe('placement')
+    expect(err?.detail.intendedAnchor?.role).toBe('content')
     expect(link.anchors).toEqual(before)
   })
 
@@ -378,6 +379,62 @@ describe('state-slice reducer & compile (O8–O12)', () => {
   })
 })
 
+
+describe('placement-attach op (P3 §3.3, E2E-4) — Unit 6', () => {
+  it('P-A1 the executor mints ordered content anchors + ensures the container anchor on the shared per-name Link', () => {
+    const root = makeRoot()
+    const A = childOf(root, makeNode({}, 'A'))
+    const D = makeNode({ type: 'button' }, 'D')
+    const ctx = opCtx(root, A, D)
+
+    const res = execute({ kind: 'placement-attach', node: D, container: A, names: ['zone-b', 'zone-a'] }, ctx)
+
+    expect(res.doorways).toEqual([A.id, D.id])
+    const content = ofRole(D, 'content')
+    expect(content).toHaveLength(2)
+    // the anchors array preserves the targetPlacement preference order
+    expect(content.map(a => a.target)).toEqual(['zone-b', 'zone-a'])
+    const container = ofRole(A, 'container')
+    expect(container).toHaveLength(1)
+    expect(container[0]!.target).toBe('zone-b')
+    // the per-name placement Link IS the zone registry: same-name anchors share it
+    expect(content[0]!.link).toBe(container[0]!.link)
+    expect(content[1]!.link).not.toBe(container[0]!.link)
+  })
+
+  it('P-A2 re-attach is idempotent: content anchors dedup keep-first, the container anchor is ensured not duplicated', () => {
+    const root = makeRoot()
+    const A = childOf(root, makeNode({}, 'A'))
+    const D = makeNode({}, 'D')
+    const ctx = opCtx(root, A, D)
+
+    execute({ kind: 'placement-attach', node: D, container: A, names: ['zone-1'] }, ctx)
+    execute({ kind: 'placement-attach', node: D, container: A, names: ['zone-1'] }, ctx)
+    expect(ofRole(D, 'content')).toHaveLength(1)
+    expect(ofRole(A, 'container')).toHaveLength(1)
+  })
+
+  it('P-A3 the §1.3 ancestor-name veto skips the container anchor mint with a placement-name-vetoed warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const root = makeRoot()
+    const P = childOf(root, makeNode({}, 'P'))
+    const A = childOf(P, makeNode({}, 'A'))
+    const D = makeNode({}, 'D')
+    const ctx = opCtx(root, P, A, D)
+    P.addAnchor('container', 'zone-1', {}, ctx.hub.linkFor('zone-1', 'placement'))
+
+    execute({ kind: 'placement-attach', node: D, container: A, names: ['zone-1'] }, ctx)
+
+    expect(ofRole(A, 'container')).toHaveLength(0)
+    expect(ofRole(D, 'content')).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('placement-name-vetoed'))
+  })
+
+  it('P-A4 derivePlacementTrigger: a freshly minted container → container-added; an ensured one → content-added', () => {
+    expect(derivePlacementTrigger('zone-1', true)).toEqual({ kind: 'placement', linkName: 'zone-1', direction: 'container-added' })
+    expect(derivePlacementTrigger('zone-1', false)).toEqual({ kind: 'placement', linkName: 'zone-1', direction: 'content-added' })
+  })
+})
 
 describe('slice lock (O20)', () => {
   it('O20 unlocking before final resolution is rejected; unlock is only legal from resolved', () => {

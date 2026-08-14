@@ -93,11 +93,17 @@ describe('integration — read-only pass-2 resolved exposure', () => {
 
   it('a node consuming a name with 2 sources yields 2 fork arms with distinct pathKeys', async () => {
     const { supervisor, root } = newSystem()
-    addComponentSource(root, 'color', 'red')
-    addComponentSource(root, 'color', 'blue')
     const n = childOf(root, makeNode())
     supervisor.registerNode(n)
     targetAnchor(n, 'color')
+    // two provider NODES under the consumer (legitimate multiplicity, §10.ab
+    // #4; same-node same-name sources are the guarded anti-pattern)
+    const pRed = childOf(n, makeNode({ type: 'pRed' }))
+    const pBlue = childOf(n, makeNode({ type: 'pBlue' }))
+    supervisor.registerNode(pRed)
+    supervisor.registerNode(pBlue)
+    addComponentSource(pRed, 'color', 'red')
+    addComponentSource(pBlue, 'color', 'blue')
     supervisor.apply({ kind: 'state-slice', node: n, mutation: [{ targetProp: 'content', mode: 'replace', value: 'x' }] })
     await flushTicks()
 

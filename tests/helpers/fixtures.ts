@@ -74,7 +74,11 @@ export function anchorsOf(node: Node, role: Role): Anchor[] {
   return node.anchors.filter(a => a.role === role)
 }
 
-/** Component source/duplex anchor on a shared per-name link (api.md §4.1). */
+/** Component source/duplex anchor on a shared per-name link (api.md §4.1).
+ *  The `component-source-duplicate` guard (placement-path-spec §10.ab/ae)
+ *  rejects a second same-name provider anchor on one node with a warn; the
+ *  fixture treats that as a test-authoring error (the anti-pattern — never
+ *  construct it), since no re-expressed fixture does. */
 export function addComponentSource(
   owner: Node,
   name: string,
@@ -83,6 +87,9 @@ export function addComponentSource(
 ): Anchor {
   const link = new Link({ name: 'component' })
   const anchor = owner.addAnchor(role, name, {}, link)
+  if (anchor === null) {
+    throw new Error(`component-source-duplicate: ${owner.id} already carries ${role} "${name}"`)
+  }
   anchor.value = value
   return anchor
 }
@@ -90,7 +97,9 @@ export function addComponentSource(
 /** Component target anchor on a shared per-name link. */
 export function targetAnchor(owner: Node, name: string): Anchor {
   const link = new Link({ name: 'component' })
-  return owner.addAnchor('target', name, {}, link)
+  const a = owner.addAnchor('target', name, {}, link)
+  if (a === null) throw new Error(`component-source-duplicate: ${owner.id} already carries target "${name}"`)
+  return a
 }
 
 export { familyLinkTo as familyLink }

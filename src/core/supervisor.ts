@@ -15,7 +15,9 @@ import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes } from './handlers.js'
 import type { HandlerContext, HandlerPhase } from './handlers.js'
 import { unregisterContentNode } from './registry.js'
-import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState } from './types.js'
+import { placementChangeIrrelevant, activePlacementOf } from './resolve.js'
+import { placementAttach, derivePlacementTrigger } from './ops.js'
+import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger } from './types.js'
 
 let journalSeq = 0
 
@@ -222,6 +224,11 @@ export class Supervisor {
   private eventTick = 0
   private flushScheduled = false
   private pass2Dirty = new Set<NodeId>()
+  /** P3 §1.2/§3.3 (C-2, 10.ac.2 #7) — the update trigger identity carried from
+   *  `supervisor.apply` into the pass-2 dispatch: which placement link changed
+   *  and how. Set by placement-affecting ops for their dirty nodes; consumed
+   *  (and cleared) by the runPass2AndFlush relevance pre-check. */
+  private pendingTriggers = new Map<NodeId, PlacementTrigger>()
 
   private emitStructure(opKind: string, nodeId: NodeId): void {
     if (!this.events) return
@@ -229,8 +236,9 @@ export class Supervisor {
     this.scheduleFlush()
   }
 
-  private markPass2(nodeId: NodeId): void {
+  private markPass2(nodeId: NodeId, trigger?: PlacementTrigger): void {
     this.pass2Dirty.add(nodeId)
+    if (trigger) this.pendingTriggers.set(nodeId, trigger)
     this.scheduleFlush()
   }
 
@@ -249,13 +257,31 @@ export class Supervisor {
     if (dirty.length > 0) {
       for (const nodeId of dirty) {
         const node = this.nodes.get(nodeId)
-        if (!node || node.destroyed) continue
-        // bounded pass-2 (render.md §4): resolution walks are graph-based
-        // (own → descendants → ancestors), so the slice only needs the
-        // changed node's walk path plus every source-bearing node (the
-        // fallback universe for prototype/owner-terminated arms). Unrelated
-        // nodes are never recompiled or re-flagged.
-        const cr = node.compile(this.focusedSlice(node), { focusNodeId: nodeId })
+        if (!node || node.destroyed) {
+          this.pendingTriggers.delete(nodeId)
+          continue
+        }
+        // slice/compile-mode switch (placement-path-spec §2.1/§6.2): a dirty
+        // node that is placement-routed (carries `content` anchors) compiles
+        // through the path-enumeration mode — per-path states, node-local
+        // (E2E-2: only this node's path-states regenerate). Non-placement
+        // nodes keep the bounded focused-slice compile unchanged.
+        const placementRouted = node.anchors.some(a => a.role === 'content')
+        // P3 §1.2/§3.3 (C-2) — the silent abort, evaluated BEFORE node.compile:
+        // the update trigger identity (which placement link changed) gates
+        // placement-routed nodes — "can the changed link alter this node's
+        // first-match choice?" (chosenName from the node's LAST states'
+        // activePlacement). Irrelevant ⇒ skip the compile ENTIRELY: no state
+        // regeneration, no events, no dirty residue.
+        const trigger = this.pendingTriggers.get(nodeId)
+        this.pendingTriggers.delete(nodeId)
+        if (placementRouted && trigger && trigger.kind === 'placement') {
+          const chosenName = activePlacementOf(this.resolvedStates.get(nodeId) ?? [])
+          if (placementChangeIrrelevant(node, chosenName, trigger.linkName)) continue
+        }
+        const cr = placementRouted
+          ? node.compilePath()
+          : node.compile(this.focusedSlice(node), { focusNodeId: nodeId })
         // hand the fresh compiled states to the renderer (no recompile there).
         // Group fork arms per compile result, then REPLACE per node — a later
         // dirty node's compile (e.g. a descendant's own pass) supersedes the
@@ -272,8 +298,13 @@ export class Supervisor {
             if (cs.nodeId !== nodeId) continue
             let status: string = 'ok'
             if (cs.unresolved.length > 0) status = 'unresolved-reference'
-            const fork = cs.pathKey.includes('#f') && cs.trace
-              ? { forkKey: cs.pathKey, nodeIds: cs.trace }
+            // §9-Q3 (R2-Q6/C-6) — the `#f` gate re-expressed: EVERY path-state
+            // (forkKey present = pathKey, set unconditionally at mint) emits
+            // for its path — {forkKey: pathKey, nodeIds: trace}; there is no
+            // `#f`-grammar dependency left (path-states' keys are placement
+            // pathKeys; the W2 (nodeId, forkKey) dedup keys are path-unique).
+            const fork = cs.forkKey !== undefined
+              ? { forkKey: cs.forkKey, nodeIds: cs.trace ?? [cs.nodeId] }
               : undefined
             this.events.push('state', { type: 'state', nodeId: cs.nodeId, status: status as never, fork: fork as never })
           }
@@ -335,6 +366,24 @@ export class Supervisor {
         }
         ;(node as Node).applySlice(mutation as never)
         const dirtied = [node!.id]
+        // P3 §3.2 (E2E-3) — component-source change: the affected set is the
+        // per-name component Link's TARGET owners (the consumers that resolve
+        // the changed name), read off the Link registry
+        // (`link.anchorsOf('target')` → `anchor.owner`), never a family walk
+        // (spec §3.2: "resolved through the graph, never by enumerating
+        // states"). A node with no source/duplex anchors keeps the node-local
+        // set (E2E-2: one node compiles). Keep-first dedup: one consumer can
+        // target several names, and a node that consumes its own name is
+        // already dirty.
+        for (const a of (node as Node).anchors) {
+          if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+          for (const ta of a.link.anchorsOf('target')) {
+            const consumer = ta.owner
+            if (!consumer || consumer === node || dirtied.includes(consumer.id)) continue
+            dirtied.push(consumer.id)
+            this.markPass2(consumer.id)
+          }
+        }
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied })
         this.markPass2(node!.id)
         return { status: 'applied', journalId: entry!.id, dirtied }
@@ -347,6 +396,31 @@ export class Supervisor {
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [node!.id] })
         this.emitStructure('destroy', node!.id); this.markPass2(node!.id)
         return { status: 'applied', journalId: entry!.id, dirtied: [node!.id] }
+      }
+      if (op.kind === 'placement-attach') {
+        // P3 §3.3/§9-Q2 — the dedicated placement-attach op (E2E-4): registers
+        // the node if new, mints its `content` anchor(s) per `names`
+        // (preference order) + the `container` anchor on the target container
+        // node (with the §1.3 veto), and marks pass-2 dirty ONLY the container
+        // node + the added node. `attach` stays family-only; the state-slice
+        // placement block stays hard-blocked (P4). The trigger identity
+        // (which placement link changed) rides the op payload; apply derives
+        // it when the payload omits it and passes it into the pass-2 dispatch
+        // (C-2/10.ac.2 #7) — the silent-abort carrier.
+        const container = (op as { container?: Node }).container
+        if (!container) return { status: 'rejected', error: { code: 'unknown-node' } }
+        const names = (op as { names?: string[] }).names ?? []
+        this.registerNode(node as Node)
+        const hub = (node as Node).hubFor ?? container.hubFor ?? this.hub
+        if (!hub) return { status: 'rejected', error: { code: 'link-config', detail: 'no link hub for placement-attach' } }
+        const res = placementAttach(node as Node, container, names, hub)
+        const trigger = (op as { trigger?: PlacementTrigger }).trigger
+          ?? derivePlacementTrigger(res.attachZone, res.containerAnchorMinted)
+        const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [container.id, node!.id] })
+        this.emitStructure('placement-attach', node!.id)
+        this.markPass2(container.id, trigger)
+        this.markPass2(node!.id, trigger)
+        return { status: 'applied', journalId: entry!.id, dirtied: [container.id, node!.id] }
       }
       if (op.kind === 'attach') {
         if (findCycle(node as Node, op.to as Node)) throw new CycleError((node as Node).id)
@@ -429,7 +503,12 @@ export class Supervisor {
   }
 
   replay(): void {
-    for (const entry of this.journal) {
+    // Snapshot the stream: `apply` journals re-applied ops, so iterating the
+    // LIVE array would keep visiting the appended entries — an infinite
+    // journal-growth loop for any op that applies successfully on replay
+    // (e.g. the idempotent placement-attach). The replayed ops are the ORIGINAL
+    // entries only.
+    for (const entry of [...this.journal]) {
       const op = { ...entry.op } as { kind: string; node?: Node; [key: string]: unknown }
       if (op.node) {
         op.node = this.nodes.get((op.node as Node).id) ?? op.node

@@ -1,12 +1,15 @@
 /**
  * Bonus demo fixture — component-driven rendering.
  *
- * Pattern exercised: a node containing a TARGET component reference for
+ * Pattern exercised: a node containing TARGET component references for
  * type/children (resolution populates descendant nodes), with SOURCE
  * component references providing the values populated in those children:
  *
- *   panel-consumer  targets 'panel' (→ type + children), 'heading', 'body'
- *   app (provider)  sources 'panel' ×2 (fork → two arms), 'heading', 'body'
+ *   panel-consumer  targets 'panel-a', 'panel-b' (→ type + children),
+ *                   'heading', 'body'
+ *   app (provider)  sources 'panel-a' + 'panel-b' (two DISTINCT names —
+ *                   the same-name fork claim is an anti-pattern,
+ *                   placement-path-spec §10.ad), 'heading', 'body'
  *
  * Each test below is itself a content node placed in the document tree.
  */
@@ -14,7 +17,7 @@ import { makeRoot, makeNode, childOf, hub, addComponentSource, targetAnchor } fr
 
 export const panelDefA = {
   type: 'section',
-  label: 'component: panel — arm A (type/children from the target reference)',
+  label: 'component: panel-a (type/children from the target reference)',
   children: [
     { bind: 'heading', type: 'h2' },
     { bind: 'body', type: 'p' },
@@ -23,7 +26,7 @@ export const panelDefA = {
 
 export const panelDefB = {
   type: 'section',
-  label: 'component: panel — arm B (type/children from the target reference)',
+  label: 'component: panel-b (type/children from the target reference)',
   children: [
     { bind: 'heading', type: 'h2' },
     { bind: 'body', type: 'p' },
@@ -31,12 +34,12 @@ export const panelDefB = {
 }
 
 export const testGoals = [
-  'T1 — component reference resolves: the "panel" target drives the resolved type and populates descendant nodes',
+  'T1 — component reference resolves: the "panel-a" target drives the resolved type and populates descendant nodes',
   'T2 — source references populate child values: "heading" and "body" resolve into the populated panel children',
   'T3 — placement resolution: the zone element follows placement "slot-alpha" and renders a resolution label',
   'T4 — each test is a content node placed into the tree and rendered by the pipeline',
   'T5 — a dangling reference is unresolved (warning) while the node still renders its own content',
-  'T6 — two component sources fork into two arms with distinct path keys; never a coerced pick',
+  'T6 — two DISTINCT component sources (panel-a / panel-b) resolve into one consumer state carrying both bindings — never a same-name fork, never a coerced pick',
   'T7 — user pane: component-provided after-compile handler populates descendants; mock login shows the predefined user, logout clears it',
   'T8 — markdown display: typing updates the source; **bold** parses into a strong element; elements update IN PLACE (no rebuild, no focus loss)',
 ]
@@ -52,7 +55,7 @@ export function buildComponentTree() {
   targetAnchor(panelC, 'body')
   const zone = childOf(root, makeNode({ type: 'div', css: { classes: ['zone'] } }), 3)
   const plink = hub().linkFor('slot-alpha', 'placement')
-  zone.addAnchor('placement', 'slot-alpha', {}, plink)
+  zone.addAnchor('container', 'slot-alpha', {}, plink)
 
   // user pane: component provides the source for an after-compile handler
   // (wired client-side); descendants are populated from session state.
@@ -79,8 +82,13 @@ export function buildComponentTree() {
   const part1 = childOf(display, makeNode({ type: 'strong', content: '', css: { classes: ['md-part', 'md-bold'] } }), 1)
   const part2 = childOf(display, makeNode({ type: 'span', content: '', css: { classes: ['md-part', 'md-suffix'] } }), 2)
 
-  addComponentSource(root, 'panel', panelDefA)
-  addComponentSource(root, 'panel', panelDefB)
+  // anti-pattern compliance (placement-path-spec §10.ad): two DISTINCT source
+  // names instead of two same-name 'panel' sources — the consumer targets both
+  // and its single state carries both def bindings (legitimate multiplicity).
+  addComponentSource(root, 'panel-a', panelDefA)
+  addComponentSource(root, 'panel-b', panelDefB)
+  targetAnchor(panelC, 'panel-a')
+  targetAnchor(panelC, 'panel-b')
   addComponentSource(root, 'heading', 'Hello from a component source')
   addComponentSource(root, 'body', 'Values resolve from source anchors and populate the panel children.')
   return { root, header, intro, panelC, zone, userPane, username, statusLine, actions, loginBtn, logoutBtn, editor, display, part0, part1, part2, tests, testNodes, footer }

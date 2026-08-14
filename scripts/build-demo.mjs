@@ -26,6 +26,7 @@ import { buildFeatureMatrixPage } from './feature-matrix-server.mjs'
 import { buildModeTogglePage } from './mode-toggle-page.mjs'
 import { buildForkStressPage } from './fork-stress-page.mjs'
 import { buildForkStressDataPage } from './fork-stress-data-page.mjs'
+import { buildPathForkPage } from './path-fork-page.mjs'
 import { buildFeatureShowcasePage, buildFeatureShowcaseExpectedPage } from './feature-showcase-page.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -46,16 +47,19 @@ async function emitPage(templateName, outName, doc, serverData) {
   const slice = [root, dock, pane.inner, pane.zone]
   const serverCr = root.compile(slice)
   const serverOps = diffMinimal(null, serverCr.actionable.map(minimalFromState))
-  const dockArms = serverCr.actionable.filter((s) => s.nodeId === dock.id)
-  if (dockArms.length !== 2) throw new Error(`expected 2 fork arms, got ${dockArms.length}`)
+  // anti-pattern compliance (§10.ad): the two feed providers use DISTINCT
+  // names (feed-a / feed-b); the dock consumes both ⇒ ONE resolved state
+  const dockStates = serverCr.actionable.filter((s) => s.nodeId === dock.id)
+  if (dockStates.length !== 1) throw new Error(`expected 1 dock state (two distinct feed providers), got ${dockStates.length}`)
   const doc = serializeSlice(root, slice)
   const serverData = {
     serverTreeSig: treeSig(treeFromOps(serverOps)),
     nodeLabels: nodeLabelsFor(pane),
     expectedTree: treeFromOps(serverOps),
-    forkArms: dockArms.map((a) => ({
+    forkArms: dockStates.map((a) => ({
       pathKey: a.pathKey,
-      feed: a.bindings['feed'],
+      feedA: a.bindings['feed-a'],
+      feedB: a.bindings['feed-b'],
       trace: a.trace ?? [],
     })),
   }
@@ -73,12 +77,14 @@ async function emitPage(templateName, outName, doc, serverData) {
   ]
   const doc = serializeSlice(tree.root, slice)
   const cr = tree.root.compile(slice)
-  const panelArms = cr.actionable.filter((s) => s.nodeId === tree.panelC.id)
-  if (panelArms.length !== 2) throw new Error(`expected 2 component arms, got ${panelArms.length}`)
+  // anti-pattern compliance (§10.ad): two DISTINCT panel def names (panel-a /
+  // panel-b); the consumer targets both ⇒ ONE state carrying both bindings
+  const panelStates = cr.actionable.filter((s) => s.nodeId === tree.panelC.id)
+  if (panelStates.length !== 1) throw new Error(`expected 1 panel state (two distinct panel providers), got ${panelStates.length}`)
   const serverData = {
     nodeLabels: componentLabelsFor(tree),
     goals: testGoals,
-    forkArms: panelArms.map((a) => ({ pathKey: a.pathKey })),
+    forkArms: panelStates.map((a) => ({ pathKey: a.pathKey })),
     placement: 'slot-alpha',
   }
   await emitPage('components.template.html', 'components.html', doc, serverData)
@@ -139,7 +145,18 @@ async function emitPage(templateName, outName, doc, serverData) {
   }
 }
 
-// ---- page 17: feature showcase (DATA-DRIVEN, legacy JSON input only) ---------
+// ---- page 17: static placement-path page (22 prototypes, ONE enumeration) ----
+// The static re-expression (placement-path-spec §5): the fork-stress topology
+// compiled by the §2 path enumeration — 4095 path-states from 23 graph nodes,
+// NO clone-instance, NO after-compile expansion. Builder embeds the legacy
+// envelope + the expected census/parity reference + the SSR fragment.
+{
+  const { html } = await buildPathForkPage()
+  await writeFile(join(ROOT, 'demo', 'path-fork-data.html'), html)
+  console.log('built demo/path-fork-data.html (23 nodes, 4095 path-states, ONE compile pass)')
+}
+
+// ---- page 18: feature showcase (DATA-DRIVEN, legacy JSON input only) ---------
 // ONE legacy envelope demonstrates the framework's features both in isolation
 // (feature-lab section) and combined (ops-dashboard). Handler bodies ship as
 // function-STRING data; the page module is core-only plumbing. The expected

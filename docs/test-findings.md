@@ -7,6 +7,323 @@ rules it produced). The latest entries are on top.
 
 ---
 
+## Path-fork page — SSR-fragment removal + memory/profile reference (2026-08-14)
+
+Status: COMPLETE. The path-fork page's ~190MB embedded SSR snapshot (4095-element
+nested binary tree — O(n·depth) serialization) was replaced by a hashed PAR-5
+shape signature (FNV-1a 64-bit digest over the recursive type/props/children
+fold, `shapeSigOfTrees`) + a 300-op SSR sample (`pathForkSsrSample`); the full
+fragment is never rendered for embedding. Verified: serverData parity hash
+`b62f1410db87d280` matches the client-side digest of the live DOM tree.
+
+- **Browser memory reference (after the change)**: total **46.3MB** — objects
+  3MB, strings 989kB, scripts 25kB, **domNodes 39MB** (the 4095-element DOM;
+  ~9.5kB/element is the renderer's per-element cost for 4095 path-state wires).
+  Pre-change the embedded fragment alone would have forced the page to hold a
+  ~190MB string + its DOM parse.
+- **Profile totals (smoke run, this date)**: `[path-fork:baseline]
+  total=2650.5ms`, unmeasured=1.8ms — no pass-2 blow-up; runtime d12 ratios
+  values 1.20× / link 1.47× of the placement total (4041.1ms) — inside the
+  ~1.5× AGENTS watch and the 2.5× asserted guard. §8-Q6 re-baseline TODO
+  marker still present.
+
+---
+
+## Blind test #3 — post-implementation layered loop (translate / compile / emit / ops / e2e)
+
+Status: COMPLETE. The five writer-produced layer-contract suites under
+`tests/blind/` (`translate-layer`, `compile-layer`, `emit-layer`,
+`ops-layer`, `e2e-layer`) encoding the placement-path spec (FINAL) as
+input→output pairs were executed and adjudicated by the reviewer (read-only
+on engine code; test-expectation/data fixes only — the blind-test pattern).
+
+Final state: **53 passed + 1 skipped (54)**, full trio + demos green
+(`npm test` 686 passed | 1 skipped, `tsc --noEmit` clean, `npm run build`
+clean, `npm run demo:build && node scripts/build-demo.mjs && node
+scripts/demo-smoke.mjs` → SMOKE OK; `[path-fork:baseline] total≈3.97s,
+unmeasured≈2ms — no pass-2 blow-up; runtime d12 `unmeasured=62.2ms` of
+7796.1ms — no pipeline scaling regression).
+
+### Per-layer verdicts
+
+| Suite | Tests | Verdict |
+| --- | --- | --- |
+| translate-layer | 19 pass + **1 skipped** | 19 writer expectation fixes (harness/API-shape); **1 GENUINE ENGINE DEFECT** (T28, translate-time ancestor veto missing — skipped with a defect marker, NOT fixed) |
+| compile-layer | 11 pass | 11 writer expectation fixes (per-node `compilePath` aggregate, pathKey grammar, unconditional forkKey) |
+| emit-layer | 10 pass | 10 writer expectation fixes (`diffMinimal` prevMap contract, nodeById handler source, pathKey grammar, def chain semantics, unconditional forkKey) |
+| ops-layer | 8 pass | 8 writer expectation fixes (Supervisor construction, takePass2States shape, getState surface, imperative addAnchor, attach dirty set) |
+| e2e-layer | 5 pass | 5 writer expectation fixes (per-node bootstrap, spy surface, pathKey grammar, E2E-3 provider compile mode, E2E-4 append count) |
+
+The four E2E constraints (USER-specified, not subject to adjudication) all
+pass in `tests/blind/e2e-layer.test.ts`:
+
+- **E2E-1** — 23 nodes at every stage; 4095 distinct path-states; 4095
+  elements on pathKey wires; 4095 creates / 4094 appends / 0 removes;
+  zero clone-instance ops; `[path-fork:profile]` one bootstrap pass.
+- **E2E-2** — a shallow props slice on a depth-2 node regenerates ONLY
+  that node's path-states (compile-scope spy = 1 call); element reused:
+  zero create/remove/append, set ops only on the node's wires.
+- **E2E-3** — a component SOURCE change invalidates ONLY the per-name
+  component Link's target owners: all-consumers (10/10 consumers compile
+  once, all 62 consumer pathKeys regenerate) and half-tree precision
+  (affected = {p3a, p4a}; the b-column runs ZERO compilePath passes;
+  p4b's 8 states stay).
+- **E2E-4** — post-render placement-attach dirties EXACTLY {container,
+  added}; nothing at depth>4 recalculates; ONE create + re-appends under
+  the container's path wire; no set ops off the added node's wire.
+
+### GENUINE ENGINE DEFECTS (reported — NOT fixed by this loop)
+
+- **DEFECT #3-1 — translate-time ancestor-name veto is MISSING**
+  (`src/core/translate.ts`). placement-path-spec §1.3 + §6 CODE translate
+  row + api.md T28 are unambiguous: "When translating a producer
+  (`placementName`) whose ancestor chain already carries a `'container'`
+  anchor with the same name, the anchor is NOT minted and a K4 warning
+  (`placement-name-vetoed`) fires". The implementation mints the anchor
+  verbatim at translate (only the `#`-check exists, translate.ts:428-438);
+  the veto exists ONLY on the op-time half (`ops.ts:88-117`,
+  `ancestorServesZone`). The T28 blind test (`tests/blind/translate-layer
+  .test.ts` "does NOT mint a container anchor when a family ancestor
+  already offers the same name") is `it.skip`'d with a marker — un-skip
+  and re-run when the engine fix lands. No other translate/compile/emit/
+  ops/e2e test failed against unambiguous spec text.
+
+### Spec contradictions (recorded for the spec ledger)
+
+- **C-3-1 — G22/§1.2 vs §3.3/E2E-4 (placement-attach affected set).**
+  §1.2 + ops.md G22 read "the node that receives an update alert" — the
+  changed placement Link's CONSUMERS — is relevance-gated and regenerates
+  on a chosen-link change ("a relevant (chosen-link) update regenerates");
+  §3.3 (E2E-4, user requirement) pins the dirty set to "{container, added}
+  only". The implementation follows §3.3: placement-attach marks ONLY the
+  container + added node; the trigger identity gates THOSE nodes'
+  compiles (`placementChangeIrrelevant`), never the link's consumers. A
+  consumer's fan-out onto a new container materializes on the consumer's
+  OWN next compile (a state-slice), never on the attach. The ops-layer G22
+  tests were re-expressed to the §3.3 reading. Neither section's letter is
+  satisfied verbatim; the E2E-4 constraint (user-specified) is the
+  load-bearing one — recommend a spec note resolving G22's "regenerates"
+  to the attach's own dirty nodes.
+
+### Adjudicated ambiguity table (writer readings vs implementation)
+
+| ID | Writer reading | Verdict | Basis |
+| --- | --- | --- | --- |
+| A1 | `reverseTranslate(translated, {})` takes the whole TranslatedTree | **CORRECTED** — takes the ROOT Node + opts (`reverseTranslate(root, { content })`); engine pattern reverse.test.ts:57 | translate.md §8 names it without a signature; the engine's `nodeToLegacy(root, …)` contract is the sane reading |
+| A2 | K4 `path` format: assert code + string-ness only | **CONFIRMED** | translate.ts warn channel |
+| A3 | The §1.3 veto walks the FAMILY chain | **CONFIRMED** (for the implemented op-time half: `ancestorServesZone` walks `node.parent`) — the translate-time half is DEFECT #3-1 | ops.ts:88-117 |
+| A4 | `activePlacement` reverse emission = derived read (first requested name with any containers) | **CONFIRMED** | nodeToLegacy emits `placement.activePlacement` from the first content anchor whose link has containers (translate.ts:686-693) |
+| B1 | `compilePath(node)` free function, whole-graph states | **CORRECTED** — per-node METHOD (`Node#compilePath`, types.ts:45, node.ts:947); census = per-node aggregate (compileAll pattern) | §2.1 pseudo-code is the ambiguous bit; §6 supervisor mode switch + node-local E2E-2 make the method the sane reading |
+| B2 | Level-1 MUST consume zone-0 for the R2.2 census | **CONFIRMED as one valid shape** — the writer's fixture (level-1 consumes the root's zone-0) yields 4095 ✓; the engine's fixture (level-1 = family children, producers only) yields the same census with different keys | §5.1 arithmetic holds under both |
+| B3 | `cs.children` = the child NODES' ids (not child state objects) | **CONFIRMED** | §4.2 letter; node.ts pathChildrenFor |
+| B4 | `activePlacement` read as a field on path-states | **CONFIRMED** | types.ts CompiledState.activePlacement; mintPathState sets the chosen name |
+| B5 | Family (non-path) states carry NO forkKey | **CORRECTED** — forkKey = pathKey is UNCONDITIONAL on every compilePath-minted state (family-first walks included); those states also emit on the family pathKey wire (`root/<id>`), not the nodeId wire | §2.2 "set unconditionally (node.ts:699-706)"; pathWireOf (render-helpers.ts:55-62) |
+| B6 | Only the contentNodes-token termination is legacy-data-expressible | **CONFIRMED** — prototype-terminated arms not encoded | §2.4 |
+| C1 | Export locations: `emitElements`/`minimalFromState` in render-helpers; `diffMinimal` in render | **CONFIRMED** | placement-path-spec §4.1/§6.2 citations |
+| C2 | Def VALUE = `{ type, children: NodeData[] }`; re-types the def-carrying consumer | **CONFIRMED with the chain nuance** — `isLinkDef` (render-helpers.ts:385); a covered consumer is re-typed by the PARENT's def (its own def re-types its children only); the provider's own state re-types itself (seedOwnBindings) | emitElements def branch, render-helpers.ts:309-347 |
+| C3 | Event-binding set op name = `on:<event>` | **CONFIRMED** — `props['on:click'] = true`; note: handler attachment requires the `nodeById` source (EmitNodeSource.handlers, engine P-EMIT-3) | render-helpers.ts:459-463 |
+| C4 | MinimalElement = `{ wire, type, props, childOrder, forkKey? }` | **CONFIRMED** | render.ts |
+| D1 | `new Supervisor()`, `registerNode`, `takePass2States()` | **CORRECTED** — constructor takes a root/opts (hub-less `new Supervisor({})` + registerNode per node); `takePass2States()` returns `Map<NodeId, CompiledState[]>` (flatten for keys) | supervisor.ts constructor/takePass2States; engine supOf pattern |
+| D2 | Per-path exposure via `client.getState(...).fork` | **CORRECTED** — `getState` is surface-only (`nodeId/status/pathKey/state`, api.md:150-151); the W2/W3 per-path (nodeId, forkKey) exposure + `fork: {forkKey, nodeIds}` lives in the supervisor resolved store / events channel | api.md §6 + supervisor.ts:305-318 |
+| D3 | `addAnchor({ referenceName, role, value })` decl form | **CORRECTED** — the imperative path is positional `addAnchor(role, target, options, link)`; the decl form is the private materializeAnchors (layer) path | node.ts:593 |
+| D4 | Trigger: newly minted container ⇒ `container-added`, ensured ⇒ `content-added` | **CONFIRMED** | ops.ts derivePlacementTrigger |
+| E1 | (= B2) level-1 consumes zone-0 | **CONFIRMED** | see B2 |
+| E2 | E2E-4 render diff "ONE create + ONE append" | **CORRECTED** — ONE create ✓ but the D5 re-append fires for the container's whole changed order (3 appends under the container's wire: p4a, p4b, p4new); set ops only accompany the new element | render.ts diffMinimal orderChanged rule |
+| E3 | E2E-3 provider = the root | **CONFIRMED with a mode-switch correction** — the root (no `content` anchors) is NOT placement-routed, so it compiles via the FOCUSED slice (§2.1), never `compilePath`; the compile-scope spy sees the 10 consumers only; the provider's focused pass lands its subtree states in the drain too | supervisor.ts:264-283 |
+| E4 | Compile-scope spies target an exported `compilePath` | **CORRECTED** — spy `Node.prototype.compilePath` + `mock.instances` | node.ts method surface |
+| E5 | Registry observable = `supervisor.allNodes()` | **CONFIRMED** | supervisor.ts |
+| E6 | SSR sink = `new SSRFragmentAdapter(); applyOps(a, ops); a.toString()` | **CONFIRMED** | adapters.ts:189 |
+
+### Kept summary (per-layer input→output contract, as confirmed)
+
+- **translate**: legacy envelope → TranslatedTree; `placementName` → one
+  `container` anchor on the per-name placement Link; `targetPlacement:
+  string[]` → ordered `content` anchors (string coerced w/ warn; `#`
+  names skipped w/ warn; duplicates keep-first w/ warn); content payload +
+  template.children roots are contentNodes-owned (token on the link's
+  parent anchor) and family-in-tree; K4 warnings additive; reverse
+  round-trips content anchors → `targetPlacement` in mint order +
+  `placementName` + derived `activePlacement: string`, stripping the
+  contentNodes anchor.
+- **compile**: `Node#compilePath()` per node → one path-state per viable
+  (node, path); `pathKey = root/<zone>/<owner>/…/<nodeId>` (root landing
+  contributes nothing; a node's own consumer hop lands directly before its
+  id); `forkKey = pathKey` unconditionally; `activePlacement` = chosen
+  name; first-match prunes to the chosen name's zones (silent skip of
+  no-container names; whole-array miss compiles nothing); path-derived
+  children = child NODE ids at mint time; contentNodes/component tokens
+  terminate silently; loops drop with `circular-source`; family-first
+  walks key `root/<id>`.
+- **emit**: every path-state emits at wire = pathKey with forkKey
+  forwarded on every create/set op (appends carry none); per-path
+  childOrder = the child STATES' pathKey wires (trace-indexed); `on:<event>`
+  from the nodeById handler source; def re-typing per `isLinkDef` with the
+  covered-consumer chain; `diffMinimal(prevMap|null, next)`; root-first
+  create stream.
+- **ops**: placement-attach registers-if-new, mints ordered content
+  anchors (dedup keep-first) + ensures the container anchor under the
+  op-time veto, dirty = {container, added} only, trigger identity
+  `container-added`/`content-added` gated by `placementChangeIrrelevant`;
+  state-slice placement writes hard-blocked; unplaced registered nodes →
+  `no-usable-state`; contentNodes-owned roots clear the apply gate;
+  component-source duplicates warn keep-first unconditionally.
+- **e2e**: the four fixed user constraints hold end-to-end (see the
+  E2E-1..4 confirmation above), with the E2E-3 provider focused-compile
+  and E2E-4 D5 re-append notes as the corrected expectations.
+
+### Harness/authoring fixes applied (data-only, no engine edits)
+
+- Import depth/extension per repo convention (`../../src/core/*.js`).
+- esbuild-broken doc comment (`prop:*/` inside a block comment).
+- Writer fixtures moved to the per-node compileAll aggregate, the engine's
+  supervisor construction, the prevMap diffMinimal contract, and the
+  Node.prototype spy surface.
+- `new Node(data, 'blind-test')` second-arg hub misuse corrected to the
+  hub-less form (the supervisor falls back to `container.hubFor`).
+
+### Validation trio
+
+`npm test` → 36 files, **686 passed | 1 skipped** (the skipped = the
+DEFECT #3-1 marker); `npm run typecheck` → clean; `npm run build` → clean;
+`npm run demo:build && node scripts/build-demo.mjs` → clean;
+`node scripts/demo-smoke.mjs` → **SMOKE OK — all demo checks passed**
+(`[path-fork:baseline] total=3973.4ms`, unmeasured 1.8ms — no pass-2
+scaling regression; runtime d12 link total 7796.1ms, unmeasured 62.2ms —
+measured sections dominate).
+
+---
+
+## Unit 12 (placement-path chain) — the consolidated E2E constraint suite
+
+Status: COMPLETE. Red→green→verify per AGENTS.md item 7; verification trio
+green (633 tests / typecheck / demo build) + smoke green (ALL pages — the
+static page unchanged: census 23/4095/0/0, `[path-fork:profile]`
+total≈3.98s, `unmeasured≈0`; the runtime pages' census re-pins 4117/0/4094
+hold). Landed: `tests/e2e/path-fork-e2e.test.ts` — the four FIXED user
+requirements (placement-path-spec §0) as full-pipeline Node tests (legacy
+envelope → translate → register → ONE `compilePath` bootstrap →
+`emitElements`/`diffMinimal`/`applyOps`) + the consolidated guard pins
+(static census 23/4095/0/0 + per-level 2^k, runtime re-pin 4117, the
+`component-source-duplicate` pin, the §8-Q6 ratio-baseline TODO pin), and
+the E2E-3 GREEN fix in `src/core/supervisor.ts` (the state-slice affected
+set for component SOURCE changes). Red set: exactly the two E2E-3 cases —
+E2E-3a pressure (dirtied = the provider alone; the all-consumers set was
+missing) and E2E-3b precision (the half-tree consumer set was missing).
+E2E-1/2/4 and every guard pin were green against the Units 4–11 machinery
+on the first red run (honest pass/fail per assertion, reported in §Return
+of the unit handoff).
+
+### Findings
+
+| # | Class | Finding |
+| --- | --- | --- |
+| 1 | DECIDED (pinned) | **A component SOURCE change invalidates the per-name component Link's TARGET owners — not the provider's family subtree.** `supervisor.apply`'s state-slice branch now derives the affected set from the Link registry (`link.anchorsOf('target')` → `anchor.owner`), dedup keep-first, and marks those consumers pass-2 dirty alongside the provider (spec §3.2: "resolved through the graph, never by enumerating states"). This is what makes E2E-3's pressure (ALL descendants consume ⇒ every consumer's `compilePath` runs once, the non-consuming sibling runs zero passes) and precision (a provider consumed by HALF the tree — the a-column — regenerates exactly {provider, p3a, p4a}; p2b/p3b/p4b run ZERO compile passes; p4b's 8 max-depth states stay) both true. The provider node itself is unaffected: a source-free slice keeps the node-local set (E2E-2 unchanged). |
+| 2 | PASS (E2E-1) | The 23-node census holds at EVERY pipeline stage: the depth-12 envelope registers exactly 23 nodes at translate, and the global registry count is unchanged through compile, emit, diff and apply — zero node creations (the 4095 compiled states and 4095 elements are pinned to the 23 graph nodes; journal stays empty of `clone-instance` ops). States: 4095 distinct pathKeys, `forkKey = pathKey`, no `#`-grammar; elements: 4095 on pathKey wires, level k has exactly 2^k; create ops = 4095, zero removes. |
+| 3 | PASS (E2E-2) | A shallow props slice on a depth-2 placement-routed node regenerates ONLY that node's path-states (six sibling/ancestor `compilePath` spies + pass-2 keys prove it) and its rendered elements are REUSED: identical wires, zero create/remove ops, set ops only on that node's two pathKey wires (the §3.1 node-local invalidation + §4.1 wire-stability contract, through the supervisor + renderer). |
+| 4 | PASS (E2E-4) | A post-render third depth-4 node via `placement-attach` dirties EXACTLY {container, added node}: pass-2 keys = {d3, d4c}, d3's path-states adopt d4c as a path-child, nothing at depth>4 recompiles (d5a at depth 5 — zero compile passes, no set ops on its wire), and the render diff is ONE create (d4c's pathKey wire) + appends under d3's path wire with every other element reused. Note (authoring lesson): a node's OWN pathKey contains its CONSUMER hops only — d3's key has no `zone-3` segment; its producer zone appears only in its CHILDREN's keys (d4c's key = d3's key with `zone-3/d3` inserted). |
+| 5 | PASS (guard pins) | The consolidated pins hold: static census 23/23/0/0/cloneOps=0 (E2E-1), runtime re-pin arithmetic (in-tree = 4095 + 22 prototypes = 4117, unplaced = 0, cloneOps = 4094 — the F-13 reading demo-smoke asserts on the LIVE pages), the `component-source-duplicate` guard (keep-first, skip-second, warn — one provider anchor per name on the Link), and the §8-Q6 ratio-baseline TODO (demo-smoke's `[path-fork:baseline]` record + the re-baseline TODO marker stay present). |
+| 6 | PASS (profile watch) | Static page unchanged by this unit (path-fork total ≈3.98s, `unmeasured ≈ 0` — the ONE enumeration pass still covers the total; no pass-2 blow-up). The runtime pages' d12 ratios (values ≈1.2× / link ≈1.5× of the runtime placement baseline) are inside the asserted 2.5× guard; the static total sits BELOW the runtime placement baseline (tripwire holds). |
+
+---
+
+## Unit 8 (placement-path chain) — `component-source-duplicate` guard
+
+Status: COMPLETE. Red→green→verify per AGENTS.md item 7; verification trio
+green + demo build + smoke green (ALL pages — no shipped demo doc carries the
+anti-pattern; the re-expressed Unit-11 fixtures load clean under the guard).
+Landed: the UNCONDITIONAL `component-source-duplicate` guard at
+`Node.addAnchor` (placement-path-spec §6.2 node.ts row, §10.ab/§10.ae — warn,
+keep-first, skip-second; NO seed-path opt-out), `addAnchor` return contract
+`Anchor | null`, and the re-expression of every test that constructed the
+anti-pattern (same-node same-name source/duplex anchors) to the legitimate
+two-provider-NODES multiplicity (§10.ab #4). Red set: G1/G2/G3 (the guard
+itself — second anchor was added, no warn) + the seeded fork-construction
+tests (21 across render/path-emit/derived/adapters/ssr-render/
+ssr-html-validity/resolved-exposure/reverse — they tripped the guard by
+design and were re-expressed).
+
+### Findings
+
+| # | Class | Finding |
+| --- | --- | --- |
+| 1 | DECIDED (pinned) | **The guard is return-contract `Anchor \| null`.** A skipped anchor returns `null` (not the existing anchor) so value-setting call sites (constructor seed `node.ts`, clone, translate applyPlans, fixtures) null-guard — keep-first preserves the FIRST anchor's VALUE, not just its object identity (G2 pins `value: 'A'` survives the seed round-trip). |
+| 2 | DECIDED (pinned) | **source and duplex share ONE provider namespace.** The match is name-keyed across both roles (resolve's `providersOn` + the legacy K8 reference-keyed guard), so a `source`-x add after a `duplex`-x anchor is also rejected — otherwise the fork hole reopens via mixed roles (G3 covers duplex+duplex). |
+| 3 | DECIDED (pinned) | **materializeAnchors' decl-path dedup is COMPLEMENTARY, not the enforcement point.** Its same-role+target skip pre-filters layer-decl duplicates BEFORE addAnchor (idempotent layer re-application stays silent — G6 pins zero warns); the guard is the single warn+skip enforcement for everything that reaches addAnchor (imperative + constructor seed). |
+| 4 | DECIDED (pinned) | **Fork-claim tests re-express as TWO PROVIDER NODES under the consumer** (the §10.ab #4 legitimate multiplicity — same shape as the shipped T3 test): `leaf → pA/pB` both providing the name. Verified wire-identical to the old same-node construction (arm wires `leaf#0/#1`, forkKey forwarding, parent childOrder adoption, create ops, round-trip) — no fork-claim assertion weakened. The serialized doc now includes the provider nodes (SER-H2's seeded-id set gains pA/pB) and reseed requires `reconcileParentTargets` (the descendants walk needs the shared family links — the old root-provider fixture walked ancestors, needing no reconciliation). |
+| 5 | PASS (regression pin) | G5 pins the Unit-11 re-expressed shapes (feature-matrix `theme-dark`/`theme-light` distinct names on ONE node) never trip the guard and resolve side-by-side (the K7 multi-binding surface); the smoke run of every demo page confirms zero `component-source-duplicate` warns in the build output. |
+| 6 | PASS (profile watch) | Static page unchanged under the guard (path-fork total ≈3.9s, `unmeasured ≈ 0`); runtime d12 ratios values ≈1.2× / link ≈1.5× of the runtime placement baseline — inside the asserted 2.5× guard and the AGENTS ~1.5× watch (runtime pages untouched by this unit). |
+
+---
+
+## Unit 11 (placement-path chain) — demos + smoke rebuild
+
+Status: COMPLETE. Red→green→verify per AGENTS.md item 7; verification trio
+green + demo build + smoke green (ALL pages — runtime fork-stress pages
+unchanged, re-expressed demo pages green, new static page green). Landed:
+the three same-node multi-source demo fixtures rebuilt to drop the fork
+claims (anti-pattern compliance, placement-path-spec §10.ad), the static
+placement-path page (`demo/path-fork-data.*` — 23 nodes → 4095 path-states,
+ONE enumeration pass), builder `scripts/path-fork-page.mjs`, smoke census +
+baseline guards, and the §11/§12 doc rows. Red set: `ERR_MODULE_NOT_FOUND
+demo/path-fork-data.js` — the builder/smoke wiring (census 23/4095/0/0,
+per-level 2^k, parity, profile, baseline) was written against the
+not-yet-existing page module.
+
+### Findings
+
+| # | Class | Finding |
+| --- | --- | --- |
+| 1 | PASS (static census) | The static page's own checks + smoke `assertStaticPathCensus`: registered=23, in-tree=23, unplaced=0, destroyed=0, cloneOps=0, states=4095 (distinct pathKeys, `forkKey = pathKey`), elements=4095 (wires = pathKeys), passes=1 — the §5.2 census holds end-to-end through translate → compilePath → emit → DOM. |
+| 2 | DECIDED (pinned) | **Every path-state element is stored at the adapter under the composite key `wireKey(pathKey, pathKey)`** (forkKey = pathKey ⇒ `wire\x00forkKey`), so bare-pathKey DOM lookups (`adapter.wires.get(pathKey)`) MISS. Page checks must use the composite key (the same contract as fork-arm wires — Unit 2 finding #1). |
+| 3 | DECIDED (pinned) | **PAR-5 parity on a RE-TRANSLATED legacy envelope is key-agnostic**: the page translates the envelope at page time (fresh minted ids ≠ builder ids), so pathKeys/forkKeys AND the auto-minted `props.id` (`preempt-node-<id>`) are mint-time artifacts — `treeSig`'s forkKey dimension must be stripped AND the prototypes must carry AUTHORED `props.id` for the props dimension to compare. The parity contract is `type + props + binary children structure` (shapeSigOfTrees). |
+| 4 | DECIDED (pinned) | **`treeFromOps` on 4095 path-states is the page's heaviest region** — every append edge resolves its bare-pathKey owner through `findEl`'s prefix fallback (create entries live under `wire\x00forkKey`), an O(n²) scan on the full map. The static page TIMES its check surface (`checksMs` in the profile) so `total − Σ(measured)` stays ~0 — the same coverage discipline as the runtime pages' pass2Ms/handlerMs (session-defect-review RCA). Not a core defect in this unit: `treeFromOps` is not on the §6 inventory. |
+| 5 | PASS (fork-claim drops) | The three re-expressions behave as designed: feature-matrix `theme-dark`/`theme-light` (each consumer resolves ONE state carrying its own provider — the section renders both values), components `panel-a`/`panel-b` (the consumer's single state carries BOTH def bindings and renders ONE section element; `scalarBinding`'s `bindings['theme']` fallback is now dead weight but harmless), pane `feed-a`/`feed-b` (dock's single state carries both feed objects; SSR-F1 tamper re-resolution still returns exactly one state). |
+| 6 | DECIDED (pinned) | **Ratio baseline**: the static page's single total (≈3.9s in the shim) is its OWN placement baseline (§10.ad N-5) — recorded by the smoke with the §8 Q6 TODO (re-baseline the runtime pages' guard after testing confirms no explosive time issues); a tripwire flags any future static total that EXCEEDS the runtime placement d12 total (the enumeration replacing 4094 per-node passes must not regress). |
+
+---
+
+## Unit 6 (placement-path chain) — supervisor/ops trigger-identity surface
+
+Status: COMPLETE. Red→green→verify per AGENTS.md item 7; verification trio
+green + demo build + smoke green (existing pages unchanged). Landed:
+`placement-attach` op (types + ops.ts executor + supervisor apply branch,
+journal/replay), trigger identity `{kind:'placement', linkName, direction}`
+through `supervisor.apply` into the pass-2 dispatch, the silent-abort
+relevance pre-check at the compiler entry (`placementChangeIrrelevant` +
+`activePlacementOf` on the node's last states), the §9-Q3 event
+re-expression (`#f` gate → "path-state ⇒ emit `{forkKey: pathKey,
+nodeIds: trace}`" — path traces minted at `mintPathState`), and the client
+wire carry-through (`container` ref resolution). One INHERITED engine defect
+surfaced and was fixed (see below).
+
+### Findings
+
+| # | Class | Finding |
+| --- | --- | --- |
+| 1 | INHERITED ENGINE-DEFECT (fixed here) | **`supervisor.replay()` iterates the LIVE journal while `apply` appends to it** — any op that applies SUCCESSFULLY on replay (the placement-attach op is idempotent, so it always does) journals a new entry that the `for-of` then visits: an infinite journal-growth loop → worker OOM (caught as a vitest worker crash in the S-P2 replay test). Existing replay tests never hit it because structural re-attaches reject with `single-parent` (no journal entry). Fixed: replay iterates a snapshot (`[...this.journal]`) — the replayed ops are the ORIGINAL entries only. |
+| 2 | PASS (E2E-4 hook) | Post-render placement-attach of a third depth-4 node: dirty set = the container node + the added node ONLY (S-P1) — nothing at depth>4 recompiles, no sibling depth-4 recalc; the container's path-states pick up the added node as a path-child (§2.3). |
+| 3 | DECIDED (pinned) | **The silent abort is scoped to the aborted node's compile** — an irrelevant (less-favored) placement update skips that node's `compilePath` entirely (no states, no events, no dirty residue); other nodes in the op's fixed dirty set (the producer container) still recompile per the §3.3 contract. The chosen-name source is the node's LAST states' `activePlacement` (family-first states without one are skipped — `activePlacementOf`). |
+| 4 | DECIDED (pinned) | **Path-state event traces are root-inclusive**: `mintPathState` sets `trace` = the enumerated walk's hop owners root-down + the node itself (`['root', 'P', 'C']` for `root/zone-1/P/C`), consistent with the walk recording the root landing. |
+
+---
+
+## Unit 2 (placement-path chain) — translate minting surface
+
+Status: COMPLETE. Red→green→verify per AGENTS.md item 7; verification trio
+green + demo build + smoke green. One INHERITED engine defect surfaced and
+was fixed (see below); everything else landed per `docs/specs/
+placement-path-spec.md` §1.1/§1.2/§2.5/§6.2 + §10.ad/ae.
+
+### Findings
+
+| # | Class | Finding |
+| --- | --- | --- |
+| 1 | INHERITED ENGINE-DEFECT (fixed here) | **DEFECT #1's applyOps/treeFromOps half was unexercised** — the DEFECT-1a/b forwarding fix landed, but `applyOps` stored fork-arm elements under `wireKey(wire, forkKey)` while append/remove ops carry the BARE arm wire, so `has()`/edge resolution silently missed fork arms: feature-matrix "fork arms not rendered into the DOM" (4 pages × mode-toggle). Fixed: `findEl()` (render-helpers.ts) — exact `(wire, forkKey)` match first, bare-wire prefix scan (`wire\x00`) for forkKey-less lookups; applied in `applyOps` (create/set/remove/append) and `treeFromOps` edges. RED test: DEFECT-1f (render.test.ts) — fork-arm appends reach the adapter; treeFromOps nests arm trees under the parent. Verified pre-existing: pure inherited-state smoke reproduced the same failure with my core hunks reverted. |
+| 2 | PASS (census re-pin) | contentNodes-ownership minting flips the runtime fork-stress census exactly per §5.2 F-13: d12 `registered=4117 inTree=4117 unplaced=0 destroyed=0 cloneOps=4094`; page asserts + demo-smoke `assertForkStressCensus` re-pinned (inTree = 2^depth − 1 + 2·(depth−1), unplaced = 0, cloneOps = inTree − 1 − prototypes). |
+| 3 | DECIDED (pinned) | **Duplicate names in `targetPlacement`** → `placement-duplicate-reference` warn + keep-first, skip-rest (K8-class behavior, mirrored on `component-duplicate-reference`); the string-coercion back-compat warn is `placement-string-coerced`; non-string/empty entries warn `placement-name-invalid` + skip. `activePlacement` is never minted (derived; typed `string`; reverse emits the derived read). |
+
+---
+
 ## Stress-test review loop #2 — translate-layer kernel (subagent review loop)
 
 Status: COMPLETE (review agent, step c of AGENTS.md item 10). Scenario
@@ -31,20 +348,27 @@ classified into exactly one of PASS / DOC-FIX / DATA-FIX / ENGINE-DEFECT.
 | 4 | PASS (doc sub-claim corrected) | RAW-string guard timing confirmed (`props.x` vs `props.x.` never dup-warns; edge binding skipped, no applyPath; control fires dup-target); the "warn array ORDER differs between the envelopes" prediction corrected — both produce the IDENTICAL single-element array; only anchor creation order differs |
 | 5 | DOC-FIX | 13-path vocabulary partition, bare-`props` skip, `slash/ref` carve-out miss (literal `includes('.')` check), t14/u4 synthesis, both bakes, target-less reverse — all CONFIRMED. The "warns re-emitted on re-translate" claim was internally inconsistent with the doc's own reverse expectation (gap/skip bindings reverse WITHOUT target per K5 ⇒ nothing to re-warn); actual re-translate warnings `[]` — R-5 holds |
 | 6 | PASS | object bakes `[object Object]` on both adapters while the compiled state carries the object (NP5); null provider publishes null but the bake omits the key (N3); both round-trip exactly; re-translate anchor-identical |
-| 7 | DOC-FIX | exact 8-code order + 8 focused `console.warn`s + anchors + placement + zero live handlers CONFIRMED; "re-translate is NOT warning-clean" claim wrong — FULLY clean (vacuous `{}` produced no anchor; skipped/gap bindings reversed target-less; handler defs and `targetPlacement` gone; duplicate guards cannot re-fire — that half was right) |
+| 7 | DOC-FIX | exact 8-code order + 8 focused `console.warn`s + anchors + placement + zero live handlers CONFIRMED; "re-translate is NOT warning-clean" claim wrong — FULLY clean (vacuous `{}` produced no anchor; skipped/gap bindings reversed target-less; handler defs and `targetPlacement` gone; duplicate guards cannot re-fire — that half was right). **SUPERSEDED (P3 feed landed, placement-path-spec §6.2):** the "`targetPlacement` gone on reverse" claim is INVERTED — `content` anchors now reverse as `targetPlacement: string[]` in mint order (+ derived `activePlacement: string`; the minted contentNodes anchor stripped, F-13), so the placement config ROUND-TRIPS; the row's "handler defs gone" half still holds |
 | 8 | PASS | phase-first guard ordering confirmed; invalid body never handed to `new Function` (NP11 downgrade holds); reverse drops the def; re-translate clean |
 | 9 | DOC-FIX | authored-wins silent skip + no applyPath + no reverse `target` CONFIRMED (loss real + permanent); "not anchor-identical" claim WRONG — round-trip IS anchor-identical (the loss happens on pass 1; pass 2 reproduces the same shape). Authored-collision data-loss chain now documented in translate.md §2.1 reverse-emission note |
 | 10 | DOC-FIX (payload.md R-2) | drop CONFIRMED mechanically for the plain consumer `{reference:'y'}` AND the gap-warned variant `{y,target:'y'}`; R-2's letter ("a name-target (no apply path)") was narrower than the code's shape-based branch (`translate.ts:626`). Code is the sane behavior — a legacy plain consumer's graph shape is indistinguishable from the runtime two-name duplex (no provenance) — so R-2 broadened to "any applyPath-less non-provider (consumer) anchor coexisting with a provider anchor" |
 | 11 | PASS | 3-provider K7 array: anchor order preserved through reverse, idempotent, self-scoped render, depth-0 publication |
 | 12 | PASS | K6 nearest-shadows-far with root fallback: deep-consumer `"near"`, sib-consumer `"far"`, one arm each, NO fork; F3 drops both providers; reverse exact; re-translate clean |
 | 13 | PASS | K7 multi-source root: one source per name, no fork (FRK-H1); F3 root drop vs self-apply bake; variant (consumers removed) bakes `prop:rt="RV"` |
-| 14 | ENGINE-DEFECT #1 (compile half); PASS (three surfaces) | placement + component + handlers coexist and round-trip without interference — PASS as framed; but `props.x` does NOT bake ("self-provider ⇒ own value" fails — the node also carries consumer `b` → publishOwn bypass) |
-| 15 | ENGINE-DEFECT #1 + DOC-FIX (R-2) | unicode/root-keyword references, `bindings.bindings`-style reads, silent-absent `target:''`/`target:42` all CONFIRMED harmless at translate (zero warns, 7 syntheses, 1 plain consumer); the bake half FAILS (`empty`'s consumer anchor → publishOwn bypass → all seven reads null); the reverse half drops `{reference:'empty'}` (same shape-based R-2 drop — DOC fix; `numb` survives) |
+| 14 | ENGINE-DEFECT #1 (compile half); PASS (three surfaces) | placement + component + handlers coexist and round-trip without interference — PASS as framed; but `props.x` does NOT bake ("self-provider ⇒ own value" fails — the node also carries consumer `b` → publishOwn bypass). **P3 supersession note:** this scenario predates the placement feed — its "placement coexists" surface is now the §1.1 two-sided-role contract (container/content on the shared per-name Link, translate-minted) |
+| 15 | ENGINE-DEFECT #1 + DOC-FIX (R-2) | unicode/root-keyword references, `bindings.bindings`-style reads, silent-absent `target:''`/`target:42` all CONFIRMED harmless at translate (zero warns, 7 syntheses, 1 plain consumer); the bake half FAILS (`empty`'s consumer anchor → publishOwn bypass → all seven reads null); the reverse half drops `{reference:'empty'}` (same shape-based R-2 drop — DOC fix; `numb` survives). **P3 supersession note:** the reverse half now additionally emits `content` anchors → `targetPlacement: string[]` + strips the minted contentNodes anchor (F-13) — see the P3 reverse rows in translate.md/payload.md |
 
 ### Engine defects (do NOT fix in this loop — report only)
 
 **DEFECT #1 — publishOwn bypass: a node carrying ANY consumer (target)
 anchor never publishes its own provider values (S1/S14/S15)**
+
+> **STATUS: FIXED (engine fix landed — see "Fix landed" below).** The §2.1
+> "self-provider ⇒ own value" contract now holds on mixed nodes; the fix
+> was verified by the T1–T7 red→green unit set (`tests/unit/node.test.ts`
+> "engine defect #1" describe) and the de-vacuoused translate-showcase
+> smoke (`28 passed, 0 failed` genuinely, `self-apply="self-applied"`
+> baked on the array-card live + SSR).
 
 - Spec: translate.md §2.1 ("at a self-provider the applied value IS its own
   `value`"; row `props.<propertyName>`: "the node gains the synthesized
@@ -81,6 +405,44 @@ anchor never publishes its own provider values (S1/S14/S15)**
   alongside the consumed-name resolution. Red tests: S1/S14/S15 pins —
   mixed-node self-apply bakes; descendants' depth-0 reads and pure-provider
   behavior unchanged; no fork regression.
+
+### Fix landed (TDD implementation of DEFECT #1)
+
+- **Implementation** (`src/core/node.ts`, compile loop): `publishOwn`'s body
+  extracted into a pure helper `seedOwnBindings(node, bindings)` —
+  `bindings[name] = anchor.value` for every source/duplex anchor with
+  `value !== undefined` and the name NOT already present (skip-if-present).
+  Used in BOTH branches: the no-target branch via `publishOwn` (behavior
+  unchanged — spot-check-7 pin holds) and, per arm, right after
+  `cs.bindings = arm.bindings` and BEFORE `applyDerived`, so synthesized
+  `{$:'bindings.<own-ref>'}` reads (K1/K2 self-apply) and authored
+  `bindings.*` reads resolve to the node's own value on a LEGAL K7 mix.
+- **Guarantees preserved**: consumed-wins precedence (skip-if-present: a
+  same-name arm-resolved/duplex value is never overwritten); consumed-first
+  key order (own names append after the consumed names — the mixed-node
+  rendered text stays the first consumed scalar, T6 pin); per-arm
+  determinism (own values are node-static; arms clone bindings per fork hit
+  in `resolve.ts`); pure-provider behavior identical (T4 pin); no warnings
+  added (T1: zero warnings, zero drops).
+- **Red set (before the fix)**: unit T1/T2/T3/T6 failed (`bindings.B`
+  undefined on mixed nodes); after de-vacuousing the showcase checks, smoke
+  failed 2: `array-card self-apply=null (expected self-applied)` and `SSR
+  fragment missing self-apply="self-applied"`. Green set: 546 unit tests
+  (27 files), typecheck + build clean, demo:smoke all green with
+  `translate-showcase: 28 passed, 0 failed` genuinely (throw-style checks),
+  `compileCalls=1`, fork-stress d12 guard 1.21×/1.44× (≤1.5×).
+- **Docs**: this defect block annotated FIXED; translate.md §1 reported-
+  defect blockquote rewritten to a resolved-fix note; blind test #2 gained
+  finding 5 (vacuous checks) + the post-fix re-verification note.
+- **Side-effect note (accepted, deterministic)**: the feature-matrix /
+  mode-toggle app root is itself a MIXED node (session duplex consumer +
+  theme providers) — its arm bindings now carry the seeded `theme` values,
+  and the pre-existing emission "first scalar in bindings" rule renders
+  `theme: dark` as the root's text (its consumed `session` value is an
+  object, so no consumed scalar exists to protect; first source anchor
+  wins, same order as `publishOwn`). Both adapters agree (PAR-5/SSR
+  regenerated consistently), all page checks pass, and the demo's intended
+  assertions are unaffected — documented here, not pinned as spec.
 
 ### Adjudication of the probe's five findings
 
@@ -209,6 +571,24 @@ actual per card against `docs/specs/translate.md` §2.1/§5,
    (follow-up)" — stale the moment the reviewer wired it. Fixed; rule: the
    §11/§12 entries must state the wiring truth at the time the review loop
    reports complete.
+5. **Vacuous checks under the shared runner (browser-check tool defect) +
+   repair + re-verified 28/28.** The shared runner `demo/lib/runner.js`
+   `check(name, fn)` counts PASS when the callback does NOT THROW — the
+   return value is ignored. EVERY check on this page was boolean-returning
+   (`() => attrAny(el, key) === 'x'`, `expected.every(...)`, `baked.every(...)`,
+   …), so all 28 were VACUOUS: they passed regardless of the DOM/fragment.
+   The engine defect was invisible: the array-card element's attrs were
+   `{"id","apply-consumer"}` — NO `self-apply` — yet smoke printed
+   "28 passed, 0 failed". Repair: every check converted to throw-style
+   (`if (x !== y) throw new Error(...)`, feature-showcase style), no
+   expectations changed. This exposed 2 REAL failures (the publishOwn-bypass
+   defect #1: `array-card self-apply=null` + SSR fragment missing
+   `self-apply="self-applied"`) plus one check flaw: the PAR-5 content-marker
+   check read `appEl.textContent` (never aggregated by the smoke shim) and
+   its attr fallback used the VALUE as the attribute NAME; both re-expressed
+   via the shim-compatible `findEl` subtree walk + proper `[key, value]`
+   pairing (expectations unchanged). Rule: runner checks must be throw-style
+   — a boolean-returning check under this runner is a defect by definition.
 
 ### Per-card intended-vs-actual verdicts (independent probe, not page checks)
 
@@ -235,6 +615,17 @@ actual per card against `docs/specs/translate.md` §2.1/§5,
 profile `translate=0.0ms compile=0.3ms render=0.3ms compileCalls=1 total=0.6ms`
 (no pass-2 blowup — tiny page); fork-stress d12 guard: placement 3921.8ms,
 values 4915.8ms (1.25×), link 5774.4ms (1.47×) — within ~1.5×, no regression.
+
+> **Post-fix re-verification (engine defect #1 landed — finding 5 above):**
+> the "28 passed, 0 failed" claim was VACUOUS at the time (all checks
+> boolean-returning under the throw-only runner). After the throw-style
+> repair + the `seedOwnBindings` engine fix (`src/core/node.ts`), the page
+> is GENUINELY green: `translate-showcase: 28 passed, 0 failed`, the
+> array-card carries `self-apply="self-applied"` in both the live DOM and
+> the regenerated PAR-5 expected fragment, profile
+> `translate=0.0ms compile=0.3ms render=0.3ms compileCalls=1 total=0.7ms`,
+> and the fork-stress d12 guard holds (placement 3896.3ms, values 4699.0ms
+> = 1.21×, link 5592.3ms = 1.44×).
 
 ---
 
@@ -345,7 +736,7 @@ DOC-FIX / DATA-FIX / ENGINE-DEFECT.
 | 7 | ENGINE-DEFECT #1 + DOC-FIX | 5 fork arms compile with distinct `cs.forkKey`s but `emitOne` never forwards them → ops carry NO forkKey; scenario's "5 creates for ONE wire" premise corrected to the documented per-arm wire scheme `<nodeId>#<0..4>` (fork-stress.md); arm order is LIFO (m5→m1), all values present |
 | 8 | PASS (prose fixed) | outcome matches (one actionable arm, `rootval`, no warnings); mechanism differs from scenario prose — the unplaced provider is never enumerated (D5 root fallback wins the ancestor walk first); the "arm terminates unplaced → silent drop" branch never fires; prose corrected |
 | 9 | PASS | nearest-shadows-far: deep-consumer binds `"near"`, one arm, no fork; root duplex self-binds `"far"`; near-provider dropped (F3) |
-| 10 | DATA-FIX (premise) | "placement multiplicity forks like components (P3)" is NOT expressible from a static legacy envelope — placement resolution is `attach` op + compile (api.md §4); P3 forks materialize only dynamically. Corrected expectation (each slot = one state, own wire; both render; unicode/dot/space names minted verbatim; dual-slot no role-mismatch, provides `dual`) verified green |
+| 10 | DATA-FIX (premise) | "placement multiplicity forks like components (P3)" is NOT expressible from a static legacy envelope — placement resolution is `attach` op + compile (api.md §4); P3 forks materialize only dynamically. Corrected expectation (each slot = one state, own wire; both render; unicode/dot/space names minted verbatim; dual-slot no role-mismatch, provides `dual`) verified green. **SUPERSEDED (placement-path-spec §1.2/§2, Units 2–12 landed):** the premise is INVERTED — P3 IS now statically expressible: `targetPlacement: string[]` mints ordered `content` anchors at translate and the path-enumeration compile forks one path-state per (node, path-to-root) (`forkKey = pathKey`, per-zone fan-out of the first-match name). The probe evidence (placement anchors inert at static compile, pre-model) stands as the historical record; the §5.2 static census (23/4095/0/0) is the landed replacement |
 | 11 | PASS | translate throws a RAW SyntaxError (code=none — undocumented crash surface confirmed, not a structured guard); containment, observation-only returns, duplicate-handler double fire, event/phase cross-fire all confirmed |
 | 12 | DATA-FIX + DOC-FIX | array-literal `$eq` re-expressed (see #4); "serialized authored state keeps authored-value untouched" corrected — `serializeNode` omits ALL derived-declared keys from shipped props (derived-state.md §2), probe: shipped keys = `["id"]`; pass-1 canon keeps it (DV-H5). Corrected envelope verified green incl. `data-eq=true`, root F3-dropped |
 | 13 | ENGINE-DEFECT #2/#3 | expected output was SPEC-consistent (R6/HLP-H1/H13, DOM-H12/H13, FRG-H17); the canonical emit path leaks `css.cssDef` as a `css:cssDef` set op and never emits a `styles` op → DOM: cssDef attribute, NO style element; SSR: stylesBuffer block with `[object Object]`; two surfaces diverge for one op stream (SSR-F4 class) |
@@ -384,6 +775,19 @@ DOC-FIX / DATA-FIX / ENGINE-DEFECT.
   `minimalFromState`); red test: `Node.compile` → `emitElements` →
   `diffMinimal` on a 2+-arm fork asserts each arm's create AND its set ops
   carry distinct forkKeys equal to `cs.forkKey`.
+- **RESOLVED (emit-layer TDD unit, placement-path §4.3/§6.5 prerequisite)**
+  — `src/core/render-helpers.ts`: `emitElements`' actionable param + `EmitState`
+  declare `forkKey?: ForkPathKey`; `emitOne` forwards `s.forkKey` in every
+  return branch (def/type branch, plain branch, arm branch — mirroring
+  `minimalFromState`). `render.ts` needed no change (`MinimalElement` +
+  `diffMinimal` already forward forkKey). Tests: `tests/unit/render.test.ts`
+  "DEFECT #1 — emitOne forwards forkKey onto emitted elements and ops"
+  (DEFECT-1a..1e: arm elements + create/set ops carry `cs.forkKey` distinct
+  per arm; non-fork states carry none; applyOps/treeFromOps preserve forkKey
+  via `wireKey` composites; `treeSig` stable + exercises the forkKey
+  dimension; def/type branch forwards). Full trio + build + demo:smoke green
+  (only pre-existing feature-matrix fork-claim demo failures remain,
+  unchanged by this unit — tracked for the §6.4 demo fork-claim rebuild).
 
 **DEFECT #2 — `emitElements` leaks `css.cssDef` as a `css:cssDef` set op (R6/HLP-H1/H13 violation)**
 - Spec: adapters.md §3.2/§4.2 + §10.3 HLP-H1/H13 (`css` → `css:*`

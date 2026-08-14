@@ -164,12 +164,69 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
     globalThis.__forkStressDone,
     new Promise((r) => setTimeout(r, 30000)),
   ]).catch(() => {})
+  // performance-tracking guard (same contract as the data pages): the timed
+  // sections (incl. pass2 flush windows, page-side construction, handler
+  // bodies) must cover ~all of the total; appends counts the diffMinimal
+  // append ops — the DOM-churn proxy the shim cannot time (RCA:
+  // docs/session-defect-review.md "imperative fork-stress").
+  const prof = globalThis.__forkStressProfile
+  if (!prof) {
+    console.error(`fork-stress (depth ${depth}) profile missing — page did not finish profiling`)
+    process.exit(1)
+  }
+  const residual = prof.totalMs - (prof.coveredMs ?? 0)
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`fork-stress (depth ${depth}) profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms`)
+    process.exit(1)
+  }
+  if ((prof.appends ?? 0) < 2 ** depth - 2) {
+    console.error(`fork-stress (depth ${depth}) append count implausible: appends=${prof.appends} for ${2 ** depth - 1} nodes`)
+    process.exit(1)
+  }
 }
 
 // ---- fork-stress DATA-DRIVEN pages: one module instance per depth ----------
 // The page input is a LEGACY envelope (root + prototypes); the module
 // translates it, installs the handler bodies by name, and the clone-instance
 // recursion assembles the tree.
+// Census guard (census-revision review — the page publishes registered /
+// in-tree / unplaced / destroyed / cloneOps on the profile; in-tree and
+// unplaced are asserted by the page's own checks, the rest is derived
+// arithmetic this guard pins so the census can never silently drift).
+// F-13 re-pin (placement-path-spec §5.2): contentNodes-ownership minting
+// makes the 22 prototype content roots family-in-tree too — in-tree =
+// 2^depth − 1 + 2·(depth−1), unplaced = 0; cloneOps stays the journaled
+// clone count (the prototypes were never cloned into).
+function assertForkStressCensus(prof, depth, label) {
+  const prototypes = 2 * (depth - 1)
+  const expectedInTree = 2 ** depth - 1 + prototypes
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'cloneOps']) {
+    if (typeof prof[f] !== 'number') {
+      console.error(`${label} profile missing census field "${f}" — fork-stress-data census not published`)
+      process.exit(1)
+    }
+  }
+  if (prof.inTree !== expectedInTree) {
+    console.error(`${label} census in-tree mismatch: inTree=${prof.inTree}, expected ${expectedInTree} (2^depth − 1 + ${prototypes} contentNodes-owned prototypes)`)
+    process.exit(1)
+  }
+  if (prof.unplaced !== 0) {
+    console.error(`${label} census unplaced mismatch: unplaced=${prof.unplaced}, expected 0 (every node is family-in-tree after contentNodes minting — F-13)`)
+    process.exit(1)
+  }
+  if (prof.destroyed !== 0) {
+    console.error(`${label} census destroyed mismatch: destroyed=${prof.destroyed}, expected 0 (no demo page fires a destroy op)`)
+    process.exit(1)
+  }
+  if (prof.cloneOps !== prof.inTree - 1 - prototypes) {
+    console.error(`${label} census cloneOps mismatch: cloneOps=${prof.cloneOps}, expected in-tree − 1 − ${prototypes} = ${prof.inTree - 1 - prototypes} (the journaled clone-instance count)`)
+    process.exit(1)
+  }
+  if (prof.registered !== prof.inTree + prof.unplaced + prof.destroyed) {
+    console.error(`${label} census registered mismatch: registered=${prof.registered}, expected in-tree + unplaced + destroyed = ${prof.inTree + prof.unplaced + prof.destroyed}`)
+    process.exit(1)
+  }
+}
 for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
   const pageHtml = await readFile(`${base}demo/fork-stress-data-d${depth}.html`, 'utf8')
   seedPage(pageHtml)
@@ -182,9 +239,30 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
     globalThis.__forkStressDataDone,
     new Promise((r) => setTimeout(r, 30000)),
   ]).catch(() => {})
+  // performance-tracking guard (RCA: docs/session-defect-review.md "missing
+  // timing steps"): the timed sections must cover ~all of the page total, so
+  // "total" can never hide an unmeasured pipeline again. The residual is the
+  // flush timers + checks; a regression that balloons the pass-2 region while
+  // measured sections stay small now fails HERE instead of hiding in total.
+  const prof = globalThis.__forkStressDataProfile
+  if (!prof) {
+    console.error(`fork-stress-data (depth ${depth}) profile missing — page did not finish profiling`)
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  // fixed overhead (flush timers + checks + summary) is ~1–25ms regardless of
+  // depth, so the guard is residual-based with an absolute tolerance: the
+  // untimed region may never exceed 15% of total NOR 25ms absolute.
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`fork-stress-data (depth ${depth}) profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  assertForkStressCensus(prof, depth, `fork-stress-data (depth ${depth})`)
 }
 // ---- single-method d12 variants (placement-only / values-only / link-only) --
 // The whole tree relies on ONE mechanism; the module re-instantiates per page.
+const d12Totals = {}
 for (const method of ['placement', 'values', 'link']) {
   const pageHtml = await readFile(`${base}demo/fork-stress-data-${method}-d12.html`, 'utf8')
   seedPage(pageHtml)
@@ -196,6 +274,121 @@ for (const method of ['placement', 'values', 'link']) {
     globalThis.__forkStressDataDone,
     new Promise((r) => setTimeout(r, 60000)),
   ]).catch(() => {})
+  const prof = globalThis.__forkStressDataProfile
+  if (!prof) {
+    console.error(`fork-stress-data (${method}-only d12) profile missing`)
+    process.exit(1)
+  }
+  const residual = prof.totalMs - (prof.coveredMs ?? 0)
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`fork-stress-data (${method}-only d12) profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms`)
+    process.exit(1)
+  }
+  assertForkStressCensus(prof, 12, `fork-stress-data (${method}-only d12)`)
+  d12Totals[method] = prof.totalMs
+}
+// d12 ratio guard (AGENTS.md item 4, promoted from manual to asserted): the
+// values/link totals must stay within a loose multiple of the placement
+// baseline — the historical O(n²) pass-2 regression showed as ~20×, so 2.5×
+// is a generous CI-safe bound that still catches pipeline blow-ups.
+const d12Base = d12Totals['placement'] ?? 0
+for (const method of ['values', 'link']) {
+  const ratio = d12Base > 0 ? (d12Totals[method] ?? 0) / d12Base : 0
+  if (ratio > 2.5) {
+    console.error(`fork-stress-data (${method}-only d12) total ratio ${ratio.toFixed(2)}× exceeds 2.5× of placement (${d12Totals[method]}ms vs ${d12Base}ms)`)
+    process.exit(1)
+  }
+}
+
+// ---- static placement-path page: 22 prototypes, ONE path-enumeration pass ----
+// The static re-expression (placement-path-spec §5): translate → ONE
+// compilePath bootstrap → emit/diff/apply. NO clone-instance ops, NO
+// after-compile expansion — 4095 path-states from 23 graph nodes (E2E-1).
+// Census guard: the page publishes registered / inTree / unplaced / destroyed
+// / cloneOps / states / elements / passes on the profile; the static census
+// (placement-path-spec §5.2) is pinned here so it can never silently drift.
+function assertStaticPathCensus(prof) {
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'cloneOps', 'states', 'elements', 'passes']) {
+    if (typeof prof[f] !== 'number') {
+      console.error(`path-fork-data profile missing census field "${f}" — static census not published`)
+      process.exit(1)
+    }
+  }
+  if (prof.registered !== 23) {
+    console.error(`path-fork-data census registered mismatch: registered=${prof.registered}, expected 23 (22 prototypes + root)`)
+    process.exit(1)
+  }
+  if (prof.inTree !== 23) {
+    console.error(`path-fork-data census in-tree mismatch: inTree=${prof.inTree}, expected 23 (every prototype is contentNodes-owned — F-13)`)
+    process.exit(1)
+  }
+  if (prof.unplaced !== 0) {
+    console.error(`path-fork-data census unplaced mismatch: unplaced=${prof.unplaced}, expected 0 (no node is family-unplaced)`)
+    process.exit(1)
+  }
+  if (prof.destroyed !== 0) {
+    console.error(`path-fork-data census destroyed mismatch: destroyed=${prof.destroyed}, expected 0`)
+    process.exit(1)
+  }
+  if (prof.cloneOps !== 0) {
+    console.error(`path-fork-data census cloneOps mismatch: cloneOps=${prof.cloneOps}, expected 0 (the static model mints NO clones — E2E-1)`)
+    process.exit(1)
+  }
+  if (prof.states !== 4095) {
+    console.error(`path-fork-data census states mismatch: states=${prof.states}, expected 4095 (2^12 − 1 path-states)`)
+    process.exit(1)
+  }
+  if (prof.elements !== 4095) {
+    console.error(`path-fork-data census elements mismatch: elements=${prof.elements}, expected 4095 (one element per path-state)`)
+    process.exit(1)
+  }
+  if (prof.passes !== 1) {
+    console.error(`path-fork-data bootstrap passes mismatch: passes=${prof.passes}, expected 1 (ONE path-enumeration compile)`)
+    process.exit(1)
+  }
+}
+{
+  const pageHtml = await readFile(`${base}demo/path-fork-data.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/path-fork-data.js`).catch((e) => {
+    console.error('path-fork-data failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__pathForkDone,
+    new Promise((r) => setTimeout(r, 60000)),
+  ]).catch(() => {})
+  const prof = globalThis.__pathForkProfile
+  if (!prof) {
+    console.error('path-fork-data profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  // performance guard (AGENTS.md item-4 watch applies to the path-enumeration
+  // bootstrap pass): the timed sections (incl. the ONE enumeration compile)
+  // must cover ~all of the page total, so "total" can never hide an untimed
+  // pipeline (RCA: docs/session-defect-review.md).
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`path-fork-data profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  assertStaticPathCensus(prof)
+  // Ratio guard — placement-baseline decision (placement-path-spec §10.ad N-5
+  // + §8 Q6): the static page is its OWN reference — its single total is the
+  // new placement baseline for the static model. TODO: after testing confirms
+  // the absence of explosive time issues, re-baseline the runtime pages'
+  // ratio guard against this total (§10.af Q6). The runtime pages KEEP their
+  // existing placement baseline above.
+  const pathForkTotal = prof.totalMs
+  console.log(`[path-fork:baseline] total=${pathForkTotal.toFixed(1)}ms — static placement baseline recorded (§10.ad); TODO: re-baseline the runtime ratio guard against it after testing confirms no explosive time issues (§10.af Q6)`)
+  // Tripwire (spec §10.af.4 R-6): the single-pass enumeration must not be
+  // SLOWER than the runtime page's full clone assembly — a blow-up here means
+  // the path-enumeration bootstrap is scaling badly (AGENTS.md item-4 watch).
+  if (d12Totals['placement'] > 0 && pathForkTotal > d12Totals['placement']) {
+    console.error(`path-fork-data total ${pathForkTotal.toFixed(1)}ms exceeds the runtime placement baseline ${d12Totals['placement'].toFixed(1)}ms — path-enumeration bootstrap scaling regression`)
+    process.exit(1)
+  }
 }
 
 // ---- feature-showcase page: one legacy envelope, every feature, data-only ---
@@ -291,6 +484,10 @@ for (const method of ['placement', 'values', 'link']) {
     console.error(`fork-stress-data (${method}-only d12) page did not complete its checks (banner missing)`)
     process.exit(1)
   }
+}
+if (!banners.some((b) => b.includes('Path Fork (static)') && /0 failed/.test(b))) {
+  console.error('path-fork-data page did not complete its checks (banner missing)')
+  process.exit(1)
 }
 if (!banners.some((b) => b.includes('feature-showcase') && /0 failed/.test(b))) {
   console.error('feature-showcase page did not complete its checks (banner missing)')

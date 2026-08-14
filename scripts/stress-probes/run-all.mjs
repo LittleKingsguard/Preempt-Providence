@@ -864,7 +864,7 @@ function runScenario10() {
   d.push(`slot-1 forkKey=${slot1[0]?.forkKey ?? 'none'} slot-2 forkKey=${slot2[0]?.forkKey ?? 'none'}`)
   const dual = stateOf(p, 'dual-slot')
   d.push(`dual-slot states=${dual.length} binding dual=${dual[0]?.bindings?.dual}`)
-  d.push(`anchor targets: ${p.translated.nodes.filter((n) => n.props?.id === 'unicode-slot').map((n) => n.anchors.filter((a) => a.role === 'placement').map((a) => a.target).join(',')).join('')}`)
+  d.push(`anchor targets: ${p.translated.nodes.filter((n) => n.props?.id === 'unicode-slot').map((n) => n.anchors.filter((a) => a.role === 'container').map((a) => a.target).join(',')).join('')}`)
   const s1 = findNode(p.supervisor, 'slot-1')
   const s2 = findNode(p.supervisor, 'slot-2')
   d.push(`creates for zone.one slots: ${p.ops.filter((o) => o.kind === 'create' && (o.wire === s1?.id || o.wire === s2?.id)).map((c) => `${c.wire}${c.forkKey ? `(fk:${c.forkKey})` : ''}`).join(',') || 'none'}`)

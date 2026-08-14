@@ -30,12 +30,17 @@ function buildFeatureMatrixSurface() {
   const nodeById = new Map(nodes.map((n) => [n.id, n]))
   const cr = root.compile(slice)
 
-  // fork arms: each 'theme' consumer resolves 2 arms (FRK-H2)
+  // theme providers: TWO DISTINCT names (theme-dark / theme-light — the
+  // same-name fork claim is an anti-pattern, placement-path-spec §10.ad);
+  // each consumer resolves exactly ONE state carrying its own provider.
   const forkArms = ['fork-a', 'fork-b'].map((name) => {
     const id = fm.byId.get(name).id
     const arms = cr.actionable.filter((s) => s.nodeId === id)
-    if (arms.length !== 2) throw new Error(`${name}: expected 2 theme arms, got ${arms.length}`)
-    return { name, arms: arms.map((a) => ({ pathKey: a.pathKey, theme: a.bindings['theme'], trace: a.trace ?? [] })) }
+    if (arms.length !== 1) throw new Error(`${name}: expected 1 arm (distinct provider), got ${arms.length}`)
+    const bindingName = name === 'fork-a' ? 'theme-dark' : 'theme-light'
+    const theme = arms[0].bindings[bindingName]
+    if (theme === undefined) throw new Error(`${name}: ${bindingName} did not resolve (${JSON.stringify(arms[0].bindings)})`)
+    return { name, arms: arms.map((a) => ({ pathKey: a.pathKey, theme, trace: a.trace ?? [] })) }
   })
 
   // loop-safety: the ancestry resolution cycle drops as 'loop' + circular-source
@@ -63,7 +68,7 @@ function buildFeatureMatrixSurface() {
   const expected = {
     nodeCount: nodes.length,
     forkCount: forkArms.length,
-    armsPerConsumer: 2,
+    armsPerConsumer: 1,
     loopDropped: true,
     contentAttached: 2,
     commentsAttached: 1,

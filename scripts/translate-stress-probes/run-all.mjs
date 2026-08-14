@@ -759,7 +759,7 @@ function runScenario7() {
   const warnedCodes = [...new Set(p.translateWarnStrings.map((s) => (s.match(/\[legacy-translate\] (\S+)/) ?? [null, null])[1]))]
   d.push(`console.warn codes fired: ${JSON.stringify(warnedCodes)}`)
   d.push(`anchors: ${JSON.stringify(Object.values(anchorsSnapshot(t))[0])}`)
-  d.push(`placement anchor: ${JSON.stringify(t.root.anchors.filter((a) => a.role === 'placement').map((a) => a.target))}`)
+  d.push(`placement anchor: ${JSON.stringify(t.root.anchors.filter((a) => a.role === 'container').map((a) => a.target))}`)
   const rootNode = t.root
   d.push(`live handlers: ${rootNode.handlers.length}`)
   const rootStates = p.byNode.get(t.root.id)
@@ -780,7 +780,7 @@ function runScenario7() {
     { role: 'source', target: 'a', value: 1 },
     { role: 'source', target: 'b', value: 1 },
     { role: 'source', target: 'c', value: 1, applyPath: 'props.dup' },
-  ]) && t.root.anchors.some((a) => a.role === 'placement' && a.target === 'zone')
+  ]) && t.root.anchors.some((a) => a.role === 'container' && a.target === 'zone')
   const handlerOk = rootNode.handlers.length === 0
   const reWarnDocOk = JSON.stringify(warnStringSig(rt.re.warnings)) === JSON.stringify(['component-target-skipped@root', 'component-target-gap@root', 'component-binding-empty@root'])
   const ok = orderOk && focusOk && anchorOk && handlerOk && reWarnDocOk
@@ -1012,7 +1012,7 @@ function runScenario14() {
     ]) &&
     deepEqual(derivedSnapshot(t)['tri'], { props: { x: { $: 'bindings.a' }, y: { $: 'bindings.b' } } }) &&
     triNode.handlers.length === 1 && triNode.handlers[0].name === 'h' && triNode.handlers[0].event === 'click' && typeof triNode.handlers[0].body === 'function' &&
-    t.root.anchors.some((a) => a.role === 'placement' && a.target === 'slot-1')
+    t.root.anchors.some((a) => a.role === 'container' && a.target === 'slot-1')
   const compileWarnOk = p.cr.warnings.some((w) => w.code === 'unresolved-reference')
   const bakeOk = attr(p.html, 'tri', 'x') === '1' && attr(p.html, 'tri', 'y') === null
   const reverseOk = JSON.stringify(rt.doc.template.root.children[0]) === JSON.stringify({

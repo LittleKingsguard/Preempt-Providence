@@ -67,6 +67,11 @@ export function anchorsOf(node, role) {
 export function addComponentSource(owner, name, value, role = 'source') {
   const link = new Link({ name: 'component' })
   const anchor = owner.addAnchor(role, name, {}, link)
+  if (anchor === null) {
+    // the component-source-duplicate guard fired — the second same-name
+    // provider anchor is skipped (warn + keep-first); callers see null
+    return anchor
+  }
   anchor.value = value
   return anchor
 }

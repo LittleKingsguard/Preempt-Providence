@@ -203,14 +203,18 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
     expect(again.warnings).toEqual([])
   })
 
-  it('K5 — same-reference runtime forks are legacy-unexpressible: first provider kept, rest dropped (no duplicate-reference on re-translate)', () => {
+  it('K5 — same-reference runtime forks are legacy-unexpressible: the guard keeps the first provider (no duplicate-reference on re-translate)', () => {
     const t = translateLegacy({
       template: { root: { type: 'app', component: { reference: 'a', value: 1 } } },
       content: [],
     })
     const link = t.root.anchors.find((a) => a.role === 'source')!.link
+    // P3 §10.ab/ae — the component-source-duplicate guard rejects the second
+    // same-name source anchor outright (warn + keep-first): the fork claim is
+    // anti-patterned, so reverse emission sees exactly one provider
     const dup = t.root.addAnchor('source', 'a', {}, link)
-    dup.value = 2
+    expect(dup).toBeNull()
+    expect(t.root.anchors.filter((a) => a.role === 'source')).toHaveLength(1)
     const out = reverseTranslate(t.root, { content: t.content })
     expect(out.template.component).toEqual({ reference: 'a', value: 1 })
     const again = translateLegacy(out)
@@ -255,5 +259,55 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
     const again = translateLegacy(out)
     expect(compAnchors(again.root)).toEqual([{ role: 'source', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
     expect(again.warnings).toEqual([])
+  })
+})
+
+describe('P3 — reverse emission of placement anchors (content + activePlacement; contentNodes stripped)', () => {
+  it('content anchors reverse as targetPlacement: string[] in mint order; re-translate is stable', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', placement: { targetPlacement: ['zone-b', 'zone-a'] } } },
+      content: [],
+    })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.placement).toEqual({ targetPlacement: ['zone-b', 'zone-a'] })
+    const again = translateLegacy(out)
+    expect(again.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['zone-b', 'zone-a'])
+    expect(again.warnings).toEqual([])
+  })
+
+  it('derived activePlacement: string emits on reverse (first name with containers), never authored', () => {
+    const t = translateLegacy({
+      template: {
+        root: { type: 'app', placement: { placementName: 'zone-b', targetPlacement: ['zone-b', 'zone-a'] } },
+      },
+      content: [],
+    })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.placement).toEqual({
+      placementName: 'zone-b',
+      targetPlacement: ['zone-b', 'zone-a'],
+      activePlacement: 'zone-b',
+    })
+    // activePlacement is never minted back into an anchor (derived read only)
+    const again = translateLegacy(out)
+    expect(again.root.anchors.some((a) => a.role === 'content' && a.target === 'zone-b')).toBe(true)
+    expect(again.root.anchors.filter((a) => a.role === 'container').map((a) => a.target)).toEqual(['zone-b'])
+    expect(again.warnings).toEqual([])
+  })
+
+  it('reverse emission strips the minted contentNodes anchor (no artifact; re-translate re-mints cleanly)', () => {
+    const t = translateLegacy(legacyDoc())
+    const out = reverseTranslate(t.root, { content: t.content, metadata: t.metadata, userData: t.userData })
+    expect(JSON.stringify(out)).not.toContain('contentNodes')
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+    for (const c of again.content) {
+      expect(c.state).toBe('in-tree')
+      expect(c.childAnchor()!.link.anchorsOf('parent')[0]!.target).toBe('contentNodes')
+    }
+    // the authored placement round-trips untouched
+    const card = again.content.find((c) => c.type === 'card')!
+    expect(card.anchors.find((a) => a.role === 'container' && a.target === 'slot-alpha')).toBeDefined()
+    expect(card.children.map((c) => c.type)).toEqual(['title'])
   })
 })

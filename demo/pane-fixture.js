@@ -10,11 +10,15 @@ export function buildNestedPane() {
   const dock = childOf(root, makeNode({ type: 'dock', props: { role: 'main' }, css: { id: 'css-dock' } }), 0)
   const inner = childOf(dock, makeNode({ type: 'badge', content: 'inner', css: { id: 'css-inner' } }), 0)
   const zone = childOf(root, makeNode({ type: 'zone', content: 'slot', css: { id: 'css-zone' } }), 1)
-  addComponentSource(root, 'feed', { label: 'A' })
-  addComponentSource(root, 'feed', { label: 'B' })
-  targetAnchor(dock, 'feed')
+  // anti-pattern compliance (placement-path-spec §10.ad): no node carries two
+  // same-name source anchors — the two feed providers use DISTINCT names and
+  // the dock consumes BOTH (one resolved state, two bindings — never a fork).
+  addComponentSource(root, 'feed-a', { label: 'A' })
+  addComponentSource(root, 'feed-b', { label: 'B' })
+  targetAnchor(dock, 'feed-a')
+  targetAnchor(dock, 'feed-b')
   const plink = hub().linkFor('slot-alpha', 'placement')
-  zone.addAnchor('placement', 'slot-alpha', {}, plink)
+  zone.addAnchor('container', 'slot-alpha', {}, plink)
   return { root, dock, inner, zone }
 }
 

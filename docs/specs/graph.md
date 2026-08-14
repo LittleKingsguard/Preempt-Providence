@@ -25,11 +25,11 @@ S-R2.1/2/3/5/6/8/9, S-R3.1–S-R3.13, S-R4.2).
 ## 2. Types
 
 ```ts
-/** Roles a Link admits / an Anchor carries (S-R3.9: union includes 'placement' | 'component'). */
+/** Roles a Link admits / an Anchor carries (S-R3.9; P3 §1.1: 'placement' renamed 'container', consumer role 'content' added). */
 type Role =
   | 'parent' | 'child'                    // family ('parent-child') roles
   | 'source' | 'target' | 'duplex'        // component resolution maps (notes §10.8.2)
-  | 'placement' | 'component'             // peripheral edges (S-R2.8, S-R3.9)
+  | 'container' | 'content' | 'component' // peripheral edges: placement producer/consumer roles + component (S-R2.8, S-R3.9, P3 §1.1)
 
 /** Anchor target. NEVER `Link` — the edge is reached via `anchor.link` (C2). */
 type AnchorTarget =
@@ -102,7 +102,7 @@ class LinkConfigError extends Error {
 | --- | --- | --- | --- |
 | `parent-child` | 1 link = exactly 1 `'parent'` anchor + ≥1 `'child'` anchors | `parent.count: 1`; `children { min: 1, max: Infinity, orderKey: 'unique' }`; `roles: ['parent','child']` | `LinkConfig 'parent-child'` |
 | `component` | 1 link **per `referenceName`**; members anchor as `source` / `target` / `duplex` | `roles` includes source/target/duplex whitelist | `LinkConfig 'component'` |
-| `placement` | `'placement'`-role anchor on the zone's family link; applied by `attach`, populated by compile (S-R2.8 — shares the borrow algorithm, NOT component role semantics) | resolution link at the zone | `LinkConfig` |
+| `placement` | the per-name **placement Link IS the zone registry** (P3 §2.1): `'container'`-role anchors (producers — legacy `placementName`, renamed from `'placement'`) offer a zone; `'content'`-role anchors (consumers — minted from `targetPlacement: string[]`, preference-ordered) request routing; both roles live on the shared per-name Link (roles `['container','content']`). Applied by the `placement-attach` op / compile (P3 §3.3; S-R2.8 — shares the borrow algorithm, NOT component role semantics) | per-name resolution Link | `LinkConfig` |
 
 | Concept | Living location | Owned by |
 | --- | --- | --- |

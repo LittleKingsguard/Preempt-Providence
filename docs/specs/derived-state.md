@@ -94,10 +94,10 @@ A `DerivedExpr` is one of:
 | `bindings.<name>` | the node's resolved binding value for `<name>` (per-arm) |
 | `content` | the node's content |
 | `type` | the node's type |
-| `pathKey` | the compiled state's `pathKey` (fork arms carry their path) |
+| `pathKey` | the compiled state's `pathKey` (fork arms carry their path; path-states carry their placement-interleaved key — P3 §2.2) |
 | `children` / `children.length` | the compiled state's child wire ids |
 | `unresolved` / `unresolved.length` | the compiled state's unresolved references |
-| `placement` | the node's `placement` anchor target (string) or `null` |
+| `placement` | per-path (P3 §2.3 — Unit 10): a path-state's `cs.activePlacement` (the CHOSEN zone name, §2.5) when present; otherwise the node's `container` anchor target (string) or `null` — the family-state read is unchanged (runtime pages' `data-placement` bakes) |
 
 Rules: paths are exactly the whitelisted roots + one key segment (`props.x`,
 `bindings.theme`, … — `bindings`/`props` keys are single segments; keys with
@@ -259,6 +259,12 @@ Validation at declaration means compile never throws for derived data
       (chains are op-set pass-1 props).
    The `stress:layers` chain itself stays op-based (§6 — cross-node derived
    reads are out of scope).
+   **Static sibling page (P3 §5.2, Unit 10):** the static fork-stress page's
+   `stress:expanded` reads the PATH-states' `children.length` — path-derived
+   children (P3 §2.3), so the same declaration is true for non-leaf
+   path-states and false for leaves, evaluated per path-state
+   (`cs.children` is the state's own path-derived children — the derived
+   input contract, derived.ts:176-177).
 3. Any future "bake a resolved binding into a prop" need.
 
 ## 10. Exhaustiveness gate (tests for the implementation unit)
@@ -278,6 +284,7 @@ Validation at declaration means compile never throws for derived data
 | DV-H11 | no-target branch (self-provided bindings only) | derived `bindings.<name>` bakes the SELF-provided value (or omits when null) |
 | DV-H12 | fork arms with differing bindings | per-arm states carry per-arm baked props; a re-render emits no spurious set churn (D4) |
 | DV-H13 | clone of a derived-bearing prototype | clone re-derives (base + layer copy, incl. the layer-copy loop) |
+| DV-H14 | path-states (P3 §2.3, Unit 10) | `{ $: 'children.length' }` reads the state's PATH-derived children (non-leaf path-states true, leaves false — `stress:expanded` on the static page); `{ $: 'placement' }` on a path-state reads `cs.activePlacement` — the CHOSEN zone name of the state's final placement hop, never the first-anchor `container` read |
 | DV-F1 | malformed decl (unknown form / root / deep path / arity / missing cond / empty concat / dotted key / reserved `id`) | `derived-invalid` thrown at EVERY declaration boundary (constructor, addLayer, parseNodeState, baseFrom) |
 | DV-F2 | expression referencing a non-existent binding | `null` → key omitted (coalesce-friendly), no unresolved-reference state change |
 | DV-F3 | malformed `derived` inside a serialized doc / legacy envelope | schema-boundary `derived-invalid` (never reaches compile) |

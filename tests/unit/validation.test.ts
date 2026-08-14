@@ -411,7 +411,13 @@ describe('Gate — LinkConfigError trigger matrix (validation.md §7.1)', () => 
     expect(() => linkB.addAnchor(childAnchor(linkB, makeNode({ type: 'b1' }), 1))).not.toThrow()
     const place = new Link({ name: 'placement' })
     expect(place.config).toEqual(DEFAULT_PLACEMENT)
-    expect(() => place.addAnchor({ role: 'placement', target: makeNode({ type: 'p' }), options: { priority: 1 }, link: place })).not.toThrow()
+    // P3 §1.1: the placement Link admits BOTH producer ('container') and
+    // consumer ('content') roles; the legacy 'placement' role is gone
+    expect(() => place.addAnchor({ role: 'container', target: makeNode({ type: 'p' }), options: { priority: 1 }, link: place })).not.toThrow()
+    expect(() => place.addAnchor({ role: 'content', target: makeNode({ type: 'c' }), options: {}, link: place })).not.toThrow()
+    expect(place.anchors).toHaveLength(2)
+    // @ts-expect-error -- P3 §1.1: 'placement' is RENAMED to 'container'; not a Role
+    expect(() => place.addAnchor({ role: 'placement', target: makeNode({ type: 'x' }), options: {}, link: place })).toThrow(LinkConfigError)
   })
 
   it('count-exceeded boundary: a second parent on the max:1 slot is rejected', () => {

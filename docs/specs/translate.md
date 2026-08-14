@@ -6,7 +6,8 @@ anchors-first (`id` + `anchors[]`, children derived); original `/Preempt`
 backend JSON is translated AT THE BOUNDARY so trees build out completely from
 original-format data. This file is the behavior contract for the TestWriter.
 
-> **STATUS (K1–K8 landed; reverse unit shipped — read this first):** the
+> **STATUS (K1–K8 landed; reverse unit shipped; P3 placement minting landed —
+> read this first):** the
 > kernel landed in two units — the translate half (K1–K4, K6–K8, K5
 > persistence: `options.applyPath` on anchors, `src/core/translate.ts`) and
 > the reverse half (K5 emission + N1 strip-on-reverse: `nodeToLegacy` emits
@@ -17,10 +18,22 @@ original-format data. This file is the behavior contract for the TestWriter.
 > stays; a runtime name-target coexisting with a provider anchor is
 > legacy-unexpressible and is DROPPED on reverse — the reverse never emits a
 > two-name duplex, and same-reference runtime forks keep the first provider
-> only). Sentences below tagged "(post-K1–K8)"/"(post-K5)" describe THIS
+> only). The P3 placement feed (placement-path-spec §6.2) landed on top:
+> `targetPlacement: string[]` mints one ORDERED `content` anchor per requested
+> name (a bare string is coerced with a `placement-string-coerced` warn);
+> `activePlacement` is DERIVED (typed `string`, never minted — §2.5);
+> `#`-names and duplicates warn + skip (`placement-name-invalid` /
+> `placement-duplicate-reference`, keep-first); the interim
+> `component-target-placement` warn is REMOVED; every content payload root and
+> `template.children` root receives the `contentNodes` permanent-owner parent
+> anchor at translate (family-'in-tree', P3 §10.ad/F-13) and `nodeToLegacy`
+> STRIPS it on reverse; the reverse emits `content` anchors back as
+> `targetPlacement: string[]` in mint order + the derived `activePlacement:
+> string` read. Sentences below tagged "(post-K1–K8)"/"(post-K5)"/"(P3)"
+> describe THIS
 > landed contract, not a future one. Everything untagged describes current
-> behavior. Behavioral pins: `tests/unit/translate.test.ts` (52) +
-> `tests/unit/reverse.test.ts` (K5/N1 unit, 8). The PRE-KERNEL contract
+> behavior. Behavioral pins: `tests/unit/translate.test.ts` (64) +
+> `tests/unit/reverse.test.ts` (15). The PRE-KERNEL contract
 > (`docs/specs/legacy-component-ref-only-review.md` Appendix B/D, kept for
 > history) read `component.target` as a SECOND COMPONENT NAME (duplex), never
 > validated the target vocabulary, stored the root's `template.component`
@@ -44,9 +57,12 @@ interface LegacyHandlerDef {
 }
 
 interface LegacyPlacementConfig {
-  placementName?: string
-  targetPlacement?: string
-  activePlacement?: boolean
+  placementName?: string      // → 'container' role anchor (P3 §1.1)
+  targetPlacement?: string[]  // preference-ordered zone names → ordered 'content' anchors (P3 §1.2);
+                              // a bare string (old mis-typed shape) is coerced to [string] with a
+                              // 'placement-string-coerced' warn (back-compat)
+  activePlacement?: string    // DERIVED resolution record (P3 §2.5) — never authored, never minted;
+                              // nodeToLegacy emits the derived read on reverse
 }
 
 interface LegacyComponentBinding {
@@ -77,7 +93,8 @@ interface LegacyInitialData { template: LegacyTemplateData; content?: LegacyCont
 interface TranslatedTree {
   root: Node            // in-tree ('rootNode' owner)
   nodes: Node[]         // every translated node, root first, tree order
-  content: Node[]       // UNPLACED content nodes (template.children + payload items)
+  content: Node[]       // content nodes (template.children + payload items) — contentNodes-owned,
+                        // family-'in-tree' via the permanent-owner token (P3 §10.ad/F-13)
   warnings: TranslatedWarning[]  // K4 (landed) — always-present additive channel
   metadata?: unknown    // first payload's metadata
   userData?: unknown    // first payload's userData
@@ -118,19 +135,23 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 > provider values onto the clone, so a cloned data-declared provider resolves
 > depth-0 at itself (S-R2.6).
 >
-> **REPORTED ENGINE DEFECT (stress-test review loop #2 — do not paper over
-> in the docs; engine fix pending, see `docs/test-findings.md` §"Stress-test
-> review loop #2"):** the "self-provider ⇒ own value" contract above
-> currently holds ONLY on pure-provider nodes (no consumer anchors). On a
-> LEGAL K7 mix — a node carrying BOTH a consumer anchor and a self-provider
-> with a local apply (distinct names, e.g. S1/S14/S15) — compile routes the
-> node through `resolveArms` (`node.ts:655-664`: the `publishOwn` branch
-> requires `targetNames.length === 0`) and the arm bindings carry only the
-> CONSUMED names, so the synthesized `bindings.<own-ref>` read evaluates null
-> and the self-apply is SILENTLY omitted. Spec'd fix shape (future TDD
-> pass): seed each arm's bindings with the node's own source/duplex values
-> alongside the consumed-name resolution, restoring the §2.1 contract for
-> mixed nodes.
+> **RESOLVED ENGINE DEFECT (was: "publishOwn bypass on mixed nodes" —
+> stress-test review loop #2, engine fix landed):** the "self-provider ⇒
+> own value" contract above previously held ONLY on pure-provider nodes (no
+> consumer anchors): a LEGAL K7 mix (a node carrying BOTH a consumer anchor
+> and a self-provider with a local apply — distinct names, e.g. S1/S14/S15)
+> routed through `resolveArms` (`node.ts:655-664` — the `publishOwn` branch
+> required `targetNames.length === 0`) and its arm bindings carried only the
+> CONSUMED names, so the synthesized `bindings.<own-ref>` read evaluated
+> null and the self-apply was SILENTLY omitted. FIXED in the compile loop:
+> `seedOwnBindings` (extracted from `publishOwn`) now seeds each arm's
+> bindings with the node's own source/duplex values right after
+> `cs.bindings = arm.bindings` and before the derived bake — skip-if-present
+> (a same-name resolved/duplex value wins), consumed-first key order, own
+> values node-static per arm. The §2.1 contract is unqualified again;
+> verified by `tests/unit/node.test.ts` T1–T7 and the de-vacuoused
+> translate-showcase smoke (see `docs/test-findings.md` §"Stress-test review
+> loop #2" "Fix landed").
 
 ## 2. Mapping rules
 
@@ -139,9 +160,11 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 | `template.root` | root `Node` (`type/content/props/css/handlers`), attached to the permanent owner `'rootNode'` → in-tree | S1.1 |
 | `template.root.children` (NodeData.children) | the root's OWN default children — attached under root via parent-child anchors, `priority` = array index (children stored in the root itself) | user decision, §10.10.1 |
 | nested `NodeData.children` | recursively translated + attached under their parent (same priority rule) | §10.8 |
-| `template.children` | UNPLACED content nodes — translated, NO parent anchor, returned in `TranslatedTree.content`; **registered as payload-owned content** (persist in the background; dropped with their payload — see payload.md §1/§3) | user decision, §10.10.1, §10.10.4 |
-| `ContentPayload.content[]` | UNPLACED content nodes (same as above) | user decision, §10.10.1 |
-| `NodeData.placement.placementName` | `placement` anchor (`{role:'placement', target: name}`) on a shared per-name placement Link | §10.8.3 |
+| `template.children` | contentNodes-owned content roots — translated + attached to the **`contentNodes` permanent-owner token** (family-'in-tree', node.ts:213; P3 §10.ad/F-13), returned in `TranslatedTree.content`; **registered as payload-owned content** (persist in the background while unplaced; dropped with their payload — see payload.md §1/§3). A real parent edge SUPERSEDES the token edge on attach ("attach adds a placement path to an already-in-tree content root", F-13) | user decision, §10.10.1, §10.10.4; placement-path-spec §10.ad/F-13 |
+| `ContentPayload.content[]` | contentNodes-owned content roots (same as above) | user decision, §10.10.1; placement-path-spec §10.ad/F-13 |
+| `NodeData.placement.placementName` | `container` anchor (`{role:'container', target: name}`) on the shared per-name placement Link (P3 §1.1 — the producer role, renamed from `'placement'`). A name containing `#` warns `placement-name-invalid` and the anchor is SKIPPED (P3 §1.3) | §10.8.3; placement-path-spec §1.1/§1.3 |
+| `NodeData.placement.targetPlacement` (string[]) | ONE `content` anchor per requested name, in preference order, on the shared per-name placement Link (P3 §1.1/§1.2 — the consumer role; first-match-with-known-container wins at compile). Names containing `#` warn `placement-name-invalid` and are skipped; duplicate names warn `placement-duplicate-reference` (keep-first — K8-class guard); a bare STRING (old mis-typed shape) is coerced to `[string]` with `placement-string-coerced` (back-compat). The old `component-target-placement` ignore-warn (NP13/AP5) is REMOVED — the feed is implemented | placement-path-spec §1.2/§6.2 |
+| `NodeData.placement.activePlacement` | **never minted** — derived read (P3 §2.5: the first `targetPlacement` name with any containers); `nodeToLegacy` emits it on reverse | placement-path-spec §2.5 |
 | `NodeData.component.reference` | `target` anchor on a shared per-name component Link (consumer) | §10.8.2 |
 | `NodeData.component.reference` + `value` (no `target`) | **`source` anchor** on the shared per-name component Link — the node PROVIDES `value` for `reference` (legacy source attachment) | §10.8.2 |
 | `NodeData.component.reference` + `value` + `target` | provider + LOCAL APPLY shape: `source` anchor for `reference` (provides `value`) + the resolved value is applied to the host's `<target>` path (§2.1 — legacy "provide and self-apply"; at a self-provider the applied value IS its own `value`). NOT a two-name duplex: `target` is an injection path, never a component name (§2.1, `docs/specs/legacy-component-ref-only-review.md`). The runtime duplex anchor shape (source + target for a second NAME) is rebuild-internal and legacy-unexpressible — the reverse NEVER emits it: any applyPath-less non-provider (consumer) anchor coexisting with a provider anchor on the same node is DROPPED on reverse (K5, landed; the old `{reference, value, target: <name>}` emission is gone). The drop is shape-based — a legacy-data plain consumer `{reference}` next to a provider has the SAME graph shape as the runtime duplex and is dropped too (payload.md R-2 broadened, stress scenario 10) | §10.8.2 corrected by §2.1 |
@@ -151,12 +174,16 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 | `clientConfig.runMonitoring` | `persistence: true` when `true` | §10.10.1 |
 | missing `clientConfig` | `{ adapter: 'dom', persistence: false }` | §10.10.1 |
 
-Unknown extra fields (`versions`, `targetPlacement`, `activePlacement`, …)
-are ignored, never rejected.
+Unknown extra fields (`versions`, …) are ignored, never rejected. The
+placement fields are NOT extra: `targetPlacement` mints ordered `content`
+anchors and `activePlacement` is the derived read (both above; the old
+"targetPlacement ignored" line was reversed when the feed landed — P3 §6.2).
 
-Content nodes are unplaced ⇒ dropped from compile (S1.1) until attached into
-a placement zone; a content node that self-provides (source/duplex) resolves
-depth-0 (S-R2.6).
+Content nodes are contentNodes-owned ⇒ family-'in-tree' (node.ts:213) but
+**dropped from compile** (the `contentNodes` token terminates the compile
+walk — P3 §2.4: in-tree is a family fact, never compiled viability) until a
+real parent edge supersedes the token on attach ("attach adds a placement
+path to an already-in-tree content root", F-13).
 
 ## 2.1 Complete legacy spec of valid component targets
 
@@ -239,25 +266,32 @@ targets.
   emission-time warn (`component-multiple-definitions`, >1 def); scalar text
   is first-wins by design (`scalarBinding`, render-helpers.ts:270-277) —
   documented, no warn.
-- **Warn coverage (D2 — the full guard set, landed with K1–K8):** all
+- **Warn coverage (D2 — the full guard set, landed with K1–K8 + P3):** all
   translate-time guards ride the K4 additive channel and are warn+skip, never
   a throw (TR-F2). The translate-time code set is:
   `component-binding-empty` (K3, vacuous bindings),
   `component-target-skipped` (K2, synthesis carve-outs + D7 target-syntax
   edges), `component-target-gap` (K8 pre-anchor vocabulary pass — unknown
   target paths, NP1/N2 code, DECIDED), `component-duplicate-reference` +
-  `component-duplicate-target` (K8, pre-anchor), `component-target-placement`
-  (AP5 targetPlacement-on-component block+warn; also NP13's interim
-  keep-unplaced + warn), `handler-phase-unknown` (AP13, closed 3-set at
+  `component-duplicate-target` (K8, pre-anchor), `placement-name-invalid`
+  (P3 §1.3 — a `#` in a placementName/targetPlacement name, or a
+  non-string/empty targetPlacement entry: warn + skip that binding),
+  `placement-string-coerced` (P3 back-compat — the old single-STRING
+  targetPlacement shape is coerced to `[string]`), `placement-target-invalid`
+  (targetPlacement is neither string nor string[]), `placement-duplicate-reference`
+  (K8-class keep-first guard across the targetPlacement list),
+  `handler-phase-unknown` (AP13, closed 3-set at
   translate.ts:177 — raw legacy names never dispatch, guard lives at
   translate), `handler-body-invalid` (NP11 — the pre-kernel non-function-body
   THROW is downgraded to warn+skip per TR-F2; a body STRING that fails to
   compile or evaluate to a function also warns + skips).
   Emission-time: `component-multiple-definitions` (post-K7, >1 def-shaped
   binding, first-def wins). Full guard table: review doc Appendix E.2.
+  The interim `component-target-placement` warn (AP5/NP13 —
+  targetPlacement-on-component block+warn) is REMOVED: the placement feed is
+  implemented, so `targetPlacement` mints its anchors on any node (P3 §6.2).
 - **Placement inside component sub-trees** is supported (`placementName`
-  drop-zones); `targetPlacement` on a component node and placement-bearing
-  children of `type` components are anti-patterns.
+  drop-zones + `targetPlacement` request lists on any node — P3 §1.1).
 
 **Array form (REQUIRED feature parity — K7, landed):** the legacy node schema
 allows MULTIPLE bindings per node (`component: [{…}, {…}]`, see legacy
@@ -361,7 +395,12 @@ value-carrying root bindings become SOURCE providers (K6).
 > provider is dropped too — payload.md R-2 broadened, stress scenario 10) —
 > and a second anchor for an already-emitted reference (legacy rejects
 > duplicate references; the first is kept, K8 blocks the rest pre-anchor on
-> re-translate). N1 landed with K5: the translate-synthesized derived keys
+> re-translate). **Placement reverse rows (P3 §6.2, landed):** `'container'`
+> anchors emit `placementName`; `'content'` anchors emit back as
+> `targetPlacement: string[]` in MINT order (serialize preserves the order);
+> the derived `activePlacement: string` read (P3 §2.5) is emitted; the minted
+> `contentNodes` permanent-owner anchor is STRIPPED on reverse (F-13) — the
+> reverse never ships the token edge. N1 landed with K5: the translate-synthesized derived keys
 > (key = applyPath `props.<key>` suffix, value = the `{$: 'bindings.<ref>'}`
 > shape) are STRIPPED from the emitted `derived`; authored derived stays.
 > **Authored-collision chain (pinned, stress scenario 9):** when an authored
@@ -388,7 +427,7 @@ value-carrying root bindings become SOURCE providers (K6).
 | TR-3 | Single-parent invariant holds: a legacy child appears exactly once |
 | TR-4 | Node ids are minted (unique, deterministic order root-first) |
 | TR-5 | `translated.clientConfig` is always the 2-field shape accepted by `loadState`; `serializeSlice` accepts it and preserves it |
-| TR-6 | Content nodes stay unplaced until attached into a placement zone |
+| TR-6 | Content roots are contentNodes-owned (family-'in-tree' via the permanent-owner token, P3 §10.ad/F-13) until a real parent edge supersedes the token on attach |
 
 ## 5. Exhaustiveness gate
 
@@ -396,13 +435,13 @@ value-carrying root bindings become SOURCE providers (K6).
 | --- | --- | --- |
 | TR-H1 | template root + its own nested children | root in-tree; default children attached, array-order priorities |
 | TR-H2 | component binding (reference + value) on node/template | value-bearing binding → `source` anchor (provider); + a `target` path → source + LOCAL APPLY of the resolved value to the host path (§2.1 — legacy "provide and self-apply"; the applied value at a self-provider is its own `value`); plain reference → `target` anchor (consumer — legacy empty-placeholder pattern, §2.1). Cloned providers keep their value. `component` accepts a single binding OR the K7 array form (N bindings per node — distinct reference + distinct target paths; duplicates blocked, §2.1 legality matrix) |
-| TR-H3 | placement config | `placement` anchor |
+| TR-H3 | placement config | `placementName` → `container` anchor on the per-name placement Link (P3 §1.1); `targetPlacement: string[]` → one ORDERED `content` anchor per name (preference order — serialization preserves it); `activePlacement` never minted (derived, P3 §2.5); `#`-names warn `placement-name-invalid` + skip; duplicates warn `placement-duplicate-reference` keep-first; string coercion warns `placement-string-coerced` |
 | TR-H4 | handlers on legacy nodes | carried to compiled `handlers`; STRING bodies instantiated into functions at translate; reverse emits live bodies as source strings (round-trips) |
-| TR-H5 | template.children + content payloads | unplaced content nodes in `TranslatedTree.content`; metadata/userData surfaced |
+| TR-H5 | template.children + content payloads | contentNodes-owned content roots in `TranslatedTree.content` (family-'in-tree', token edge — P3 §10.ad/F-13); metadata/userData surfaced |
 | TR-H6 | run* gates | adapter/persistence mapping; defaults when absent; preserved by serializeSlice |
 | TR-H7 | shared hub | same-name anchors on shared links |
 | TR-H8 | compile+serialize of translated tree | new-format round-trip after `reconcileParentTargets` |
-| TR-H9 | unplaced content nodes | dropped from compile (S1.1); self-providing ones resolve depth-0 |
+| TR-H9 | contentNodes-owned content roots | family-'in-tree' (node.ts:213) but the token terminates the compile walk — dropped from compile (P3 §2.4: in-tree is a family fact, not compiled viability); a real parent edge supersedes the token on attach |
 | TR-H10 | K4 warnings channel + guards | `translated.warnings` is always present (empty for a clean doc); each entry `{ code, path }` fires a focused `console.warn`; every guard code (§2.1 list) warns + skips its binding/handler def, never throws (TR-F2); vacuous bindings (`{}`, non-string/empty reference) → `component-binding-empty`, zero anchors, while `component: []` stays a legal empty multi-binding list (no warning) |
 | TR-F1 | malformed envelope / payload | throws (guards §3) |
-| TR-F2 | legacy-only fields (`versions`, targetPlacement…) and malformed binding/handler content | ignored, never a throw — well-formed-but-invalid content surfaces on the K4 warnings channel (`component-target-placement`, `handler-phase-unknown`, `handler-body-invalid`, duplicate/vacuous/gap guards); only malformed envelopes/payloads throw (§3) |
+| TR-F2 | legacy-only fields (`versions`, …) and malformed binding/handler content | ignored, never a throw — well-formed-but-invalid content surfaces on the K4 warnings channel (`placement-name-invalid`, `placement-string-coerced`, `placement-duplicate-reference`, `handler-phase-unknown`, `handler-body-invalid`, duplicate/vacuous/gap guards); only malformed envelopes/payloads throw (§3). The old `component-target-placement` code is REMOVED (the targetPlacement feed is implemented) |

@@ -24,7 +24,9 @@
           <code>scripts/build-demo.mjs</code>: the e2e input data is serialized by the
           framework into the <code>preempt-initial-data</code> document and embedded in
           the HTML, then re-resolved and rendered in-browser. Shows expected behavior,
-          the expected document tree structure, the live rendered DOM, fork arms, and
+          the expected document tree structure, the live rendered DOM, the resolved
+          providers (the dock consumes the DISTINCT <code>feed-a</code>/<code>feed-b</code>
+          sources — one state, both bindings), and
           PAR-5 parity vs the embedded server reference.
         </li>
         <li>
@@ -81,6 +83,18 @@
           Every node renders its <code>stress:layers</code> chain (depth +
           tree-back-to-root). The page uses ONLY core (<code>dist/core/*</code>) and
           handler code — no demo-side render machinery.
+        </li>
+        <li>
+          <a class="back" href="path-fork-data.html"><strong>Path fork (static) — 22 prototypes, ONE path-enumeration pass</strong></a>
+          — the fork-stress tree WITHOUT clones (placement-path-spec §5): the same
+          22-prototype binary topology declared via placement links
+          (<code>placementName</code> producers + <code>targetPlacement</code>
+          consumers — the R2.2 sibling-shared owner-name topology) and compiled by the
+          path enumeration: 4095 path-states from 23 graph nodes in ONE pass,
+          <code>forkKey = pathKey</code> on every state, no <code>clone-instance</code>,
+          no after-compile expansion. CORE ONLY + the shared
+          <code>levelCss</code>/<code>cssPropForLevel</code> helpers. The runtime
+          fork-stress-data page above stays alongside as the runtime proof.
         </li>
         <li>
           <a class="back" href="fork-stress-data-d12.html"><strong>Fork stress (data-driven) — prototype-driven assembly from a legacy envelope</strong></a>

@@ -53,7 +53,7 @@ interface LinkConfig {
   roles: Role[]                                         // whitelist of admitted roles (S-R3.9)
 }
 
-type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'placement' | 'component'
+type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'container' | 'content' | 'component'   // P3 §1.1
 ```
 
 **Boundary rules:**
@@ -129,7 +129,7 @@ Every rejecting method leaves the link in its **pre-call state** (notes §10.8.1
 
 ## 5. Unresolved-Reference Handling
 
-**Trigger:** A component `target` anchor (or placement anchor) with a `referenceName` that never matches a `source`/`duplex` anchor on the walk toward root (notes §10.8.2).
+**Trigger:** A component `target` anchor (or placement `content` anchor) with a `referenceName` that never matches a `source`/`duplex` anchor on the walk toward root (notes §10.8.2).
 
 **Algorithm:**
 1. Compile starts at the node itself — **depth-0 self-resolution** (S4.1, S-R2.6): if the node already carries a `source`/`duplex` anchor for that `referenceName`, it resolves at itself before any upward walk.

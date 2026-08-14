@@ -36,7 +36,7 @@ Imports in tests take the form `import { Link } from '../src/core/link.js'`. Mod
 ## `src/core/types.ts`
 
 ```ts
-export type Role = 'parent'|'child'|'source'|'target'|'duplex'|'placement'|'component'
+export type Role = 'parent'|'child'|'source'|'target'|'duplex'|'container'|'content'|'component'
 export type AnchorTarget = Node | 'rootNode' | 'component' | 'contentNodes' | string
 export interface AnchorOptions { priority?: number; order?: number }
 export interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link; value?: unknown }
@@ -145,7 +145,7 @@ import type { Anchor, AnchorOptions, AnchorTarget, LinkConfig, Role } from './ty
 export function mintLinkId(): string
 export const DEFAULT_PARENT_CHILD: LinkConfig    // { name:'parent-child', parent:{count:1}, children:{min:1,max:Infinity,orderKey:'unique'}, roles:['parent','child'] }
 export const DEFAULT_COMPONENT: LinkConfig       // { name:'component', roles:['source','target','duplex'] }
-export const DEFAULT_PLACEMENT: LinkConfig       // { name:'placement', roles:['placement'] }
+export const DEFAULT_PLACEMENT: LinkConfig       // { name:'placement', roles:['container','content'] }
 
 export class Link {
   readonly id: string

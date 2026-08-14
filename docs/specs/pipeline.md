@@ -64,8 +64,8 @@ interface PhaseRegistry {
 | order | stage (`PipelineStage`) | worker | contract summary |
 | --- | --- | --- | --- |
 | 0 | `instantiation` | `InstantiationWorker` | **Rebuild manager** (notes §8.3: role preserved): regenerates/restructures existing nodes via graph ops; owns the pipeline-internal mutations legacy routed through `receiveNextState` (notes §8.1 #3). First-pass construction is constructor-emission, not this phase. |
-| 1 | `targetPlacementResolution` (alias `placement`) | `TargetPlacementResolverWorker` | Matches content `targetPlacement` requests to registered drop-zones; resolution expressed as `'placement'`-role anchors via `attach` + compile (S3.6, S-R2.8). |
-| 2 | `placementAssembly` | `PlacementAssemblyWorker` | Populates zones: decomposes into `attach` + `clone-instance` on `'parent-child'` Links (notes §10.2/§10.7). No `_referencingNodes` (S2.2). |
+| 1 | `targetPlacementResolution` (alias `placement`) | `TargetPlacementResolverWorker` | Matches content `targetPlacement` requests to registered drop-zones. **IMPLEMENTED (P3 §6.1)** — translate mints the consumer feed (`targetPlacement: string[]` → ordered `'content'` anchors, `'container'`-role producers from `placementName`, P3 §1.1/§1.2) and the path-enumeration compile resolves first-match-with-known-container + per-zone fan-out (P3 §2.1). The old "resolution expressed as `'placement'`-role anchors via `attach` + compile (S3.6, S-R2.8)" was a dead promise — translate never fed the registry row; it is gone. |
+| 2 | `placementAssembly` | `PlacementAssemblyWorker` | Populates zones **without clone-instance decomposition** (P3 §6.1): placement multiplicity is path-multiplicative — the §2 enumeration forks one path-state per zone of the chosen name, so no `attach` + `clone-instance` on `'parent-child'` Links (notes §10.2/§10.7 clone references removed; the `clone-instance` op remains for runtime instantiation, never the placement mechanism). No `_referencingNodes` (S2.2). |
 | 3 | `componentRouting` | `ComponentRoutingWorker` | Routes component emissions by resolution kind (`type` → assembly; non-type → slot assembly); cascades source updates to dependents. |
 | 4 | `componentAssembly` | `ComponentAssemblyWorker` | Resolves `'type'` components: structural sub-tree injection; may contribute `AnchorLayer`s (populated later by the dirty sweep, S-R2.9/S-R3.12 — never inside the creating compile pass). |
 | 5 | `slotAssembly` | `SlotAssemblyWorker` | Applies every non-type binding (`content`/`handlers`/`props.*`/`css.*`) as layers — never `children` (graph-derived, never stored, never a layer target). |
@@ -121,11 +121,14 @@ type EmissionResult =
 // Isomorphic with node.md's ArmDropReason for fork arms; 'not-in-tree' /
 // 'validation-failed' / 'placement-target-blocked' are slice-level drops.
 type DropReason =
-  | 'not-in-tree'              // S1.1: no path to a permanent owner → no usable compiled state
+  | 'not-in-tree'              // S1.1: no path to a permanent owner → no usable compiled state;
+                              // P3 §2.4 carve-out: a placement path that enumerates to root IS viable —
+                              // the 'not-in-tree' drop never fires for placement-routed nodes (F10)
   | 'validation-failed'        // Pillar E tag schema
   | 'prototype-terminated'     // S-R2.5: prototype-tailed fork arm, silent
   | 'owner-terminated'         // S-R3.10: contentNodes / non-root-owner-tailed arm, silent
-  | 'loop'                     // S-R2.5: looped fork arm; loop-guard/depth-cap trips count AS loop — log 'circular-source'
+  | 'loop'                     // S-R2.5: looped fork arm; loop-guard/depth-cap trips count AS loop — log 'circular-source';
+                              // P3 §1.4: the path-enumeration per-walk visit set drops its arm with 'loop' + 'circular-source'
   | 'placement-target-blocked' // S-R4.1: op accepted but a LATER compile pass failed → default drop;
                                // the primary ACTIONABLE surface is the synchronous apply rejection (api.md §3.3)
 ```
@@ -145,6 +148,11 @@ it (notes §10.3, notes §10.6, notes §10.8):
 type SliceScope =
   | { kind: 'root'; entry: 'rootNode' }       // bootstrap / full reconcile: deep, whole tree
   | { kind: 'node-local'; entry: NodeId }     // event emission: the node + bounded ancestors
+  | { kind: 'path-enum'; entry: NodeId }      // P3 §2.1 (implemented): placement-path enumeration —
+                                              // walks BOTH edge kinds toward root (placement edges:
+                                              // content anchors → per-name placement Link → container
+                                              // owners, one branch per zone; family edges: single branch);
+                                              // one state per (node, path-to-root); per-walk visit set (§1.4)
 
 interface CompiledSlice {
   readonly root: NodeId                                        // == lock key (§4)
@@ -156,7 +164,11 @@ interface CompiledSlice {
 
 - Two scopes, one `compile(slice)` primitive: **root-out deep** on bootstrap,
   **node-local** on handler/ClientAPI emission (cheap minimal-element
-  updates — no full graph walk per update).
+  updates — no full graph walk per update). **P3 §2.1 adds a THIRD mode —
+  path enumeration (`compilePath`)**, a mode switch, not a replacement: the
+  per-node focused and root-out deep scopes stay for the non-placement
+  world; the per-name placement Link IS the zone registry (hub-less trees
+  fall back to the status-quo slice scan, supervisor.ts:59-77).
 - Compile is **two-pass** (notes §10.8.4): pass 1 `compileLocal` (values + anchors
   reconciled against the layer stack — the canon, S-R3.8) runs synchronously
   inside the op; pass 2 `compileRemote` (parent / children order /
@@ -305,7 +317,8 @@ Sequence (S2.1 — the `receiveNextState` successor):
    `not-in-tree`. **Placement target-zone mutations are hard-blocked** (notes §8.3
    anti-looping safeguard — keep it): synchronous `apply` rejection
    `'placement-target-blocked'` — the canonical actionable surface (S-R4.1);
-   placement changes go through a forward tree rebuild instead.
+   placement changes go through the dedicated **`placement-attach` op** (P3
+   §3.3/§9-Q2) — never `attach`-with-zone, never a state-slice.
 3. **Pass 1 `compileLocal` — synchronous**, inside the op, node-local.
 4. Mark remote dependents dirty (its children; readers of its
    parent/bindings).
@@ -343,7 +356,7 @@ field writes on nodes are impossible (all mutation via layers/ops).
 | `unlock()` before final resolution / double unlock | wait for `resolved` |
 | Numeric phase IDs in callers | `PipelineStage` names via `emitToPhaseName` |
 | Synchronous dirty propagation / mid-op walks | dirty-marking + microtask pass-2 sweep |
-| Placement mutation via state-slice | forward tree rebuild (notes §8.3) |
+| Placement mutation via state-slice | dedicated `placement-attach` op (P3 §3.3) |
 | Worker reading `parent` for membership/order | read `ctx.slice` (compiled, graph-derived) |
 | `receiveNextState` from inside pipeline/workers | rebuild-manager Phase 0 owns regeneration (notes §8.1 #3) |
 
@@ -363,6 +376,7 @@ field writes on nodes are impossible (all mutation via layers/ops).
 | V6 | SSR vs client | identical pipeline; only adapter + persistence flag differ |
 | V7 | Orphan re-`attach`ed before the sweep | cascade-destroy skips it; node survives (S-R2.3) |
 | V8 | Registry doc generation | `docs()` reflects the map; worker JSDoc need not |
+| V9 | Path-enumeration bootstrap (P3 §2.1) | 23-node placement tree (22 prototypes + root) | ONE `compilePath` pass → 4095 path-states keyed by pathKey (`forkKey = pathKey` everywhere); per-zone fan-out of the first-match name; static fork census 23/4095/0/0 (E2E-1) |
 
 ### 8.2 Fail-states (each = ≥1 test)
 
@@ -377,11 +391,12 @@ field writes on nodes are impossible (all mutation via layers/ops).
 | F7 | Unlock-before-resolution | `unlock()` from `held`/`resolving` | throw `unlock-before-resolution`; lock stays; slice continues |
 | F8 | Double unlock | `unlock()` from `released` | throw `double-unlock` |
 | F9 | Cross-slice emission mid-op | sync emit into a foreign slice while locked | throw `cross-slice-emission` |
-| F10 | Not-in-tree compile (S1.1) | no path to a permanent owner | drop `not-in-tree`; **no usable compiled state** (not partial) |
+| F10 | Not-in-tree compile (S1.1) | no path to a permanent owner | drop `not-in-tree`; **no usable compiled state** (not partial). **P3 §2.4 carve-out:** a placement-routed node whose enumerated path terminates at root compiles actionable path-states (`placementRouted` viability) — the F10 drop never fires for it; `state` stays family-derived |
+| F10a | Placement-path loop (P3 §1.4) | placement edge revisits a node on the same walk | that arm drops with reason `'loop'` + `circular-source` diagnostic; sibling walks unaffected (per-walk visit set, never shared across walks) |
 | F11 | Looped fork arm (S-R2.5) | cycle in the source/borrow walk | arm dropped with reason `loop`; `circular-source` warning logged; sibling arms unaffected |
 | F12 | Prototype/`contentNodes`-terminated arm (S-R3.10) | arm ends at non-root permanent owner | **silent** drop (`prototype-terminated` / `owner-terminated`); no actionable state; no warning channel |
 | F13 | Unresolved target (notes §10.8.2) | no `source`/`duplex` on the walk toward root | `unresolved-reference` compile status with a clear code + logged warning; node still renders its own state — NOT dropped (S-R4.3) |
-| F14 | Placement mutation via state-slice (notes §8.3) | placement target-zone mutation in `apply()` | hard-blocked: synchronous apply rejection `'placement-target-blocked'` (S-R4.1); an accepted op whose later compile pass fails drops by default under the same code |
+| F14 | Placement mutation via state-slice (notes §8.3) | placement target-zone mutation in `apply()` | hard-blocked: synchronous apply rejection `'placement-target-blocked'` (S-R4.1); an accepted op whose later compile pass fails drops by default under the same code. **Placement change = the `placement-attach` op** (P3 §3.3: registers the node if new, mints `content` anchor(s) per `names`, ensures the `container` anchor with the §1.3 veto, dirty = container + added node only — the E2E-4 affected set; trigger identity `{kind:'placement', linkName, direction}` rides the op through `supervisor.apply`) |
 | F15 | Queue double-schedule | two `schedule()` calls in one tick | exactly one microtask; second is a no-op |
 | F16 | Dirty coalescing | overlapping dirty sets in one tick | one pass-2 sweep covering the union, before one render emit |
 | F17 | Cascade-destroy race (S-R2.3) | re-`attach` between op and sweep | sweep re-checks owner resolution at sweep time; node survives |

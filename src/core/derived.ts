@@ -170,7 +170,8 @@ function pathValue(path: string, ctx: DerivedContext): unknown {
     case 'pathKey':
       return ctx.cs.pathKey
     case 'placement': {
-      const anchor = ctx.cs.anchors.find(a => a.role === 'placement')
+      if (typeof ctx.cs.activePlacement === 'string') return ctx.cs.activePlacement
+      const anchor = ctx.cs.anchors.find(a => a.role === 'container')
       return anchor && typeof anchor.target === 'string' ? anchor.target : null
     }
     case 'children':

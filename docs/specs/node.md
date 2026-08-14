@@ -41,7 +41,7 @@ objects are frozen/readonly and such writes throw.
 | --- | --- |
 | SI-1 | A node carries **≤ 1 `'child'`-role anchor** (its own in-tree edge). |
 | SI-2 | A node carries **exactly one `'parent'`-role anchor iff it has ≥ 1 child** (the family side of its own `'parent-child'` Link; S-R2.1, S-R3.13). |
-| SI-3 | `'component'`/`'placement'`/`'source'`/`'target'`/`'duplex'` anchors are additional peripheral edges; they do not count toward SI-1/SI-2. |
+| SI-3 | `'component'`/`'container'`/`'content'`/`'source'`/`'target'`/`'duplex'` anchors are additional peripheral edges; they do not count toward SI-1/SI-2 (P3 §1.1: the placement roles, renamed from `'placement'`, are peripheral exactly as before). |
 | SI-4 | A tree anchor's `target` is the resolved owner (`AnchorTarget` union), **never the `Link` itself** (C2). |
 | SI-5 | A node's family edge is established/dissolved atomically on the Link — never two independent writes on two nodes (notes §10.8; kills notes §8.4 #1). |
 
@@ -69,7 +69,7 @@ for chain termination.
 type NodeState = 'prototype' | 'unplaced' | 'in-tree' | 'destroyed'   // notes §10.1
 
 // Owned by graph.md; re-declared here for signature reference only.
-type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'placement' | 'component'
+type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'container' | 'content' | 'component'   // P3 §1.1: 'placement' renamed 'container', consumer role 'content' added
 type AnchorTarget = Node | 'rootNode' | 'component' | 'contentNodes' | string /* referenceName token */
 interface Anchor { role: Role; target: AnchorTarget; options: { priority?: number; order?: number }; link: Link }
 
@@ -89,7 +89,9 @@ interface NodeBaseData {             // ingested from NodeSchema NodeData (notes
 
 interface CompiledState {
   nodeId: string                     // unique per node, minted at creation (S3.1)
-  pathKey: string                    // fork identity: path back to root, e.g. 'root/<id>/<id>' (notes §10.8.4)
+  pathKey: string                    // state identity: the path back to root — family-only 'root/<id>/<id>'
+                                     // for ordinary states; placement paths interleave the zone names that
+                                     // routed each hop: 'root/<zone>/<ownerId>/…/<nodeId>' (P3 §2.2)
   state: NodeState                   // derived, compile-gated (notes §10.1)
   type: string
   props: Record<string, unknown>
@@ -97,7 +99,10 @@ interface CompiledState {
   content: unknown
   anchors: readonly Anchor[]         // reconciled view === node.anchors at compile time
   parent: NodeRef | null             // null only when the parent-anchor target is a system token
-  children: NodeRef[]                // ordered by family-Link child-anchor priority
+  children: NodeRef[]                // ordered by family-Link child-anchor priority; PATH-DERIVED for
+                                     // path-states — a path-state's children are the descendant path-states
+                                     // whose owner-path extends its path by one level, attached at mint time
+                                     // (P3 §2.3)
   bindings: Record<string, unknown>  // resolved component values by referenceName (pass-2 borrow)
   unresolved: UnresolvedRef[]        // 'target' anchors with no source/duplex match (notes §10.8.2)
 }
@@ -254,7 +259,7 @@ no-op (S-R2.9).
 | --- | --- | --- |
 | `prototype` | parent-link chain terminates at a `'component'` target | never render-actionable; usable only as clone/template spec source; fork arms ending here fail **silently** (S-R2.5) |
 | `unplaced` | no `'child'`-anchor chain, or chain reaches no permanent owner | **no usable compiled state** (S1.1); transient — valid re-attach target until the sweep runs (S-R2.3) |
-| `in-tree` | chain terminates at `'rootNode'` attached directly to the supervisor | fully actionable (the only render-eligible state) |
+| `in-tree` | chain terminates at `'rootNode'` attached directly to the supervisor | fully actionable (the only render-eligible state). **P3 §2.4:** compiled viability is a property of the PATH — the contentNodes token labels its family in-tree (node.ts:213) but terminates the compile walk (family-'in-tree' ≠ compiled viability); a placement-routed node compiles via `compilePath` |
 | `destroyed` | terminal outcome of the cascade sweep (S1.2); **not** a hand-written tombstone | compile is a no-op returning nothing; mutations rejected (FS-6) |
 
 ### 7.2 Transitions (side effects of graph ops — never direct writes, notes §10.1)
@@ -320,21 +325,30 @@ Runs only after pass 1 (the anchor arrays it reads are current).
 | `parent` | node's ≤1 `'child'` anchor → its `Link` → the Link's `'parent'` anchor → its node (S-R3.2: starts at the `'child'` anchor, not `anchorsOf('parent')`) |
 | `children` order | node's `'parent'` anchor's family Link → child anchors sorted by `options.priority` (unique, S3.2) |
 | component bindings | **depth-0 first**: populate the node's OWN `target`s; if the node already carries a `source`/`duplex` for that `referenceName` it resolves at itself before any walk (S-R2.6, S4.1); unresolved targets then walk **toward root**, first `source`/`duplex` match wins (nearest shadows far); no match ⇒ `unresolved` entry with a clear code (notes §10.8.2) — viable compile ⇒ **logged warning + the node still renders its own state** (S-R4.3) |
-| placement | `'placement'`-role anchor on the zone's family Link; shares the borrow algorithm but **not** component role semantics (S-R2.8, S3.6) |
+| placement | the **per-name placement Link IS the zone registry** (P3 §2.1): a node's `content` anchors request routing — the first-match preference loop reads the node's ordered `content` anchors + per-name Link membership, then fans out per `'container'`-role producer anchor (zone) of the chosen name (P3 §1.2; §2 enumeration contract; shares the borrow algorithm but not component role semantics — S-R2.8) |
 
-### 8.3 Forking (notes §10.8.2, §10.8.4)
+### 8.3 Forking (notes §10.8.2, §10.8.4; P3 §2.1–§2.2)
 
 - Multiple candidates sharing a `referenceName`/`placementName` ⇒ pass 2
   **forks**: each candidate is a separate `CompiledState` **keyed by its
   path back to the root** (`pathKey`), de-duplicated via unique node ids
   (S3.1).
+- **Placement paths (P3 §2.2, implemented):** placement multiplicity is
+  path-multiplicative — a consumer forks one path-state per zone of the
+  chosen name, each zone a path hop; sibling prototypes sharing a parent set
+  produce DISTINCT keys at their final segment (the prototype id). Every
+  path-state's `forkKey = pathKey`, set **unconditionally** (node.ts:699-706)
+  — there is no `#<i>` arm suffix anywhere in the path model (identity =
+  pathKey alone, P3 §10.ab; the `component-source-duplicate` guard at
+  `addAnchor` removes the arm-generating case entirely).
 - Arm disposition: root-terminated ⇒ actionable; `prototype`-terminated ⇒
   dropped **silently**; other permanent-owner-terminated (`contentNodes`) ⇒
   dropped **silently** (S-R3.10); **loop**-terminated ⇒ dropped +
   `circular-source` warning (S-R2.5). A coerced pick is **never**
   synthesized.
-- Loop trip: visit set + max-depth cap (notes §10.3); same detector used by
-  `attach`/`move` at op time (S3.4).
+- Loop trip: **per-walk visit set over placement AND family edges** (P3 §1.4)
+  + max-depth cap (notes §10.3); same detector used by `attach`/`move` at op
+  time (S3.4; `findCycle` walks placement edges too).
 
 ### 8.4 Compile scopes
 
@@ -342,6 +356,7 @@ Runs only after pass 1 (the anchor arrays it reads are current).
 | --- | --- | --- | --- |
 | node-local (`state-slice` from handler/`ClientAPI.apply`, S2.1) | the one node, synchronous | bounded: node + ancestor chain for parent/bindings, on the microtask queue | cheap minimal-element render diff (notes §10.6) |
 | root-out deep | whole slice | one coherent walk | bootstrap / full reconcile |
+| **path enumeration (`compilePath`, P3 §2.1 — implemented)** | 23-node graph → 4095 path-states | per-walk visit set (§8.3); walks BOTH edge kinds toward root: placement edges (content anchors → per-name placement Link → container owners — one branch per zone) and family edges (single branch) | the static fork-stress page bootstrap — one enumeration replaces the runtime page's 4094 per-node passes |
 
 Compiled local state is **immutable within a compile** and impossible to
 desynchronize (notes §10.8); the slice stays locked until fully resolved — every
@@ -368,16 +383,16 @@ fork emitted or dropped (S2.3; locking owned by pipeline.md).
 
 | ID | Trigger | Required behavior |
 | --- | --- | --- |
-| FS-1 | `compile` on a not-in-tree node (`unplaced`/`prototype`/`destroyed`) | returns **no usable/actionable compiled state — never a partial state** (S1.1); `CompileResult.actionable` empty; arm recorded in `dropped` with the correct `ArmDropReason` |
+| FS-1 | `compile` on a not-in-tree node (`unplaced`/`prototype`/`destroyed`) | returns **no usable/actionable compiled state — never a partial state** (S1.1); `CompileResult.actionable` empty; arm recorded in `dropped` with the correct `ArmDropReason`. **P3 §2.4 carve-out (implemented):** a node whose placement path enumerates to `'rootNode'` IS viable output — the `placementRouted` branch compiles actionable path-states for it (the `selfProviding` carve-out precedent, RENDER_PROCESS_NOTES.md §10.10.4; `node.state` stays family-derived — in-tree is a family fact, not compiled viability) |
 | FS-2 | second `'child'`-role anchor offered to one node (SI-1) | op validation fails **explicitly and verbosely** with the dedicated op-level error `'single-parent'` (cross-link check — NOT a per-link `LinkConfigError`/`count-exceeded`, never a silent `move`; S-R4.2); op rejects atomically, graph unchanged (notes §10.8.1); caller must `detach`/`move` first |
 | FS-3 | `'parent'`-anchor removal that would orphan the family / last-child removal | `LinkConfigError` `count-underflow`; intended escalation: `link.destroy()` → child anchors orphaned → nodes `unplaced` (notes §10.8.1 erase) |
 | FS-4 | duplicate child `priority` on a family Link | `LinkConfigError` `unique-order` carrying `conflicting`/`currentCell`; caller retries at max+1 (S3.2); failed write leaves link untouched |
 | FS-5 | `attach`/`move` that would create a cycle | op-time loop detector (compile-time detector run off the destination's parent-chain) → **test-and-rollback**: op rolls back, graph unchanged (S3.4) |
 | FS-6 | any mutating method (`addLayer`/`removeLayer`/`clone`/`destroy`) on a `destroyed` node, or outside an op context | rejected; no layer/graph/cache change |
-| FS-7 | compile-time walk revisits a node or exceeds the depth cap | arm dropped with reason `'loop'`; loop arms log `circular-source` (S-R2.5); depth-cap trips count AS loop |
+| FS-7 | compile-time walk revisits a node or exceeds the depth cap | arm dropped with reason `'loop'`; loop arms log `circular-source` (S-R2.5); depth-cap trips count AS loop. **P3 §1.4 (implemented):** the path-enumeration walk carries a **per-walk visit set** over placement AND family edges — revisiting a node on the same walk drops that arm with `'loop'` + `circular-source`; sibling walks are unaffected (never shared across walks). `findCycle` (op-time) walks placement edges as well as family edges |
 | FS-8 | component `target` with no `source`/`duplex` up to root | node enters **unresolved-reference compile state with a clear code** (notes §10.8.2) — a compile state, not a throw; on a viable compile the node **logs a warning and still renders its own state** (S-R4.3) — not dropped, not hidden |
 | FS-9 | direct write to `node.anchors` / `node.parent` / `node.state` / `node.children` | impossible: no setters, readonly/frozen exposures (§1.1); strict-mode runtime throws |
-| FS-10 | `state-slice` mutation targeting a placement zone | hard-blocked — anti-looping safeguard retained (notes §8.3); synchronous `apply` rejection `'placement-target-blocked'` (S-R4.1); placement changes go through forward `attach` ops only |
+| FS-10 | `state-slice` mutation targeting a placement zone | hard-blocked — anti-looping safeguard retained (notes §8.3); synchronous `apply` rejection `'placement-target-blocked'` (S-R4.1); placement changes go through the dedicated **`placement-attach` op** only (P3 §3.3/§9-Q2 — never `attach`-with-zone; `attach` stays family-only) |
 | FS-11 | unlock attempt before the slice fully resolves (forks still pending) | illegal (S2.3); owned by pipeline.md, listed here for cross-reference |
 
 ### Anti-loop guarantees (summary for probes, cf. Step-7 e2e)

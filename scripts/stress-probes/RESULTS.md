@@ -93,6 +93,10 @@ Classification (doc/spec bug | data-authoring bug | genuine engine defect) is th
 - consumer rendered: true (5 data-resolved attrs in html)
 - NOTE: arm order: bindings enumerate m5→m1 across arms 0..4 (the descendant provider walk pops the child stack LIFO: f5 first). Doc lists "m1…m5 across the 5 arms" without ordering; all five values present.
 - NOTE: MISMATCH core: the 5 compiled states carry distinct forkKeys, but emitElements (emitOne) does NOT forward cs.forkKey onto the MinimalElement — ops carry NO forkKey at all (creates have forkKeys=false, set ops with forkKey=0). Arms stay distinct only via the `node-11068#0..#4` wire suffixes. adapters.md §10.3 HLP-H16 requires "each arm's set ops forward the same forkKey as its create"; that contract is met by minimalFromState (me.forkKey=cs.forkKey) but NOT by the demo's canonical emitElements path.
+  > **RESOLVED (placement-path-spec §4.3/§6.5 — the DEFECT #1 prerequisite,
+  > shipped before the path model):** `emitOne` now forwards `cs.forkKey` in
+  > every return branch; `tests/unit/render.test.ts` DEFECT-1a..1e pin the
+  > create/set op forwarding. Evidence kept as the historical record.
 - NOTE: Scenario doc expected "5 create ops for ONE wire with distinct forkKeys" — actual wires are nodeId#0..#4 (the documented emitElements arm-wire scheme) and forkKeys are absent entirely.
 
 ## Scenario 8 — PASS
@@ -121,6 +125,12 @@ Classification (doc/spec bug | data-authoring bug | genuine engine defect) is th
 - creates for zone.one slots: node-11081,node-11082
 - warnings=[]
 - NOTE: MISMATCH core: doc expected "placement multiplicity forks exactly like components → two actionable compiled states, distinct forkKeys, two create ops for one wire". Actual: slot-1/slot-2 are two distinct NODES, each compiles to ONE actionable state on its OWN wire, forkKeys absent (placement anchors are inert at compile — only target anchors resolve; P3 forks materialize via attach+compile, which a legacy envelope does not drive). Both slots still render, which is the outcome part of the expectation.
+  > **SUPERSEDED (placement-path-spec §1.2/§2, units 0–12 landed):** this
+  > probe evidence describes the PRE-model engine. P3 is now statically
+  > expressible — `targetPlacement` mints ordered `content` anchors and the
+  > path-enumeration compile forks one state per (node, path-to-root);
+  > the static page census is 23/4095/0/0 (cloneOps=0). Evidence kept as the
+  > historical record.
 - NOTE: unicode/dot/space placement names: minted verbatim, no parsing, no throw.
 - NOTE: dual-slot (placement + component source): no role-mismatch, actionable, provides dual at depth-0 (bindings.dual=dualval).
 

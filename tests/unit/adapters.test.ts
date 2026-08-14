@@ -283,10 +283,14 @@ describe('HLP-* render helpers (adapter-neutral)', () => {
     it('HLP-H16 a compiled fork (Node.compile → minimalFromState → diffMinimal) emits ops with distinct forkKeys', () => {
       const root = makeRoot({ type: 'app' })
       const leaf = childOf(root, makeNode({ type: 'leaf' }))
-      addComponentSource(root, 'feed', { label: 'A' })
-      addComponentSource(root, 'feed', { label: 'B' })
       targetAnchor(leaf, 'feed')
-      const cr = root.compile([root, leaf])
+      // two provider NODES under the consumer (legitimate multiplicity,
+      // §10.ab #4; same-node same-name sources are the guarded anti-pattern)
+      const fA = childOf(leaf, makeNode({ type: 'fA' }))
+      const fB = childOf(leaf, makeNode({ type: 'fB' }))
+      addComponentSource(fA, 'feed', { label: 'A' })
+      addComponentSource(fB, 'feed', { label: 'B' })
+      const cr = root.compile([root, leaf, fA, fB])
       const arms = cr.actionable.filter((s) => s.nodeId === leaf.id)
       expect(arms).toHaveLength(2)
       expect(new Set(arms.map((a) => a.forkKey)).size).toBe(2)

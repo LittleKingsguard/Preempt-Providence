@@ -2,17 +2,20 @@
  * Feature-matrix demo fixture — the single document that exercises every
  * advertised framework surface in one page:
  *
- *   placements (content/comments zones), components (session + theme forks),
- *   event + phase handlers (session populate, markdown render), managed
+ *   placements (content/comments zones), components (session + two distinct
+ *   theme providers), event + phase handlers (session populate, markdown
+ *   render), managed
  *   updates (ClientAPI.apply), in-place render with focus retention,
  *   payload lifecycle (drop/refresh/append), reverse translation,
  *   loop-safety (circular-source arm drop), SSR-parity data.
  *
  * The graph is built FROM the legacy envelope via `translateLegacy` (the real
  * boundary), then completed with the two things the boundary does not create:
- *   1. component SOURCE anchors (theme ×2 / loop providers) — the session
- *      provider rides the DATA (K6: `component` with a `value` IS a source
- *      anchor); theme forks + loop providers are runtime-only additions;
+ *   1. component SOURCE anchors (theme-dark/theme-light / loop providers) —
+ *      the session provider rides the DATA (K6: `component` with a `value` IS
+ *      a source anchor); the theme providers + loop providers are
+ *      runtime-only additions. NO node carries two same-name source anchors
+ *      (anti-pattern, placement-path-spec §10.ad);
  *   2. placement attachment — content roots are placed into their zones by
  *      adding parent-child anchors on the zones' family links (the explicit
  *      placement step; unplaced content stays out of the tree by design).
@@ -106,16 +109,18 @@ export const demoData = {
           ],
         },
         {
-          // fork demo — fork-a and fork-b both consume 'theme'; root provides
-          // it twice ⇒ each consumer resolves TWO actionable arms (FRK-H2).
+          // provider demo — fork-a consumes 'theme-dark', fork-b consumes
+          // 'theme-light': TWO DISTINCT provider names (the same-name ×2
+          // fork claim is an anti-pattern — placement-path-spec §10.ad), so
+          // each consumer resolves its own provider, never a fork arm.
           // Classes match demo.css: the section is the flex row, each consumer
-          // (and therefore each of its arms) is a styled arm card.
+          // is a styled arm card.
           type: 'section',
           props: { id: 'fork-demo' },
           css: { classes: ['fork-arms'] },
           children: [
-            { type: 'div', component: { reference: 'theme' }, props: { id: 'fork-a' }, css: { classes: ['arm-card'] } },
-            { type: 'div', component: { reference: 'theme' }, props: { id: 'fork-b' }, css: { classes: ['arm-card'] } },
+            { type: 'div', component: { reference: 'theme-dark' }, props: { id: 'fork-a' }, css: { classes: ['arm-card'] } },
+            { type: 'div', component: { reference: 'theme-light' }, props: { id: 'fork-b' }, css: { classes: ['arm-card'] } },
           ],
         },
         {
@@ -202,9 +207,12 @@ export function buildFeatureMatrix() {
   const root = t.root
 
   // component SOURCES (providers) — the session provider is data-declared
-  // (K6); theme forks + loop providers are runtime-only additions.
-  addComponentSource(root, 'theme', 'theme: dark')
-  addComponentSource(root, 'theme', 'theme: light')
+  // (K6); the theme providers + loop providers are runtime-only additions.
+  // Anti-pattern compliance (§10.ad): TWO DISTINCT theme names (theme-dark /
+  // theme-light) — never two same-name source anchors on one node; each
+  // consumer (fork-a / fork-b, data-declared targets above) resolves its own.
+  addComponentSource(root, 'theme-dark', 'theme: dark')
+  addComponentSource(root, 'theme-light', 'theme: light')
   // the ROOT's consumer half of 'session' (source+target on one node = the
   // runtime duplex shape) is legacy-unexpressible post-K5 — the legacy array
   // form cannot repeat a reference (K8 duplicate-reference guard) and `target`

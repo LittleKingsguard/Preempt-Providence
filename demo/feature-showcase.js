@@ -509,10 +509,18 @@ if (typeof document !== 'undefined') {
     await flushMicrotasks()
 
     // ---- checks -----------------------------------------------------------
-    await runner.check('legacy envelope translates: in-tree root + unplaced content; clientConfig dom+persistence', () => {
+    await runner.check('legacy envelope translates: in-tree root + contentNodes-owned content; clientConfig dom+persistence', () => {
       if (!rootNode.isInTree) throw new Error('root not in-tree')
-      if (translated.content.length !== 2) throw new Error(`expected 2 unplaced content nodes, got ${translated.content.length}`)
-      if (supervisor.allNodes().filter((n) => n.state === 'unplaced').length !== 2) throw new Error('unplaced content not tracked')
+      if (translated.content.length !== 2) throw new Error(`expected 2 content nodes, got ${translated.content.length}`)
+      // contentNodes-ownership minting (P3 §10.ad/F-13): the content roots are
+      // family-in-tree via the permanent-owner token — never 'unplaced' —
+      // but the token terminates the compile walk: no states, no elements
+      if (supervisor.allNodes().filter((n) => n.state === 'unplaced').length !== 0) {
+        throw new Error('contentNodes-owned content must not be unplaced')
+      }
+      for (const c of translated.content) {
+        if (c.state !== 'in-tree') throw new Error(`content root ${c.id} expected in-tree (contentNodes owner), got ${c.state}`)
+      }
       // clientConfig gates → adapter/persistence (translate.md §2, TR-H6):
       // runInstantiation:false → adapter 'dom'; runMonitoring:true → persistence true
       if (translated.clientConfig.adapter !== 'dom' || translated.clientConfig.persistence !== true) {

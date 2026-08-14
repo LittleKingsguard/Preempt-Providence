@@ -425,3 +425,120 @@ which is precisely the wrong place to discover an algorithmic regression.
   `total − Σ(measured)` grows past the measured sum).
 - The fork-stress-data profile should time the pass-2 pipeline too, so
   "total" can never hide an unmeasured pipeline again.
+
+### The remaining blind spot — what the profile still does not time (current state)
+
+The O(n²) regression is fixed, but the measurement gap the RCA identified is
+still open: the page profile times only `load / compile (bootstrap) / emit /
+diff / apply` and counts `handlers` (a COUNT, not a time). Everything between
+"bootstrap compiled" and `total` is one unmeasured region. Current numbers
+(demo:smoke, d12):
+
+| method | Σ(measured) | total | unmeasured gap | share of total |
+| --- | --- | --- | --- | --- |
+| cycle | 36.5ms | 3775.0ms | 3738.5ms | 99.0% |
+| placement | 41.3ms | 4727.7ms | 4686.4ms | 99.1% |
+| values | 48.3ms | 5776.8ms | 5728.5ms | 99.2% |
+| link | 115.6ms | 7257.0ms | 7141.4ms | 98.4% |
+
+(Browser run, placement d12: measured 54ms of a 1504ms total — same shape.)
+
+#### What lives inside the unmeasured region (the missing timing steps)
+
+1. **The pass-2 pipeline** (`runPass2AndFlush` — the exact stage the O(n²)
+   regression lived in): every flush's `compile(slice)` for the dirtied
+   generation + `after-compile` dispatch + state/diagnostic event pushes +
+   journal writes. Untimed.
+2. **The 4094 `after-compile` handler BODY executions** — each body runs
+   2× `clone-instance` (clone construction, anchor copy, attach,
+   registration, pass-2 dirty marking) + 2× state-slice chain writes; each
+   op runs `compileLocal` synchronously + journals. `handlers=4094` in the
+   profile is a count, not a duration.
+3. **One-cascade expansion**: the recursion does NOT consume one round per
+   generation — a single `flushMicrotasks()` cascade drains ALL 12
+   generations (each handler's ops re-schedule the next pass-2 via
+   microtasks), so the entire runtime tree build happens inside ONE
+   unmeasured flush window. `renders=2` (bootstrap + one incremental) is the
+   profile's only signal of that.
+4. **`takePass2States()` + `mergeStates()`** per round (store drain +
+   `isInTree` filter + by-node map rebuild) — untimed.
+5. **`flushMicrotasks()` timer wall** — 8× `setTimeout(0)` per round; small
+   in the shim (the cascade needs only 1–2 rounds), but the nested-timer
+   clamp (~4ms/level in browsers) makes this a real share of a browser
+   `total`.
+
+#### Why `total − Σ(measured)` is the metric
+
+The gap is the pass-2 pipeline + handler + structural-op cost — exactly the
+machinery the trio's correctness-only gates cannot see. A regression like the
+O(n²) would hide in it again: measured sections would stay small while the
+gap balloons. The AGENTS.md item-4 guard ("flag if `total − Σ(measured)`
+dominates") is currently a MANUAL habit, not an asserted gate.
+
+> **Scope note (placement-path landing — P3 §5.2/§9-Q6):** all numbers in
+> this section describe the RUNTIME fork-stress-data pages (after-compile
+> expansion — 4094 per-node passes), which are KEPT as-is. The STATIC
+> placement-path page (`demo/path-fork-data.*`, P3 §5) re-baselines: its ONE
+> path-enumeration bootstrap replaces the 4094 per-node passes, its profile
+> carries a `[path-fork:profile] … states=4095 passes=1` line with
+> `total − Σ(measured) ≈ 0` (the page times its own check surface), and the
+> smoke records its single total as `[path-fork:baseline]` (its OWN
+> placement baseline — P3 §10.ad N-5, §8 Q6 TODO to re-baseline the runtime
+> guard after testing confirms no explosive time issues). The AGENTS.md
+> item-4 residual watch applies to both: the runtime pages' pass-2
+> dominance, and the static page's enumeration-bootstrap total.
+
+#### Recommended instrumentation (next session)
+
+1. **Time the pipeline**: wrap the round loop (`flushMicrotasks` +
+   `takePass2States`) and the handler bodies in accumulators → report
+   `pass2=…ms handlers=…ms` on the profile line (extend the existing
+   `acc()` pattern; `PROFILE.handlerMs` around the body execution).
+2. **Make the guard an assertion**: fail the smoke if
+   `total − Σ(measured) > Σ(measured)` (or > a small multiple of the
+   placement baseline) — the "Rule" from the RCA above, promoted from
+   manual to automated. **LANDED (P3 §6.4, Units 11/12):** the demo-smoke
+   ratio guard + residual-coverage check (`[fork-stress-data:profile]`
+   method ratios ~1.5×/2.5×, `[path-fork:baseline]` + the static page's
+   `unmeasured ≈ 0` residual assert) now assert both halves; the AGENTS.md
+   item-4 wording re-points the watch (runtime pages = method-ratio guard;
+   static page = its own placement baseline + §8-Q6 TODO).
+3. **Reduce the timer wall**: replace the 8×`setTimeout(0)` flush with a
+   microtask-only drain where the pipeline's own scheduling permits.
+
+### Imperative fork-stress — why it is slower than the data variants (in a real browser)
+
+Observed (browser): `[fork-stress:profile] depth=12 … compile=188.0ms emit=49.0ms
+diff=24.0ms apply=33.0ms renders=10 handlers=137 total=5656.0ms` while the
+data-driven placement page totals ~1.5s on the same machine. Measured
+sections sum to 294ms — the same 95%-unmeasured gap, with a DIFFERENT
+dominant cause than the data pages:
+
+1. **10 full-tree renders vs 2.** The imperative page renders after EVERY
+   layer (`render()` per level, `renders=10`) and `diffMinimal` re-asserts
+   every child's position on each render (D9 semantics: append-child move
+   → detach+reinsert in a real DOM). ≈10 renders × up-to-4095 re-inserts ≈
+   40k real DOM mutations + layout/style churn. The data page renders twice
+   (bootstrap + one post-cascade). **The shim cannot see this**: its
+   `appendChild` is an array splice (~O(1)), which is why the shim ordering
+   is the REVERSE (data pages 4.3–7.1s pass-2 vs imperative 1.8s) — the
+   shim's dominant cost is the data page's single giant pass-2 cascade,
+   while the browser's dominant cost is the imperative page's DOM churn.
+2. **8 whole-tree focused recompiles.** `recompileFocusedFor(rootNode)`
+   after every layer compiles the root's focused slice = the ENTIRE tree at
+   that level (8× ≈ O(n·levels) compile work; this IS measured —
+   `compile=188ms` is bootstrap + those 8 recompiles, vs the data page's
+   `compile=0.1ms`). The data page compiles only each generation's dirty
+   slice (Σ O(n)).
+3. **Flush windows + timers.** 8 per-level `flushMicrotasks()` rounds (8×
+   `setTimeout(0)` each; browser nested-timer clamp ~4ms) — hundreds of ms,
+   untimed, inside the 5.3s gap.
+4. **Page-side layer construction** (per-node `addChild`/`addAnchor`/
+   `linkFor` loops, direct graph mutation) — untimed page code.
+
+**The honest cross-environment metric**: wall totals are not comparable
+between the shim and a browser for DOM-heavy pages. The comparable signals
+are `pass2Ms` (compile-side, already added to the data page) and the
+**append-op count per render** (diffMinimal ops) — the DOM-churn proxy the
+shim can measure. The imperative page's profile line needs the same
+`pass2`/`covered` instrumentation to stop hiding its own gap.

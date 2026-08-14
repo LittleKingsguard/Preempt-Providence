@@ -100,9 +100,14 @@ describe('integration — payload lifecycle (Step 6)', () => {
     const articlePayload: Payload = { id: 'article', roots: [article] }
 
     dropPayload(articlePayload)
+    // the dropped root loses its family edge entirely → unplaced (swept async)
     expect(article.state).toBe('unplaced')
-    expect(comments.state).toBe('unplaced') // content stays unplaced until placed
+    // the surviving payload stays contentNodes-owned — family-'in-tree' via
+    // the permanent-owner token (P3 §10.ad/F-13), but the token terminates
+    // the compile walk: not actionable, never rendered
+    expect(comments.state).toBe('in-tree')
     const res = t.root.compile(t.nodes)
     expect(res.actionable.map((s) => s.nodeId)).not.toContain(article.id)
+    expect(res.actionable.map((s) => s.nodeId)).not.toContain(comments.id)
   })
 })

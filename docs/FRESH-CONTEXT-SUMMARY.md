@@ -14,8 +14,8 @@ The north star of the whole design (notes §10) is **extensibility-first**: addi
 
 ### 2.1 Core data model
 - **`Node`** — a virtual DOM node holding `base` data (type/content/props/css/handlers) + a **layer stack** (the canon of mutations) + **reconciled anchors** (its graph edges). No `parent` field, no `children` array, no stored `nodeState` — all *derived from the graph* (notes §10.1, Pillar A).
-- **`Link`** — the edge class: a collection of `Anchor`s with a `LinkConfig` it enforces (counts, role whitelist, unique order keys). Three canonical shapes: `parent-child` (1 parent + N children), `component` (per-`referenceName` source/target/duplex), `placement` (zone resolution).
-- **`Anchor`** — `{ role, target, options, link }`; roles: `parent|child|source|target|duplex|placement|component`; targets: a `Node`, or tokens `'rootNode' | 'component' | 'contentNodes'`, or a referenceName string.
+- **`Link`** — the edge class: a collection of `Anchor`s with a `LinkConfig` it enforces (counts, role whitelist, unique order keys). Three canonical shapes: `parent-child` (1 parent + N children), `component` (per-`referenceName` source/target/duplex), `placement` (the per-name zone registry — `container` producers + `content` consumers, P3 §1.1).
+- **`Anchor`** — `{ role, target, options, link }`; roles: `parent|child|source|target|duplex|container|content|component`; targets: a `Node`, or tokens `'rootNode' | 'component' | 'contentNodes'`, or a referenceName string.
 - **`NodeState`** — `prototype | unplaced | in-tree | destroyed`, *derived* per `compile(slice)`, never written. In-tree = chain terminates at `'rootNode'`.
 - **Permanent owners** (exactly three, survive sweep): root node, component prototype, `contentNodes` array.
 
@@ -23,10 +23,10 @@ The north star of the whole design (notes §10) is **extensibility-first**: addi
 - **Two-pass `compile(slice, { focusNodeId? })`**: pass 1 `compileLocal` (sync, node-local — layers → type/props/css/content + anchors), pass 2 `compileRemote` (walks: parent, children order, component/placement borrow). Pass 1 for the whole slice always precedes any pass 2 (no half-remote views).
 - **Bounded pass-2**: an atomic update compiles only the changed node's walk path (itself + ancestors + subtree) plus source-bearing nodes — never a whole-tree recompile.
 - **Resolution**: own targets first → **depth-0 self-resolution** for a self-providing node (`duplex`/`source`) → walk toward root taking the first `source`/`duplex` match (nearest shadows far) → root as fallback → `unresolved-reference` status (node still renders its own state + warning, S-R4.3) if nothing matches.
-- **Forking**: N providers for one name ⇒ N compiled states keyed by `pathKey` (path back to root). Disposition: root-terminated = actionable (all render); prototype/`contentNodes`-terminated = **silent drop**; loop-terminated = drop + `circular-source` warning. A coerced pick is never synthesized.
+- **Forking**: N providers for one name ⇒ N compiled states keyed by `pathKey` (path back to root). Disposition: root-terminated = actionable (all render); prototype/`contentNodes`-terminated = **silent drop**; loop-terminated = drop + `circular-source` warning. A coerced pick is never synthesized. **Placement paths (P3 §2, implemented)**: placement multiplicity is path-multiplicative — a consumer's `content` anchors are a preference-ordered request list; first-match-with-known-container wins, every zone of the chosen name fans out, one path-state per (node, path-to-root), `forkKey = pathKey` on every state (identity is pathKey alone — no `#<i>` arms).
 
 ### 2.3 Mutation & reactivity
-- **`ClientAPI.apply(nodeRef, mutation)`** is the *only* mutation surface (S-R3.11). `MutationInput` = `LayerMutationList` (wrapped internally as a `state-slice` op) or a `StructuralOp` (`attach/detach/move/clone-instance/destroy`). Journals through `supervisor.apply`.
+- **`ClientAPI.apply(nodeRef, mutation)`** is the *only* mutation surface (S-R3.11). `MutationInput` = `LayerMutationList` (wrapped internally as a `state-slice` op) or a `StructuralOp` (`attach/detach/move/clone-instance/destroy/placement-attach` — the dedicated placement op, P3 §3.3; `attach` stays family-only). Journals through `supervisor.apply`.
 - **Journal**: every op is named + replayable (`replay/undo/redo`), event-sourcing style.
 - **Gates**: in-tree gating (S1.1 — not-in-tree ⇒ `no-usable-state`, never partial); placement mutation via state-slice hard-blocked (`placement-target-blocked`); single-parent violation (2nd child anchor) ⇒ dedicated `single-parent` error; cycle ⇒ `cycle-detected` + rollback.
 - **Dirty propagation**: pass-1 sync in-op; pass-2 deferred to a **render microtask queue** (one microtask per tick, coalesced). Drain order fixed: `deferred-emission → dirty-pass2 → cascade-destroy → event-batch → render-emit`.
@@ -42,7 +42,7 @@ The north star of the whole design (notes §10) is **extensibility-first**: addi
 - **`RenderAdapter`** — `createEl / setProp / appendChild / hydrate / removeEl`. Client = DOM, SSR = fragment strings; `MockAdapter` for tests.
 - **Declarative ops** — `create / set / append / remove / styles`; namespaced `set` names (`prop:*`, `css:*`, `text`, `on:<event>`).
 - **`diffMinimal(prev, next)`** — D1–D5 rules: create+set+append new, remove gone, no morphing on type change, **set only for changed names** (in-place updates ⇒ no focus loss), re-append on order change.
-- **Two scopes**: root-out deep compile (bootstrap) + node-local minimal-element renders (updates — no full graph walk per update).
+- **Three compile scopes**: root-out deep compile (bootstrap), node-local minimal-element renders (updates — no full graph walk per update), and **path enumeration** (`compilePath` — P3 §2.1: the static placement-path bootstrap; one walk over both edge kinds toward root, one state per (node, path-to-root), children attached at mint time).
 - **Bootstrap vs incremental**: one full-depth compile at bootstrap; every later render consumes supervisor's pass-2 states (`takePass2States`) — no render-side compile.
 
 ### 2.6 Serialization & SSR
@@ -52,8 +52,8 @@ The north star of the whole design (notes §10) is **extensibility-first**: addi
 - **Parity**: same input ⇒ structurally equal server/client output (PAR-5).
 
 ### 2.7 Legacy translation & payload lifecycle
-- **`translateLegacy`**: original `/Preempt` NodeSchema → live graph at the boundary. Root's own children attach in-tree; `template.children` + payload items become **unplaced content nodes** (registered as payload-owned); component/placement/handlers/`run*` gates map to anchors/handlers/`{adapter,persistence}`.
-- **`reverseTranslate`**: live graph → backend NodeSchema; reverses placement/component-induced tree state, preserves user edits; `opts.payloads` emits one ContentPayload per group.
+- **`translateLegacy`**: original `/Preempt` NodeSchema → live graph at the boundary. Root's own children attach in-tree; `template.children` + payload items become **contentNodes-owned content roots** — each receives the `contentNodes` permanent-owner parent anchor at translate (family-'in-tree', P3 §10.ad/F-13; the token terminates the compile walk, so they never compile/render until a real parent edge supersedes the token on attach); component/placement/handlers/`run*` gates map to anchors/handlers/`{adapter,persistence}`. Placement config: `placementName` → `container` anchor; `targetPlacement: string[]` → one ORDERED `content` anchor per name (preference order preserved through serialization); `activePlacement` is DERIVED (never minted, typed `string`); `#`-names warn `placement-name-invalid` + skip; duplicates warn `placement-duplicate-reference` keep-first; the old string shape coerces with `placement-string-coerced`.
+- **`reverseTranslate`**: live graph → backend NodeSchema; reverses placement/component-induced tree state, preserves user edits; `opts.payloads` emits one ContentPayload per group. `content` anchors reverse as `targetPlacement: string[]` in mint order + the derived `activePlacement`; the minted contentNodes anchor is STRIPPED (round-trips re-mint cleanly, zero warnings).
 - **Payload ops**: `dropPayload / refreshPayload / appendToPayload / nextPriority`. **Origin-aware drops**: payload-owned content persists while unplaced (registration `registerContentNode`); dropping a payload destroys even PLACED content; handler-created nodes discarded once they lose root visibility; explicit destroy unregisters too.
 
 ### 2.8 Validation & loop safety
@@ -97,9 +97,12 @@ main.ts:
 translateLegacy(doc) → TranslatedTree:
   root   = Node(rootData); root attaches to permanent owner 'rootNode'  → in-tree
   attach root's OWN children (NodeData.children) in array order          → in-tree
-  template.children + content payload items → UNPLACED content nodes,
-      registered (registerContentNode) → live in TranslatedTree.content   → unplaced
-  component binding → target anchor; placement config → placement anchor
+  template.children + content payload items → contentNodes-owned content
+      roots (each receives the contentNodes permanent-owner parent anchor —
+      family-'in-tree', P3 §10.ad/F-13; the token terminates the compile
+      walk) → live in TranslatedTree.content
+  component binding → target anchor; placement config → container anchor
+      (placementName) + ordered content anchors (targetPlacement: string[])
   handlers → carried on nodes (runtime-only); run* gates → {adapter,persistence}
   first payload's metadata/userData surfaced on the result
 
@@ -154,7 +157,8 @@ HANDLER / USER UPDATE (after first paint)
     1 deferred-emissions (FIFO, depth-checked, later-tick snapshot)
     2 dirty-pass2   → populate injected anchors, compileRemote over union
     3 cascade-destroy → destroy still-ownerless nodes (rescue by sync attach)
-    4 event-batch   → coalesced EventEnvelope (≤1 state event/node/tick)
+    4 event-batch   → coalesced EventEnvelope (per-path state events —
+                     each path-state emits for its own pathKey, P3 §9-Q3/W2)
     5 render-emit   → diffMinimal(prev, next) → set-only ops for existing wires
                      (element identity preserved ⇒ focus retained)
   phase handlers run: before-compile (pre-op) → after-compile (post-pass2,
@@ -171,6 +175,8 @@ REVERSE (save back to backend)
     template.root + authored in-tree children (excl. content roots) → template
     content roots → ContentPayload items (one per payload group)
     component/placement anchors → component.reference / placement.placementName
+      (+ targetPlacement: string[] from content anchors, in mint order; the
+      minted contentNodes anchor stripped, P3 §6.2)
     user edits read from LIVE node state
 ```
 

@@ -72,7 +72,8 @@ import { LAYER_METHODS, layerName, levelCss, cssPropForLevel } from './fork-stre
 /**
  * LegacyInitialData for a fork-stress page of the given depth: the root plus
  * TWO prototype nodes per layer 1..depth−1 (slot 'a' = div, slot 'b' = span).
- * The prototypes are content-payload items (unplaced); the tree assembles at
+ * The prototypes are content-payload items, family-in-tree via the
+ * contentNodes permanent-owner token (P3 §10.ad/F-13); the tree assembles at
  * runtime via `clone-instance`. `levelCss(layer, slot)` supplies the per-level
  * property + per-slot value css stressor (shared pure helper from
  * fork-stress-fixture.js — demo-only, NOT a core API).
@@ -176,8 +177,16 @@ if (typeof document !== 'undefined') {
   const adapter = new DomAdapter(document.getElementById('app'))
 
   // ---- profiling -----------------------------------------------------------
+  // Measured sections: load (translate), compile (bootstrap), emit/diff/apply
+  // (render). pass2Ms covers the mutation pipeline the render sections never
+  // touch (kick-off ops + flush cascades + takePass2States — where the
+  // after-compile expansion runs); handlerMs times the 4094 body executions.
+  // coveredMs = Σ(all timed) — the smoke asserts it covers ~all of totalMs so
+  // "total" can never hide an untimed pipeline again (RCA:
+  // docs/session-defect-review.md, "missing timing steps").
   const PROFILE = {
     loadMs: 0, compileMs: 0, emitMs: 0, diffMs: 0, applyMs: 0,
+    pass2Ms: 0, handlerMs: 0,
     renderCount: 0, compileCalls: 0, handlerCalls: 0, totalMs: 0,
   }
   const now = () => (globalThis.performance?.now ? performance.now() : Date.now())
@@ -193,7 +202,7 @@ if (typeof document !== 'undefined') {
   const loadT0 = now()
   const translated = translateLegacy(envelope)
   const rootNode = translated.root
-  const prototypes = translated.content // the unplaced prototype nodes
+  const prototypes = translated.content // the contentNodes-owned prototype roots
   PROFILE.loadMs = now() - loadT0
 
   const events = new EventBridge()
@@ -234,6 +243,8 @@ if (typeof document !== 'undefined') {
           phase: 'after-compile',
           body: (c) => {
             PROFILE.handlerCalls += 1
+            const h0 = now()
+            try {
             const n = c.node
             if (!n) return
             // idempotency guard: children.length-only — a clone with
@@ -265,6 +276,9 @@ if (typeof document !== 'undefined') {
                 c.clientAPI.apply(copyId, [{ targetProp: 'props.stress:layers', mode: 'replace', value: childChain }])
               }
             }
+            } finally {
+              PROFILE.handlerMs += now() - h0
+            }
           },
         },
       ],
@@ -276,11 +290,11 @@ if (typeof document !== 'undefined') {
   let prevStates = new Map()
    let prevMap = null
    let bootstrapped = false
-   // The renderer only ever renders IN-TREE nodes: the bootstrap slice
-   // includes the unplaced PROTOTYPES, and self-providing unplaced nodes
-   // (the values/link sources) are viable (S1.1 carve-out) — their states
-   // must not reach the emit path or the DOM grows phantom prototype
-   // elements (empty boxes with the unplaced pathKey).
+   // The renderer only ever renders nodes with compiled states: the bootstrap
+   // slice includes the contentNodes-owned PROTOTYPES, but the token
+   // terminates the compile walk (P3 §2.4) — they never produce states, so
+   // they never reach the emit path and the DOM never grows phantom
+   // prototype elements (the isInTree guard is belt-and-braces).
    function mergeStates(byNode) {
      for (const [id, arr] of byNode) {
        if (!supervisor.getNode(id)?.isInTree) continue
@@ -335,8 +349,11 @@ if (typeof document !== 'undefined') {
     serverData.layerNames.map((n, i) => `L${i + 1}  ${method ?? LAYER_METHODS[i % 4]}  ${n}`).join('\n')
 
   // ---- helpers for the runner checks ---------------------------------------
+  // the prototype content roots are family-in-tree (contentNodes-owned, F-13)
+  // but never compile/render — every per-node render/derived check below is
+  // about the CLONE tree, so the prototypes are excluded
   function allNodes() {
-    return supervisor.allNodes().filter((n) => !n.destroyed && n.isInTree && n !== rootNode)
+    return supervisor.allNodes().filter((n) => !n.destroyed && n.isInTree && n !== rootNode && !prototypes.includes(n))
   }
   function wireOf(el) {
     if (!el) return ''
@@ -356,24 +373,34 @@ if (typeof document !== 'undefined') {
     // (the L1 copies are in-tree right after attach; both marks land in the
     // same flush). The root has no handler of its own, so it also gets a
     // tick to recompile with the fresh childOrder.
-    const r1 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:a'), slot: rootNode, priority: 0 })
-    const r2 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:b'), slot: rootNode, priority: 1 })
-    if (r1.status !== 'applied' || r2.status !== 'applied') {
-      throw new Error(`layer-1 clone-instance rejected: ${r1.status}/${r2.status}`)
+
+    // drain the supervisor's pass-2 pipeline (the handler recursion schedules
+    // its own microtask flushes — one generation per round). The ENTIRE
+    // runtime expansion (kick-off ops, flush cascades, per-flush pass-2
+    // compiles + after-compile dispatches, takePass2States) is timed as
+    // pass2Ms — the render sections above never touch this region (RCA:
+    // docs/session-defect-review.md "missing timing steps").
+    const p0 = now()
+    const kickR1 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:a'), slot: rootNode, priority: 0 })
+    const kickR2 = clientAPI.apply(rootNode.id, { kind: 'clone-instance', source: protoByKey.get('1:b'), slot: rootNode, priority: 1 })
+    if (kickR1.status !== 'applied' || kickR2.status !== 'applied') {
+      throw new Error(`layer-1 clone-instance rejected: ${kickR1.status}/${kickR2.status}`)
     }
-    for (const r of [r1, r2]) {
+    for (const r of [kickR1, kickR2]) {
       const copyId = r.dirtied?.[0]
       if (copyId) {
         clientAPI.apply(copyId, [{ targetProp: 'props.stress:layers', mode: 'replace', value: chainSegment(1) }])
       }
     }
+    // the root has no handler of its own, so it also gets a tick to
+    // recompile with the fresh childOrder
     clientAPI.apply(rootNode.id, [{ targetProp: 'props.stressTick', mode: 'replace', value: 1 }])
-
-    // drain the supervisor's pass-2 pipeline (the handler recursion schedules
-    // its own microtask flushes — one generation per round).
+    PROFILE.pass2Ms += now() - p0
     for (let round = 0; round < 40; round += 1) {
+      const r0 = now()
       await flushMicrotasks()
       const pending = supervisor.takePass2States()
+      PROFILE.pass2Ms += now() - r0
       if (pending.size === 0) break
       mergeStates(pending)
       render()
@@ -381,23 +408,31 @@ if (typeof document !== 'undefined') {
     }
 
     // ---- checks -------------------------------------------------------------
-    await runner.check('layer k has exactly 2^k nodes; total (incl. root) = 2^depth − 1', () => {
+    // F-13 re-pin (placement-path-spec §5.2): the contentNodes-ownership
+    // minting makes the 22 PROTOTYPES family-in-tree too, so the census is
+    // in-tree = 2^depth − 1 + prototypes.length (4117 at d12), unplaced = 0.
+    await runner.check(`layer k has exactly 2^k clones + 2 prototypes; total (incl. root) = 2^depth − 1 + prototypes`, () => {
       const inTree = supervisor.allNodes().filter((n) => !n.destroyed && n.isInTree)
-      if (inTree.length !== 2 ** depth - 1) {
-        throw new Error(`total: expected ${2 ** depth - 1}, got ${inTree.length}`)
+      if (inTree.length !== 2 ** depth - 1 + prototypes.length) {
+        throw new Error(`total: expected ${2 ** depth - 1 + prototypes.length}, got ${inTree.length}`)
       }
       for (let k = 1; k <= depth - 1; k += 1) {
         const layerNodes = inTree.filter((n) => n.props?.['stress:layer'] === k)
-        if (layerNodes.length !== 2 ** k) {
-          throw new Error(`layer ${k}: expected ${2 ** k} nodes, got ${layerNodes.length}`)
+        if (layerNodes.length !== 2 ** k + 2) {
+          throw new Error(`layer ${k}: expected ${2 ** k} clones + 2 prototypes, got ${layerNodes.length}`)
         }
       }
     })
 
-    await runner.check('prototypes stay unplaced; every clone is in-tree', () => {
+    await runner.check('prototypes are contentNodes-owned in-tree; no node is unplaced', () => {
       const unplaced = supervisor.allNodes().filter((n) => !n.destroyed && n.state === 'unplaced')
-      if (unplaced.length !== prototypes.length) {
-        throw new Error(`expected ${prototypes.length} unplaced prototypes, got ${unplaced.length}`)
+      if (unplaced.length !== 0) {
+        throw new Error(`expected 0 unplaced nodes, got ${unplaced.length}`)
+      }
+      for (const p of prototypes) {
+        if (p.state !== 'in-tree') throw new Error(`prototype ${p.id} expected in-tree (contentNodes owner), got ${p.state}`)
+        const pa = p.childAnchor()?.link.anchorsOf('parent')[0]
+        if (pa?.target !== 'contentNodes') throw new Error(`prototype ${p.id} lost its contentNodes parent anchor (${pa?.target})`)
       }
     })
 
@@ -566,14 +601,38 @@ if (typeof document !== 'undefined') {
 
     runner.summary(`Fork Stress (data${method ? `: ${method}` : ''}) — depth ${depth}`)
 
+    // ---- clone-usage census (published for the smoke guard) -----------------
+    // End-of-render census over the supervisor's registry (allNodes()):
+    // in-tree/unplaced are asserted by the page's own checks above; the
+    // rest is derived arithmetic the smoke pins (registered = in-tree +
+    // unplaced + destroyed; cloneOps = registered − unplaced − 1 −
+    // prototypes = the journaled clone-instance count, one per clone — the
+    // prototypes are family-in-tree (F-13) but were never cloned into).
+    const censusNodes = supervisor.allNodes()
+    PROFILE.registered = censusNodes.length
+    PROFILE.inTree = censusNodes.filter((n) => !n.destroyed && n.isInTree).length
+    PROFILE.unplaced = censusNodes.filter((n) => !n.destroyed && n.state === 'unplaced').length
+    PROFILE.destroyed = censusNodes.filter((n) => n.destroyed).length
+    PROFILE.cloneOps = PROFILE.registered - PROFILE.unplaced - 1 - prototypes.length
+
     PROFILE.totalMs = now() - tStart
     const f = (v) => v.toFixed(1)
+    PROFILE.coveredMs =
+      PROFILE.loadMs + PROFILE.compileMs + PROFILE.emitMs + PROFILE.diffMs +
+      PROFILE.applyMs + PROFILE.pass2Ms + PROFILE.handlerMs
     console.log(
       `[fork-stress-data:profile] depth=${depth} method=${method ?? 'cycle'} nodes=${2 ** depth - 1} ` +
       `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
       `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms ` +
-      `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls} total=${f(PROFILE.totalMs)}ms`,
+      `pass2=${f(PROFILE.pass2Ms)}ms handlerMs=${f(PROFILE.handlerMs)}ms ` +
+      `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls} ` +
+      `census(registered=${PROFILE.registered} inTree=${PROFILE.inTree} unplaced=${PROFILE.unplaced} destroyed=${PROFILE.destroyed} cloneOps=${PROFILE.cloneOps}) ` +
+      `covered=${f(PROFILE.coveredMs)}ms total=${f(PROFILE.totalMs)}ms ` +
+      `unmeasured=${f(PROFILE.totalMs - PROFILE.coveredMs)}ms`,
     )
+    // the smoke guard reads the profile (per page) to assert coverage + the
+    // d12 ratio bounds — see scripts/demo-smoke.mjs
+    globalThis.__forkStressDataProfile = PROFILE
   }
 
   // The smoke test awaits this to know the page finished (deep pages take

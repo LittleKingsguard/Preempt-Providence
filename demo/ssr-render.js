@@ -98,23 +98,22 @@ async function main() {
   const ops = diffMinimal(null, cr.actionable.map(minimalFromState))
   const dockId = Object.keys(labels).find((w) => labels[w].name === 'dock')
 
-  await runner.check('SSR-H3: client re-resolves 2 fork arms with distinct path keys (S4.2)', () => {
-    if (serverData.forkArms.length !== 2) throw new Error('server embedded 2 fork arms')
+  await runner.check('SSR-H3: client re-resolves the single dock state carrying both distinct feed providers (S4.2)', () => {
+    if (serverData.forkArms.length !== 1) throw new Error('server embedded 1 dock state')
     const mine = cr.actionable.filter((s) => s.nodeId === dockId)
-    if (mine.length !== 2) throw new Error(`expected 2 arms, got ${mine.length}`)
-    if (new Set(mine.map((a) => a.pathKey)).size !== 2) throw new Error('path keys not distinct')
+    if (mine.length !== 1) throw new Error(`expected 1 state, got ${mine.length}`)
   })
 
-  await runner.check('fork bindings surface both candidate values (A and B)', () => {
-    const bindings = cr.actionable.filter((s) => s.nodeId === dockId).map((s) => s.bindings['feed'])
-    if (!bindings.some((b) => b?.label === 'A') || !bindings.some((b) => b?.label === 'B')) {
+  await runner.check('both candidate values surface as bindings on the single dock state (distinct names — no same-name sources)', () => {
+    const bindings = cr.actionable.filter((s) => s.nodeId === dockId)[0].bindings
+    if (bindings['feed-a']?.label !== 'A' || bindings['feed-b']?.label !== 'B') {
       throw new Error(`missing candidates: ${JSON.stringify(bindings)}`)
     }
   })
 
-  await runner.check('both fork arms emit a create for the dock wire (§6)', () => {
-    if (ops.filter((o) => o.kind === 'create' && o.wire === dockId).length !== 2) {
-      throw new Error('expected 2 create ops for dock wire')
+  await runner.check('the dock state emits a create for the dock wire (§6)', () => {
+    if (ops.filter((o) => o.kind === 'create' && o.wire === dockId).length !== 1) {
+      throw new Error('expected 1 create op for dock wire')
     }
   })
 
@@ -146,19 +145,19 @@ async function main() {
     }
   })
 
-  // ---- fork arms, rendered visibly ---------------------------------------
+  // ---- resolved providers, rendered visibly ---------------------------------
   const armsBox = document.getElementById('fork-arms')
   const arms = cr.actionable.filter((s) => s.nodeId === dockId)
   arms.forEach((arm, i) => {
     const card = document.createElement('div')
     card.className = 'arm-card'
     const title = document.createElement('h4')
-    title.textContent = `Fork arm ${i}`
+    title.textContent = `Resolved state ${i}`
     const meta = document.createElement('p')
     meta.textContent = `pathKey: ${arm.pathKey}`
     const badge = document.createElement('span')
     badge.className = 'badge'
-    badge.textContent = `feed=${arm.bindings['feed']?.label}`
+    badge.textContent = `feed-a=${arm.bindings['feed-a']?.label} · feed-b=${arm.bindings['feed-b']?.label}`
     const nested = document.createElement('span')
     nested.className = 'nested-badge'
     nested.textContent = `nested badge: ${arm.children.length ? 'present' : 'missing'}`
@@ -178,7 +177,7 @@ async function main() {
     reconcileParentTargets(reSeeded)
     const reCr = reSeeded[0].compile(reSeeded)
     const reArms = reCr.actionable.filter((s) => s.nodeId === dockId)
-    if (reArms.length !== 2) throw new Error('re-resolution surface changed')
+    if (reArms.length !== 1) throw new Error('re-resolution surface changed')
     for (const a of reArms) if (a.pathKey.includes('stale-node')) throw new Error('stale fork materialized')
   })
 

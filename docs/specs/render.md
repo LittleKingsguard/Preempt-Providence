@@ -21,7 +21,7 @@ notes §10.8.4) and emits **declarative render ops**; adapters map ops to a host
 
 | In | Out |
 | --- | --- |
-| Fully-resolved, actionable, `'in-tree'` compiled slices only (S1.1) | `RenderOp[]` batches (tree diff) + serialized JSON state docs |
+| Fully-resolved, actionable, `'in-tree'` compiled slices only (S1.1; placement-routed path-states included — P3 §2.4) | `RenderOp[]` batches (tree diff) + serialized JSON state docs |
 | Serialized anchors as typed refs (never live objects) | Adapter calls: DOM mutations, HTML string, `hydrate` |
 
 Pipeline output is a **first-class JSON document, never an in-object proxy**
@@ -34,7 +34,7 @@ Pipeline output is a **first-class JSON document, never an in-object proxy**
 ```ts
 type NodeRef = string             // unique per-node ID, generated at creation (S3.1); the wire key
 type ForkPathKey = string         // 'root/<id>/<id>/…' — path of NodeRefs back to the root node
-type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'placement' | 'component'
+type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'container' | 'content' | 'component'   // P3 §1.1
 
 interface RenderAdapter<P, E> {   // P = element product (HTMLElement | fragment descriptor)
                                   // E = host environment (Document | string sink) — adapter-specialized
@@ -65,7 +65,7 @@ interface RenderAdapter<P, E> {   // P = element product (HTMLElement | fragment
 
 ```ts
 type RenderOp =
-  | { kind: 'create'; wire: NodeRef; type: string; forkKey?: ForkPathKey }      // forkKey present only on actionable fork-arm emits (S-R3.10)
+  | { kind: 'create'; wire: NodeRef; type: string; forkKey?: ForkPathKey }      // forkKey = cs.forkKey, forwarded on EVERY path-state emit
   | { kind: 'set';    wire: NodeRef; name: string; value: unknown; forkKey?: ForkPathKey }
   | { kind: 'append'; owner: NodeRef; child: NodeRef }                          // reorder = re-append in compiled order
   | { kind: 'remove'; wire: NodeRef; forkKey?: ForkPathKey }
@@ -79,8 +79,12 @@ interface MinimalElement {
   wire: NodeRef
   type: string
   props: Record<string, unknown>  // render-relevant compiled props incl. css id/classes/style, text, event bindings (cssDef flows via the styles op, not here)
-  childOrder: NodeRef[]           // compiled children order (child-anchor `priority`, notes §10.8)
-  forkKey?: ForkPathKey           // present on actionable fork arms (S-R3.10); forwarded onto emitted create/set/remove ops
+  childOrder: NodeRef[]           // compiled children order (child-anchor `priority`, notes §10.8);
+                                  // for PATH-STATES: the path-derived childOrder converted to the child
+                                  // pathKey wires (P3 §4.2 — emitElements buckets child states by parent trace)
+  forkKey?: ForkPathKey           // forwarded onto every emitted create/set/remove op (DEFECT #1 fixed,
+                                  // P3 §4.3); on every path-state forkKey = pathKey — no longer limited to
+                                  // "actionable fork arms" (P3 §2.2)
 }
 ```
 
@@ -94,9 +98,23 @@ Diff rules (prev vs next `MinimalElement`, per wire):
 | D4 | prop values changed | `set` **only for changed names** |
 | D5 | `childOrder` changed | re-`append` in next order + `remove` departed |
 
-Every emitted op **forwards the element's `forkKey` when present** (S-R3.10), so actionable
-fork arms stay distinct at the adapter boundary (adapters.md §2/R2; `append` carries no
-forkKey — it targets the already-created arm entries).
+Every emitted op **forwards the element's `forkKey`** — the DEFECT #1 fix (P3 §4.3/§6.5, shipped as the emit prerequisite) made this canonical for `emitElements` as well as `minimalFromState`, so actionable fork arms and path-states stay distinct at the adapter boundary (adapters.md §2/R2; `append` carries no forkKey — it targets the already-created arm entries).
+
+### 3.3 Wires: path-states key on their pathKey (P3 §4.1)
+
+- Path-state wires ARE their pathKeys (`root/<zone>/<ownerId>/…/<nodeId>` — the
+  family path interleaved with the zone names that routed each hop, P3 §2.2);
+  there is no positional arm convention (`nodeId#<i>`) left in the path model.
+- PathKeys are stable across renders while the placement topology is unchanged,
+  so element reuse falls out of the existing prevMap diff (render.ts:50-90):
+  steady-state renders are set-only (D4), and the D9/ORD-H6 focus-safety rules
+  (no re-append on unchanged order) are untouched.
+- `emitElements` groups by WIRE, not nodeId: every path-state forms its own
+  single-state group (`isPathState` = `forkKey === pathKey` + `#`-free key —
+  placement keys are `#`-free by the §1.3 guards); the `multi`/armIdx machinery
+  now applies ONLY to genuine `#f:` component forks, which the
+  `component-source-duplicate` guard removes from shipped data entirely
+  (P3 §4.2/§10.ab).
 
 ### 3.3 Emit ordering vs dirty sweep (D3/S-R2.3/S-R3.12)
 
@@ -113,18 +131,18 @@ forkKey — it targets the already-created arm entries).
 
 ---
 
-## 4. Two-scope model (notes §10.6, notes §10.8 compile bullet, notes §10.8.4)
+## 4. Three-scope model (notes §10.6, notes §10.8 compile bullet, notes §10.8.4; P3 §2.1)
 
 Same `compile(slice)` primitive, parameterized by entry point:
 
-| | Root-out deep render | Node-local minimal-element render |
-| --- | --- | --- |
-| Trigger | bootstrap / full reconcile / hydrate re-resolution | event emission: `state-slice` via `ClientAPI.apply(nodeRef, mutation)` (S2.1, S-R3.11) |
-| Entry point | supervisor's root anchor | the affected node's own anchors |
-| Pass 1 | whole slice | affected node/subtree only |
-| Pass 2 | one coherent walk | **bounded**: ancestor chain only, for parent + source/duplex borrow |
-| Emit | full op stream / vdom (`hydrate`) | **diffed `MinimalElement` ops only** — D1–D5; no full graph walk per update |
-| Cost | O(slice) | O(node layers + anchors + ancestors) |
+| | Root-out deep render | Node-local minimal-element render | **Path enumeration (P3 §2.1, implemented)** |
+| --- | --- | --- | --- |
+| Trigger | bootstrap / full reconcile / hydrate re-resolution | event emission: `state-slice` via `ClientAPI.apply(nodeRef, mutation)` (S2.1, S-R3.11) | placement-path bootstrap — `compilePath` over the placement-routed graph (the static fork-stress page) |
+| Entry point | supervisor's root anchor | the affected node's own anchors | a content node or the root |
+| Pass 1 | whole slice | affected node/subtree only | the 23-node graph once |
+| Pass 2 | one coherent walk | **bounded**: ancestor chain only, for parent + source/duplex borrow | **one path-enumeration walk** — walks BOTH edge kinds toward root (placement edges: content anchors → per-name placement Link → container owners, one branch per zone; family edges: single branch); per-walk visit set (P3 §1.4); one state per (node, path-to-root), children attached at mint time (P3 §2.3) |
+| Emit | full op stream / vdom (`hydrate`) | **diffed `MinimalElement` ops only** — D1–D5; no full graph walk per update | 4095 path-states on pathKey wires — replaces the runtime page's 4094 per-node passes with one enumeration |
+| Cost | O(slice) | O(node layers + anchors + ancestors) | O(states) — the R2.2 bijection pins 2^12 − 1 states to 23 nodes, zero node creation |
 
 Handler-caused re-render MUST NOT trigger a full supervisor walk (notes §10.6).
 
@@ -135,9 +153,12 @@ straight off the Link (resolve.ts, on-demand chain classification) and never
 sweeps providers into the slice. Only hub-less trees (same-name anchors on
 private links) fall back to sweeping the source/duplex-bearing universe into
 the slice — still gated on the walk path carrying a `target` and lazily
-materialized. This keeps pass-2 O(walk path) even when every node is a
-self-providing provider (the values/link-only fork-stress-data pages: 4094
-dirty nodes × 4095-node slices would be O(n²)).
+materialized. **The per-name PLACEMENT Link is the zone registry by the same
+rule (P3 §2.1):** path enumeration reads the `'container'`-role producer
+anchors straight off the Link, never sweeping the graph; hub-less trees fall
+back to the status-quo slice scan. This keeps pass-2 O(walk path) even when
+every node is a self-providing provider (the values/link-only fork-stress-data
+pages: 4094 dirty nodes × 4095-node slices would be O(n²)).
 
 ---
 
@@ -163,14 +184,19 @@ interface SerializedAnchor {                  // anchors serialize as typed refs
 
 interface RenderNodeState {                   // render-relevant slice of the compiled state; JSON-safe
   id: NodeRef
-  state: 'in-tree'                            // only in-tree states are renderable/serializable as actionable (S1.1)
+  state: 'in-tree'                            // only in-tree states are renderable/serializable as actionable (S1.1);
+                                              // P3 §2.4 carve-out: placement-routed nodes compile actionable
+                                              // path-states even when their family label reads 'unplaced' —
+                                              // the label stays honest, viability is a property of the path
   type: string
   props: Record<string, unknown>
   css: { id?: string; classes?: string[]; style?: string; cssDef?: unknown }
   content?: unknown
-  children: NodeRef[]                         // ordered by child-anchor priority
+  children: NodeRef[]                         // ordered by child-anchor priority; path-derived (descendant
+                                              // path-states) for path-states (P3 §2.3)
   anchors: SerializedAnchor[]
-  forkKey?: ForkPathKey                       // trace only — present solely on actionable root-terminated forks (S-R3.10)
+  forkKey?: ForkPathKey                       // forwarded on every path-state (forkKey = pathKey, P3 §2.2);
+                                              // trace — present on actionable root-terminated forks (S-R3.10)
 }
 
 type SerializedRenderDoc = { template: unknown /* TemplateData */; content: unknown[] /* ContentPayload[] */; clientConfig: { adapter: string; persistence: boolean } }
@@ -194,23 +220,36 @@ Round-trip rules:
 
 ---
 
-## 6. Forked compiled states (notes §10.8.2, notes §10.8.4, S-R2.5, S-R3.3, S-R3.10)
+## 6. Forked compiled states (notes §10.8.2, notes §10.8.4, S-R2.5, S-R3.3, S-R3.10; P3 §4.2)
 
 Pass 2 forks when several sources/placements share a `referenceName`; each
 candidate resolution is a separate compiled state **keyed by its path back to
-the root** (`root/a/b/…`, notes §10.8.4).
+the root** (`root/a/b/…`, notes §10.8.4). **P3 §2.2 (implemented):** placement
+multiplicity forks the same way — one path-state per zone (container anchor)
+of the chosen first-match name, each zone a path hop; every path-state is
+keyed by its pathKey and carries `forkKey = pathKey` unconditionally. Identity
+is pathKey alone: there is no `#<i>` arm suffix in the path model (the
+`component-source-duplicate` guard removes the arm-generating case from
+runtime data; K8 blocks it at the legacy boundary — P3 §10.ab/§10.ae).
 
 | Arm termination | Actionable? | Rendered? | Log |
 | --- | --- | --- | --- |
 | root node (`'rootNode'` chain) | **yes** | yes — path-key material, `forkKey` trace serialized | — |
 | component prototype | no | dropped, **zero ops, zero serialized state** | silent |
-| `contentNodes` array | no (not-in-tree, S1.1) | dropped silently | silent |
-| loop | no | dropped | **`circular-source` warning** (S-R2.5) |
+| `contentNodes` array | no (token terminates the walk — family-in-tree ≠ compiled viability, P3 §2.4) | dropped silently | silent |
+| placement loop (per-walk visit set, P3 §1.4) | no | dropped | **`circular-source` warning** (S-R2.5) |
 | N arms, all root-terminated | N actionable | **all N render as multiple valid states** — a coerced pick is NEVER synthesized (notes §10.8.2/§10.8.4) | — |
 
 Depth-0 rule (S4.1/S-R2.6): a node carrying a source/`duplex` anchor for the
 `referenceName` resolves **at itself before any upward walk**; nearest source
 shadows farther ones.
+
+**Path-states replace the old "leaves-by-fiat" framing (P3 §4.2):** a
+path-state's children come from the path-derived `childOrder` (descendant
+path-states, attached at mint time — §2.3) — never the empty-child fiat the
+multi-arm convention imposed. `emitElements` converts the minted node-id
+children to child pathKey wires via the trace-indexed lookup; `minimalFromState`
+(single-state callers) keeps `childOrder` as-is.
 
 Renderer input set = actionable forks only. Fork path-keys are material
 **only** for actionable root-terminated forks (S-R3.10). Fork-key collision
@@ -257,7 +296,7 @@ re-derived forks de-dupe by node IDs.
 | --- | --- | --- |
 | NVS-1 | A coerced/arbitrary pick among ambiguous forks | notes §10.8.4 — "a coerced pick is never synthesized" |
 | NVS-2 | Dropped-arm residue: no ops, no tombstones, no serialized state from non-actionable arms | notes §10.8.4, SER-R4 |
-| NVS-3 | `'prototype'` / `'unplaced'` / `'destroyed'` nodes as render targets — compile of not-in-tree returns **no usable state** | S1.1 |
+| NVS-3 | `'prototype'` / `'unplaced'` / `'destroyed'` nodes as render targets — compile of not-in-tree returns **no usable state**. **P3 §2.4 carve-out:** placement-ROUTED nodes are render targets — their path-states are actionable output even when the family label reads `unplaced` (the label stays honest; only token-terminated/loop walks drop) | S1.1, P3 §2.4 |
 | NVS-4 | Unresolved component **targets as renderable bound values** — the unresolved binding is simply absent and flagged (`unresolved-reference` status); the node itself still renders **its own state** with a logged warning (viable compile, S-R4.3) | notes §10.8.2, S-R4.3 |
 | NVS-5 | Live object graphs / in-object proxies — only first-class JSON docs, anchors as typed refs | notes §10.6, `arch_review.md` D4 |
 | NVS-6 | Partial batches / mid-op walk results — emits follow the completed sweep only | R-ORD-1..5 |
@@ -290,8 +329,11 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | FRK-H1 | single source for a `referenceName` | one actionable state, no fork |
 | FRK-H2 | N sources, all root-terminated | N actionable states, **all render**; distinct path keys |
 | FRK-H3 | `duplex`/self-source present | depth-0 self-resolution before any walk (S4.1/S-R2.6) |
+| FRK-P1 | placement path fork (P3 §2.1/§2.2) | consumer with `content` anchors + two containers sharing the chosen zone name → one path-state per (node, owner-path); distinct pathKeys (sibling prototypes distinct at the final segment); `forkKey = pathKey` on every state; wires = pathKeys, `#`-free |
+| FRK-P2 | path-state children (P3 §2.3/§4.2) | `emitElements` converts node-id children to child pathKey wires (trace-indexed); `stress:expanded` (`children.length`) true for non-leaf path-states, false for leaves; NO leaves-by-fiat for path-states |
+| FRK-P3 | path-state incremental (P3 §4.1) | steady-state render over unchanged placement topology = set-only ops on stable pathKey wires (D4); element objects reused (E2E-2) |
 | FRK-F1 | arm terminates at component prototype | silent drop: zero ops, zero serialized state |
-| FRK-F2 | arm terminates at `contentNodes` | silent drop (not-in-tree, S1.1) |
+| FRK-F2 | arm terminates at `contentNodes` | silent drop (token terminates the walk — P3 §2.4) |
 | FRK-F3 | looped arm | drop + `circular-source` warning; sibling actionable arms still render |
 | FRK-F4 | fork-key collision with differing content | hard error — no phantom coalescing (S3.1) |
 | FRK-F5 | identical fork re-derived | de-duped by node IDs + path-key trace |
@@ -335,4 +377,5 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | SCOPE-2 | handler/`ClientAPI.apply` update | node-local compile; minimal-element diff ops only; no full walk |
 | SCOPE-3 | node-local bounded pass 2 | reads ancestor chain only |
 | SCOPE-4 | both scopes | same `compile(slice)` primitive, entry-point parameter only |
+| SCOPE-5 | placement-path bootstrap (P3 §2.1) | `compilePath` path enumeration — third scope; 4095 path-states on pathKey wires from 23 nodes; incremental ops after bootstrap stay node-local (E2E-2/3/4) |
 | NVS-T1..T7 | one assertion test per §9 row NVS-1..NVS-7 | renderer input set contains none of the forbidden forms |

@@ -22,7 +22,7 @@ export const DEFAULT_COMPONENT: LinkConfig = {
 
 export const DEFAULT_PLACEMENT: LinkConfig = {
   name: 'placement',
-  roles: ['placement'],
+  roles: ['container', 'content'],
 }
 
 function baseFor(name: LinkConfig['name']): LinkConfig {

@@ -687,6 +687,14 @@ opaque-name minting (unicode/dot/space), and the dual-anchor node the
 `role-mismatch` prose (P2) warns about — the probe confirms the two roles
 never collide.
 
+> **SUPERSEDED (placement-path-spec §1.2/§2 — implementation landed):** the
+> "placement anchors inert at static compile / P3 materializes only
+> dynamically" premise is INVERTED — the two-sided role + path-enumeration
+> model makes P3 statically expressible (probe evidence kept; the scenario
+> verdict was re-recorded in `docs/test-findings.md` §"Stress-test review
+> loop #1" scenario 10). The probe's other claims (opaque-name minting,
+> dual-anchor role separation) stand.
+
 ---
 
 ## Scenario 11 — handler bodies: invalid JS syntax at translate, throwing, non-undefined return, duplicate names, event/phase cross-fire

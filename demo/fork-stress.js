@@ -51,7 +51,19 @@ for (const [id, l] of Object.entries(serverData.nodeLabels)) byName[l.name] = id
 const adapter = new DomAdapter(document.getElementById('app'), { onEvent: handleDomEvent })
 
 // ---- profiling -------------------------------------------------------------
-const PROFILE = { loadMs: 0, compileMs: 0, emitMs: 0, diffMs: 0, applyMs: 0, renderCount: 0, totalMs: 0 }
+// Measured sections: load (translate), compile (bootstrap + the 8 whole-tree
+// focused recompiles), emit/diff/apply (render). pass2Ms times the per-level
+// flush windows (the pass-2 pipeline + timer waits), pageMs the page-side
+// layer-construction loops (addChild/addAnchor/linkFor — direct graph
+// mutation, untimed before), handlerMs the after-compile bodies, and appends
+// counts diffMinimal's append ops per render — the DOM-churn proxy the shim
+// cannot time directly (browser cost is detach+reinsert per append; RCA:
+// docs/session-defect-review.md "imperative fork-stress").
+const PROFILE = {
+  loadMs: 0, compileMs: 0, emitMs: 0, diffMs: 0, applyMs: 0,
+  pass2Ms: 0, pageMs: 0, handlerMs: 0, appends: 0,
+  renderCount: 0, handlerCalls: 0, totalMs: 0,
+}
 const now = () => (globalThis.performance?.now ? performance.now() : Date.now())
 const tStart = now()
 function acc(key, fn) {
@@ -96,6 +108,8 @@ function installHandlerLayer(parents, cycle) {
   const marker = HANDLER_MARKER
   const body = (c) => {
     PROFILE.handlerCalls = (PROFILE.handlerCalls ?? 0) + 1
+    const h0 = now()
+    try {
     const node = c.node
     if (!node) return
     // idempotency: already added this layer? (guard against loops)
@@ -115,6 +129,9 @@ function installHandlerLayer(parents, cycle) {
       }, k === 'a' ? 0 : 1)
       wireToNode.set(child.id, child)
     }
+    } finally {
+      PROFILE.handlerMs += now() - h0
+    }
   }
   for (const parent of parents) {
     parent.addLayer({
@@ -130,7 +147,7 @@ function addPlacementLayer(parents, cycle) {
   const pName = placementName(cycle)
   const out = []
   for (const parent of parents) {
-    parent.addAnchor('placement', pName, {}, hub().linkFor(pName, 'placement'))
+    parent.addAnchor('container', pName, {}, hub().linkFor(pName, 'placement'))
     for (const [k, tag] of [['a', 'div'], ['b', 'div']]) {
       const pid = `${parent.props.id}-p-${k}`
       const child = addChild(parent, {
@@ -143,7 +160,7 @@ function addPlacementLayer(parents, cycle) {
         css: levelCss(cycle * 4 - 3, k),
       }, k === 'a' ? 0 : 1)
       wireToNode.set(child.id, child)
-      child.addAnchor('placement', pName, {}, hub().linkFor(pName, 'placement'))
+      child.addAnchor('container', pName, {}, hub().linkFor(pName, 'placement'))
       out.push(child)
     }
   }
@@ -234,6 +251,7 @@ function render() {
     for (const [, states] of prevStates) actionable.push(...states)
     const els = acc('emitMs', () => emitElements(actionable, wireToNode))
     const ops = acc('diffMs', () => diffMinimal(prevMap, els))
+    PROFILE.appends += ops.filter((o) => o.kind === 'append').length
     acc('applyMs', () => applyOps(adapter, ops))
     prevMap = new Map(els.map((e) => [e.wire, e]))
     PROFILE.renderCount += 1
@@ -340,27 +358,40 @@ async function main() {
   for (let level = 4; level <= depth - 1; level += 1) {
     const method = LAYER_METHODS[(level - 1) % 4]
     const cycle = Math.floor((level - 1) / 4) + 1
+    const w0 = now()
     if (method === 'handler') {
       installHandlerLayer(currentParents, cycle)
       // trigger: apply a tick to each parent → pass-2 → after-compile handler
       for (const p of currentParents) {
         clientAPI.apply(p.id, [{ targetProp: 'props.stressTick', mode: 'replace', value: level }])
       }
+      PROFILE.pageMs += now() - w0
+      const f0 = now()
       await flushMicrotasks()
+      PROFILE.pass2Ms += now() - f0
       render()
     } else if (method === 'placement') {
       currentParents = addPlacementLayer(currentParents, cycle)
+      PROFILE.pageMs += now() - w0
+      const f0 = now()
       await flushMicrotasks()
+      PROFILE.pass2Ms += now() - f0
       recompileFocusedFor(rootNode)
       render()
     } else if (method === 'values') {
       currentParents = addValuesLayer(currentParents, cycle)
+      PROFILE.pageMs += now() - w0
+      const f0 = now()
       await flushMicrotasks()
+      PROFILE.pass2Ms += now() - f0
       recompileFocusedFor(rootNode)
       render()
     } else if (method === 'link') {
       currentParents = addLinkLayer(currentParents, cycle)
+      PROFILE.pageMs += now() - w0
+      const f0 = now()
       await flushMicrotasks()
+      PROFILE.pass2Ms += now() - f0
       recompileFocusedFor(rootNode)
       render()
     }
@@ -469,12 +500,12 @@ async function main() {
 
   await runner.check('placement layers: children carry the placement anchor', () => {
     const all = allNodes()
-    const placed = all.filter((n) => n.anchors.some((a) => a.role === 'placement' && typeof a.target === 'string'))
+    const placed = all.filter((n) => n.anchors.some((a) => a.role === 'container' && typeof a.target === 'string'))
     if (placed.length === 0) throw new Error('no placement-anchored nodes')
     // every node whose TOP layer is placement must carry a placement anchor
     for (const n of all) {
       if (topLayerOf(n).startsWith('L') && topLayerOf(n).includes(':placement')) {
-        if (!n.anchors.some((a) => a.role === 'placement')) throw new Error(`placement node ${n.id} lacks placement anchor`)
+        if (!n.anchors.some((a) => a.role === 'container')) throw new Error(`placement node ${n.id} lacks placement anchor`)
       }
     }
   })
@@ -546,12 +577,20 @@ async function main() {
 
   PROFILE.totalMs = now() - tStart
   const f = (v) => v.toFixed(1)
+  PROFILE.coveredMs =
+    PROFILE.loadMs + PROFILE.compileMs + PROFILE.emitMs + PROFILE.diffMs +
+    PROFILE.applyMs + PROFILE.pass2Ms + PROFILE.pageMs + PROFILE.handlerMs
   console.log(
     `[fork-stress:profile] depth=${depth} nodes=${2 ** depth - 1} ` +
     `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
     `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms ` +
-    `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls ?? 0} total=${f(PROFILE.totalMs)}ms`,
+    `pass2=${f(PROFILE.pass2Ms)}ms pageMs=${f(PROFILE.pageMs)}ms handlerMs=${f(PROFILE.handlerMs)}ms ` +
+    `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls ?? 0} appends=${PROFILE.appends} ` +
+    `covered=${f(PROFILE.coveredMs)}ms total=${f(PROFILE.totalMs)}ms ` +
+    `unmeasured=${f(PROFILE.totalMs - PROFILE.coveredMs)}ms`,
   )
+  // the smoke guard reads the profile to assert coverage + append-op sanity
+  globalThis.__forkStressProfile = PROFILE
 }
 
 // The smoke test awaits this to know the page finished (deep pages take

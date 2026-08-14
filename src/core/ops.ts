@@ -1,4 +1,4 @@
-import type { LayerMutationList, LinkConfigNameHub, MutationOp, NodeId, StateSliceOp } from './types.js'
+import type { LayerMutationList, LinkConfigNameHub, MutationOp, NodeId, PlacementAttachOp, PlacementTrigger, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
 import { Node, findCycle } from './node.js'
 import { Link } from './link.js'
@@ -31,13 +31,21 @@ function attach(node: Node, to: Node, priority: number | undefined): NodeId {
   if (existing) {
     const link = toLink(existing)
     const parentAnchor = link.anchorsOf('parent')[0]
-    const existingParent = parentAnchor && typeof parentAnchor.target === 'object'
-      ? parentAnchor.target
-      : null
-    if (existingParent !== to) {
-      throw new SingleParentError(node.id)
+    // the contentNodes permanent-owner token (translate-minted, P3 §10.ad/
+    // F-13) is a placeholder family edge — a real parent edge supersedes it
+    // ("attach adds a placement path to an already-in-tree content root");
+    // destroy() bypasses the parent-child link's min-1 child count
+    if (parentAnchor && parentAnchor.target === 'contentNodes') {
+      link.destroy()
+    } else {
+      const existingParent = parentAnchor && typeof parentAnchor.target === 'object'
+        ? parentAnchor.target
+        : null
+      if (existingParent !== to) {
+        throw new SingleParentError(node.id)
+      }
+      return to.id
     }
-    return to.id
   }
   const link = to.familyLinkFor()
   if (!link) {
@@ -68,6 +76,62 @@ function detach(node: Node): NodeId {
   return node.id
 }
 
+export interface PlacementAttachResult {
+  containerAnchorMinted: boolean
+  attachZone: string
+}
+
+/** P3 §1.3 — the ancestor-name veto: legacy nulls out a `placementName` when
+ *  an ancestor already offers the same name (the anti-loop guard). Runtime
+ *  minting applies the same veto against the ATTACH TARGET's (the container
+ *  node's) ancestor chain: an ancestor offering the zone → the container
+ *  anchor is NOT minted (warn `placement-name-vetoed`, warn+skip, never a
+ *  throw). Content anchors (the consumer side) are never vetoed. */
+function ancestorServesZone(node: Node, zone: string): boolean {
+  for (let cur: Node | null = node.parent; cur; cur = cur.parent) {
+    if (cur.anchors.some(a => a.role === 'container' && typeof a.target === 'string' && a.target === zone)) return true
+  }
+  return false
+}
+
+/** P3 §3.3/§9-Q2 — the placement-attach executor: mints the node's `content`
+ *  anchor(s) per the requested container names (preference order, dedup
+ *  keep-first — re-attach is idempotent) and mints/ensures the `container`
+ *  anchor on the target container node for the attach zone (names[0]), under
+ *  the §1.3 ancestor-name veto. Both roles land on the SHARED per-name
+ *  placement Link (the zone registry). */
+export function placementAttach(node: Node, container: Node, names: string[], hub: LinkConfigNameHub): PlacementAttachResult {
+  const attachZone = names[0]
+  if (typeof attachZone !== 'string' || attachZone.length === 0) {
+    throw new ApplyError('placement-target-blocked', { detail: 'placement-attach requires at least one requested container name' })
+  }
+  for (const name of names) {
+    if (typeof name !== 'string' || name.length === 0) continue
+    if (node.anchors.some(a => a.role === 'content' && a.target === name)) continue
+    node.addAnchor('content', name, {}, hub.linkFor(name, 'placement'))
+  }
+  let containerAnchorMinted = false
+  const existing = container.anchors.find(a => a.role === 'container' && a.target === attachZone)
+  if (!existing) {
+    if (ancestorServesZone(container, attachZone)) {
+      console.warn(`[placement-attach] placement-name-vetoed: an ancestor of ${container.id} already offers zone "${attachZone}"; container anchor skipped (P3 §1.3)`)
+    } else {
+      container.addAnchor('container', attachZone, {}, hub.linkFor(attachZone, 'placement'))
+      containerAnchorMinted = true
+    }
+  }
+  return { containerAnchorMinted, attachZone }
+}
+
+/** P3 §1.2/10.ac.2 #7 — the trigger-identity derivation: a freshly minted
+ *  container anchor is a `container-added`; an ensured (already-present)
+ *  container with only new content anchors is a `content-added`. (`container-
+ *  removed` arrives with removal ops in later units — the direction union
+ *  already admits it.) */
+export function derivePlacementTrigger(linkName: string, containerAnchorMinted: boolean): PlacementTrigger {
+  return { kind: 'placement', linkName, direction: containerAnchorMinted ? 'container-added' : 'content-added' }
+}
+
 export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } {
   switch (op.kind) {
     case 'attach': {
@@ -93,6 +157,13 @@ export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } 
     case 'destroy': {
       toNode(op.node).destroy()
       return { doorways: [op.node.id] }
+    }
+    case 'placement-attach': {
+      const pa = op as PlacementAttachOp
+      const node = toNode(pa.node)
+      const container = toNode(pa.container)
+      placementAttach(node, container, pa.names, ctx.hub)
+      return { doorways: [container.id, node.id] }
     }
     case 'clone-instance': {
       const source = toNode(op.source)

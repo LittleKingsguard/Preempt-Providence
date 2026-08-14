@@ -139,6 +139,12 @@ layers). It keeps a small page-local `expandState` (mirroring the components
 demo — page logic, not render machinery) that maps compiled states →
 `MinimalElement`s and feeds core `diffMinimal`/`applyOps`. Fork arms wired
 `<nodeId>#<i>` (core `emitElements` convention) when a consumer forks.
+**P3 note (implemented):** the runtime page's child-creation names are
+DISTINCT per sibling slot (`.a`/`.b` — fork-stress-fixture.js:185-186), so
+no same-name fork actually fires on this page; the `<nodeId>#<i>` arm
+convention is the historical/edge shape — the `component-source-duplicate`
+guard (P3 §10.ab/§10.ae) removes the arm-generating case from shipped data,
+and placement multiplicity is path-keyed (`forkKey = pathKey`, no `#`).
 
 ## Harness checks (per page, in the browser runner + demo:smoke)
 
@@ -169,6 +175,17 @@ declared by NAME in the data — the page supplies the body) and assembles the
 whole 2^depth − 1 tree at runtime via the `clone-instance` op (each clone's
 inherited `after-compile` handler expands the next layer). Pages
 `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` with the same depth set.
+
+**Static twin (placement-path-spec §5 — Unit 11, shipped alongside):** the
+same topology is re-expressed WITHOUT clone-instance assembly — the
+`demo/path-fork-data.*` page compiles the 22 prototypes + root through the
+path-enumeration compile mode (`compilePath`): `placementName` producer /
+`targetPlacement: string[]` consumer declarations in the legacy envelope,
+ONE enumeration bootstrap → 4095 path-states pinned to 23 nodes (census
+23/4095/0/0, cloneOps=0). The four-mechanism cycle doc above describes the
+RUNTIME page (kept — placement-path-spec §9-Q4: both pages ship); the
+runtime page's census asserts are re-pinned per §5.2 F-13 (in-tree =
+2^depth − 1 + prototypes, unplaced = 0).
 
 ## Validation (AGENTS.md item 4)
 

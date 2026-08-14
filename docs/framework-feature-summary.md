@@ -74,7 +74,7 @@ in `demo/feature-showcase.html` (see §5).
 | C1 | **Two-pass compile** (sync pass-1 + async pass-2, `focusedSliceFor`/slices, walk-path-only) | Fast first paint + cheap focused updates; only the affected slice re-resolves | `node.md` §8, `compile-horizon-review.md` |
 | C2 | **Component `target`/`source`/`duplex` anchors** | Shared look/behavior: a "product card" consumer resolves a themed source; value-bearing sources feed text; duplex = provide-and-consume (runtime anchors only — legacy `component.target` is the LOCAL apply path `props.<key>`, never a second component name; the two-name duplex anchor shape is legacy-unexpressible, K1–K8, `translate.md` §2.1) | `translate.md` §2, `api.md` §4 |
 | C3 | **Forking (same-name multiplicity → N actionable arms)** | "Who's on shift" feeds: two duty rosters provide the same reference; the panel shows both | `api.md` §4.2, `derived-state.md` |
-| C4 | **Placement anchors + zone assembly (`attach`/`clone-instance`)** | Register regions by name (header/sidebar/comments) and mount payload content into them | `pipeline.md` §1.2, `api.md` §5 |
+| C4 | **Placement: two-sided roles on the per-name zone-registry Link + static path multiplicity** (`placementName` → `container` anchor; `targetPlacement: string[]` → ordered `content` anchors; `placement-attach` op for post-render placement) | Register regions by name (header/sidebar/comments) and mount payload content into them — legacy-faithful static placement: one source fans out to every zone of the first-matched name, one path-state per (node, path-to-root) (`forkKey = pathKey`, no `#<i>`), or post-render via the dedicated op | `pipeline.md` §1.2/§3, `api.md` §5, `placement-path-spec.md` §1-§3 |
 | C5 | **Fail-states: `unresolved-reference` + `circular-source`** | A missing provider never hangs the page; the node renders its own state; loop warnings are diagnostics | `api.md` §4.3 |
 | C6 | **Loop safety (borrow walk, circular drop)** | A provider chain that loops back on itself (a partner site referencing back) can't infinitely recurse | `api.md` §4.2, loop-safety demo, showcase loop pair (§5) |
 
@@ -120,7 +120,8 @@ channel, K5/N1 reverse round-trips).
 
 - Single mutation channel; **no direct field writes** anywhere else
   (handlers.md §2).
-- Two-scope compile; phase ordering `before-compile → op → pass-2 →
+- Three-scope compile (root-out deep / node-local / path enumeration);
+  phase ordering `before-compile → op → pass-2 →
   after-compile → events → after-render` (handlers.md §4).
 - Read-only compiled states: `getState`/`node.resolved` never drain the
   renderer snapshot; only `supervisor.takePass2States()` drains (handlers.md §2.1).

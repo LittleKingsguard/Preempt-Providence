@@ -34,8 +34,7 @@ concrete adapters **map ops to a host** — DOM (`HTMLElement`) or an SSR HTML s
 
 | In (from render.md) | Out (this spec) |
 | --- | --- |
-| `create`/`set`/`append`/`remove`/`styles` ops with `NodeRef` wires (optionally a `forkKey`, render.md §3.1) | DOM mutations (DomAdapter) / HTML string (SSRFragmentAdapter) |
-| `set` names namespaced verbatim: `prop:*`, `css:*`, `text`, `on:<event>` | attribute / text / style-block / listener decisions (§3, §4) |
+| `create`/`set`/`append`/`remove`/`styles` ops with `NodeRef` wires (optionally a `forkKey`, render.md §3.1) | DOM mutations (DomAdapter) / HTML string (SSRFragmentAdapter) || `set` names namespaced verbatim: `prop:*`, `css:*`, `text`, `on:<event>` | attribute / text / style-block / listener decisions (§3, §4) |
 | `hydrate(rootWire, vdom)` over the serialized doc (§5 SER, render.md §7) | `css.id` reuse seam (notes §5.1) |
 
 **The adapter is a pure consumer.** It holds **no compiled-state knowledge**: it never
@@ -50,7 +49,11 @@ created in **this** batch or a **prior** batch: node-local (render.md §4) diffs
 `set`-only on wires the adapter created earlier, so the adapter's **persistent
 `wires`/`fragments` map is the cross-batch resolution contract** (render.md §4, notes
 §10.10 in-place render). Fork-arm emissions additionally disambiguate via the optional
-`forkKey` on an op (render.md §3.1) — see §3/§4.
+`forkKey` on an op (render.md §3.1) — see §3/§4. **P3 §2.2/§4.1 (implemented):** the
+`forkKey` is now forwarded on EVERY `emitOne` branch (DEFECT #1 fix, P3 §4.3/§6.5) and
+equals the pathKey on every path-state — so path-states are distinct `(wire = pathKey,
+forkKey)` entries in the wire table by construction, and placement-path re-renders reuse
+elements through the same persistent-map diff.
 
 ---
 

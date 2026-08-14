@@ -400,7 +400,7 @@ text. No code changed in this pass.
 | AP2 | duplicate-target | DELIBERATE-EXCLUSION → block+warn (**FLIPPED from REDUNDANT** — Appendix E.1) | expressible post-K7 (array form); K8 pre-anchor guard `component-duplicate-target` (warn+skip). Legacy errors `[Node] Duplicate target component…` and LAST-wins; K2 synthesis FIRST-wins-silently — the flip resolves the old N2 decision divergence |
 | AP3 | array-on-type | recognition-only, folds into the N2 gap warn (Appendix E.1) | `isLinkDef` (render-helpers.ts:287-290) returns false for array values and the scalar path renders nothing — nothing REJECTS arrays, so no def-type rejection analog. Post-K8 the `component-target-gap` warn surfaces it |
 | AP4 | self-loops | REDUNDANT | circular-source + cycle rollback in the new engine |
-| AP5 | targetPlacement | DELIBERATE-EXCLUSION → block+warn (**FLIPPED from REDUNDANT** — Appendix E.1) | `component-target-placement` warn + field ignored (translate.md §2: unknown fields never rejected); placement pipeline is placementName-keyed — targetPlacement has no consumer seam; the targetPlacement FEED is a separate follow-up DECIDED (NP13, Appendix E.3) |
+| AP5 | targetPlacement | DELIBERATE-EXCLUSION → block+warn (**FLIPPED from REDUNDANT** — Appendix E.1) | `component-target-placement` warn + field ignored (translate.md §2: unknown fields never rejected); placement pipeline is placementName-keyed — targetPlacement has no consumer seam; the targetPlacement FEED is a separate follow-up DECIDED (NP13, Appendix E.3). **RESOLVED (placement-path-spec §1.1/§1.2 — the consumer seam EXISTS and is implemented):** `targetPlacement` mints ordered `content` anchors; the warn is removed |
 | AP6 | placement-bearing type-children | REDUNDANT | children of a node are stored on the node; no placement-bearing child store exists — seam absent |
 | AP7 | placeholder lookup | REDUNDANT (SAFE with caveat) | `value !== undefined` check has the value-set source-provider analog. Caveat: post-K1 the synthesized `bindings.<ref>` read resolves through the consumer's family walk — an UNPLACED payload provider is not in it (translate.md §2.1 placeholder caveat) |
 | AP8 | unmapped handler table | REDUNDANT | source-anchor wiring replaces the legacy table |
@@ -412,7 +412,7 @@ text. No code changed in this pass.
 | AP14 | DOM-input stash race | STILL-VALID | virtual tree is the source of truth; no DOM-input path |
 | AP15 | style edits | REDUNDANT | state-slice layers (`Css.merge`) |
 | AP16 | hardcoded parent jumps | STILL-VALID | getter still exists (node.parent); documented anti-pattern, no removal |
-| AP17 | template-content blur | STILL-VALID | hard consequence now: template.children stay unplaced content, dropped from compile (S1.1) — deliberate, documented (translate.md §2) |
+| AP17 | template-content blur | STILL-VALID | hard consequence now: template.children stay unplaced content, dropped from compile (S1.1) — deliberate, documented (translate.md §2). **P3 F-13 annotation:** with the contentNodes-ownership minting, template.children/content roots are family-'in-tree' (contentNodes-owned) at translate — the "unplaced" label is superseded; the token still terminates the compile walk (never rendered until a real parent edge or placement path) |
 
 ### D.2 New anti-patterns (NP1–NP13) — introduced by the translation seam
 
@@ -430,7 +430,7 @@ text. No code changed in this pass.
 | NP10 | root template.component asymmetry: value on a target anchor, never published (dead value) | translate.ts:256-261; publishOwn publishes source/duplex only (node.ts:643) |
 | NP11 | new Function at translate + non-function body throw | translate.md §2 handlers row (security gate noted); body neither string nor function throws |
 | NP12 | empty-name anchor / silent vacuous binding pre-K3 | translate.ts:209-223: `{reference:''}` anchors the empty name; `{}`/non-string silently no-op |
-| NP13 | targetPlacement translation gap: legacy content routing dead | translate.md §2: field ignored; placement anchors keyed by placementName only |
+| NP13 | targetPlacement translation gap: legacy content routing dead | translate.md §2: field ignored; placement anchors keyed by placementName only. **RESOLVED (placement-path-spec §1.2/§6.2 — the feed is implemented):** `targetPlacement` mints ordered `content` anchors; the interim warn is removed |
 
 ### D.3 Step-2 notes (N1–N7)
 
@@ -492,7 +492,14 @@ arbitrary):
 6. **Null injection (N3)** — key-present-null on the seam, or document the
    loss as accepted. TODO.
 7. **targetPlacement routing (NP13)** — interim keep-unplaced + warn is
-   DECIDED; feed wiring TODO.
+   DECIDED; feed wiring TODO. **SUPERSEDED (placement-path-spec §1.2/§6.2 —
+   implementation landed):** the feed is WIRED — `targetPlacement: string[]`
+   mints ordered `content` anchors at translate (the interim keep-unplaced +
+   `component-target-placement` warn is REMOVED), content roots receive the
+   contentNodes-ownership anchor (family-'in-tree', F-13), and the
+   path-enumeration compile resolves first-match-with-known-container.
+   AP5's "targetPlacement has no consumer seam" premise (Appendix D.1 row)
+   is likewise dead.
 8. **Reverse strip-on-reverse (N1)** — folded into K5; confirm at kernel
    implementation.
 
@@ -528,7 +535,7 @@ array): compile is blind — a duplicate target silently last-wins
 | NP2 array form | REQUIRED parity — graph-level N bindings per node + `props.<key>` apply paths only. Translate-only change: the engine already supports N component anchors per node (only `child` is restricted, `node.ts:416-419`) and compile cross-products multiple target names (`node.ts:651-666`, `resolve.ts:186-199`); today `translate.ts:209` + `template.component` `:257` skip arrays silently. Kernel **K7** |
 | NP5/NP9 emission-layer | object values bake `[object Object]` via `String()` coercion in both adapters — emission-layer parity gap, confirmed. Accepted for now; follow-up DECIDED (emission-layer object fix) |
 | N3 null (scoped) | null-injection loss confirmed: `applyDerived` omits null keys (`derived.ts:242-243`), `publishOwn` publishes null (`:644`) but the bake drops it. Accepted known gap; follow-up DECIDED |
-| NP13 feed | `targetPlacementResolution` phase exists (`pipeline.ts:78`) but translate never feeds it (`translate.ts:196-200` reads `placementName` only). Interim policy DECIDED: keep-unplaced + warn (`component-target-placement`); auto-attach at the boundary is a graph-mutation policy call, deferred to the kernel. Feed wiring = follow-up DECIDED |
+| NP13 feed | `targetPlacementResolution` phase exists (`pipeline.ts:78`) but translate never feeds it (`translate.ts:196-200` reads `placementName` only). Interim policy DECIDED: keep-unplaced + warn (`component-target-placement`); auto-attach at the boundary is a graph-mutation policy call, deferred to the kernel. Feed wiring = follow-up DECIDED. **RESOLVED (placement-path-spec §6.1 — the feed is implemented):** translate mints the consumer feed and the path-enumeration compile resolves it; the stage-1 registry row is no longer a dead promise (pipeline.md §1.2) |
 | N4 payload component | `ContentPayload.component` declared but never read (`translate.ts:277-290`) — payload-level bindings dropped at translate. Follow-up DECIDED |
 | N5 phase mapping | doc-level — legacy components.md Phase 3/4 vs PhaseRegistry 4/5, worker NAMES canonical; full lifecycle mapping is a documentation DECIDED |
 | NP6 placeholder semantics | modern semantics ARE the parity (unplaced provider not in family walk; in-tree same-name forks — api.md F4); documented, no machinery |

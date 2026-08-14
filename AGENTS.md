@@ -32,7 +32,19 @@ Context management guidelines for agents working in this repository:
    `total − Σ(measured sections)` dominating the total) means the supervisor
    pass-2 pipeline is scaling badly — the page profiler does NOT time
    pass-2 (RCA: docs/session-defect-review.md, fork-stress-data section).
-   Flag any regression before reporting completion.
+   Flag any regression before reporting completion. (The smoke ASSERTS a
+   looser 2.5× CI-safe bound, demo-smoke.mjs — the ~1.5× here is the human
+   watch; the asserted guard is the tripwire that catches pipeline
+   blow-ups.)
+   **Path-fork baseline (placement-path-spec §8 Q6 / §10.ad — implemented):**
+   the STATIC fork-stress page has no method variants — its single d12 total
+   is its OWN placement baseline, recorded by the smoke as
+   `[path-fork:baseline]` with the §8-Q6 re-baseline TODO marker (re-pin the
+   runtime guard after testing confirms no explosive time issues; the static
+   page's ONE path-enumeration bootstrap replaces the runtime page's 4094
+   per-node passes, so the guard's intent — no pass-2 explosion — is what
+   the path-fork totals must preserve). The runtime fork-stress pages keep
+   the ~1.5× method-ratio watch as before.
 
 5. **Specs and decision records**: behavior contracts live in
    `docs/specs/*.md`; design decisions are recorded in

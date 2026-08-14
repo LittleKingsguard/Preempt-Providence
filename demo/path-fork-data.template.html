@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — Path Fork (static): 22 prototypes, ONE path-enumeration pass</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <!--
+    ============================================================================
+    PATH FORK DEMO — the STATIC placement-path page (placement-path-spec §5).
+
+    The static re-expression of the fork-stress tree: the SAME 22-prototype
+    binary topology, compiled by the §2 path enumeration instead of runtime
+    clone-instance assembly:
+
+      • `preempt-initial-data` carries the LEGACY envelope: the root + TWO
+        prototype nodes per layer 1..11 (22 prototypes, 23 graph nodes).
+        Each prototype declares `placement: { placementName: 'zone-<k>' }`
+        (producer / 'container' side); layers ≥ 2 additionally declare
+        `placement: { targetPlacement: ['zone-<k-1>'] }` (consumer side —
+        the R2.2 sibling-shared owner-name topology: BOTH level-(k−1)
+        prototypes own the SAME zone name, so every level-(k+1) prototype
+        fans out over the two containers of its chosen name).
+      • The page pipeline is translate → register → ONE compilePath
+        bootstrap pass → emitElements / diffMinimal / applyOps (DomAdapter)
+        → render. NO clone-instance ops, NO after-compile expansion, NO
+        node creation beyond the prototypes (E2E-1 by construction):
+        Σ 2^k for k = 1..11 + root = 4095 path-states pinned to 23 nodes.
+      • The page uses ONLY core (dist/core/*) + the shared data-derivation
+        helpers (levelCss/cssPropForLevel — demo-only, NOT core APIs).
+      • The runtime fork-stress-data page (clone-based, after-compile
+        expansion) is KEPT alongside as the runtime proof
+        (placement-path-spec §5.1 — Q4: both ship).
+
+    Every path-state carries `stress:layer`/`stress:slot` (its level + slot)
+    and `data-depth`; `stress:expanded` is DERIVED from the path-state's own
+    children (path-derived, §2.3) — true for non-leaves, false for leaves.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>Path Fork (static) — 23 nodes → <code>2<sup>12</sup> − 1 = 4095</code> path-states in ONE compile pass</h1>
+    <p class="goals">
+      The fork-stress binary topology WITHOUT clones: two prototypes per layer,
+      1..11, each declaring its placement zone (<code>placementName</code>) and
+      the level above's shared zone name (<code>targetPlacement</code>). The
+      path enumeration (§2) mints one state per (prototype, owner-path) pair —
+      4095 states from 23 graph nodes, <code>forkKey = pathKey</code> on every
+      state. The checks assert the static census (registered=23, in-tree=23,
+      unplaced=0, cloneOps=0), per-level element counts (2^k at level k),
+      the binary shape via <code>treeFromOps</code>, css per-level property +
+      slot pairs, derived <code>stress:expanded</code> idempotency, and PAR-5
+      structural parity with the builder's SSRFragmentAdapter output (hashed
+      shape signature + truncated sample — the full fragment is never embedded).
+    </p>
+
+    <!-- Framework input: the LEGACY envelope (translateLegacy input — NOT a
+         serialized anchor document; placement-path-spec §5.1). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section>
+      <h2>Static placement-path tree (live DOM)</h2>
+      <p class="expect">
+        Every element is framework-rendered from path-states: one element per
+        (prototype, path-to-root) pair — 4095 elements, wires = pathKeys.
+      </p>
+      <div id="app"></div>
+    </section>
+
+    <section>
+      <h2>Expected server fragment (SSRFragmentAdapter — PAR-5)</h2>
+      <p class="expect">
+        The builder renders the same envelope through the real
+        <code>SSRFragmentAdapter</code>; the live DOM must produce the same
+        structural shape signature (wire-agnostic — the page re-translates the
+        legacy envelope, so node ids are mint-time artifacts and the parity is
+        key-free: type + props + binary children structure). The full
+        4095-element fragment is ~180MB (nested binary tree) and is NOT
+        embedded; this section shows a truncated sample.
+      </p>
+      <div class="frame" id="expected">__SR_EXPECTED__</div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="path-fork-data.js"></script>
+</body>
+</html>

@@ -18,7 +18,7 @@ import { SingleParentError } from './errors.js'
 import { Link } from './link.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
 import { registerNode, scheduleSweep, markPending, resolveNodeRef } from './registry.js'
-import { resolveArms } from './resolve.js'
+import { resolveArms, resolvePathTargets } from './resolve.js'
 import { logCompilePass, compilePassLogEnabled } from './debug.js'
 import { validateDerived, applyDerived } from './derived.js'
 
@@ -55,6 +55,186 @@ function chainTokenKind(target: string): ChainKind {
 
 function chainSliceRule(node: Node, slice: ReadonlySet<NodeId>): ChainKind {
   return slice.has(node.id) ? { kind: 'slice-root' } : { kind: 'unplaced' }
+}
+
+/** One placement-path walk: the hop chain from the compiled node toward root
+ *  (bottom-up: hops[0] is the node's OWN hop) plus the terminal kind. */
+interface PathWalk {
+  terminal: 'root' | 'token' | 'loop' | 'no-edge'
+  token?: string
+  hops: Array<{ zone?: string; owner: Node }>
+  loopKey?: string
+}
+
+/** The node's family-parent token ('rootNode' / 'component' / 'contentNodes')
+ *  when its own child anchor's link carries a string parent target. The tree
+ *  root is UNIQUELY the node whose own family parent is the 'rootNode' token
+ *  (family children of the root always resolve their parent-anchor target to
+ *  the root NODE object — the token lives only on the root's own link). */
+function familyParentTokenOf(node: Node): string | null {
+  const child = node.childAnchor()
+  if (!child) return null
+  const pa = linkOf(child).anchorsOf('parent')[0]
+  if (!pa || typeof pa.target !== 'string') return null
+  return pa.target
+}
+
+/** Placement-path enumeration (P3 §2.1): walk BOTH edge kinds toward root —
+ *  family edges (single branch; the SI-1 single parent) and placement edges
+ *  (each `content` anchor → its per-name placement Link → every
+ *  `container`-role producer anchor → its owner node — one branch per zone).
+ *  Termination: 'rootNode' token ⇒ viable; 'component'/'contentNodes' token
+ *  or a dead edge ⇒ non-viable; a per-walk `seen` revisit ⇒ loop. The visit
+ *  set is per-branch, never shared across walks (§1.4). `segs` accumulates
+ *  the root-down key segments for the loop diagnostic. */
+function enumPathWalks(node: Node, seen: Set<NodeId>, segs: string[]): PathWalk[] {
+  const out: PathWalk[] = []
+  const child = node.childAnchor()
+  const parentAnchor = child ? linkOf(child).anchorsOf('parent')[0] : undefined
+  if (!child || !parentAnchor) {
+    out.push({ terminal: 'no-edge', hops: [] })
+  } else {
+    const target = parentAnchor.target
+    if (typeof target === 'string') {
+      out.push({ terminal: target === 'rootNode' ? 'root' : 'token', token: target, hops: [] })
+    } else if (target !== null) {
+      const owner = target as Node
+      if (owner.destroyed) {
+        out.push({ terminal: 'no-edge', hops: [] })
+      } else if (seen.has(owner.id)) {
+        out.push({ terminal: 'loop', hops: [], loopKey: `root/${[...segs, owner.id].join('/')}` })
+      } else {
+        const next = new Set(seen)
+        next.add(owner.id)
+        for (const w of enumPathWalks(owner, next, [...segs, owner.id])) {
+          out.push(extendWalk(w, { owner }))
+        }
+      }
+    } else {
+      out.push({ terminal: 'no-edge', hops: [] })
+    }
+  }
+  for (const a of node.anchors) {
+    if (a.role !== 'content') continue
+    for (const coa of linkOf(a).anchors) {
+      if (coa.role !== 'container' || typeof coa.target !== 'string') continue
+      const owner = coa.owner
+      if (!owner || owner.destroyed) continue
+      const zone = coa.target
+      if (seen.has(owner.id)) {
+        out.push({ terminal: 'loop', hops: [], loopKey: `root/${[...segs, zone, owner.id].join('/')}` })
+        continue
+      }
+      const next = new Set(seen)
+      next.add(owner.id)
+      for (const w of enumPathWalks(owner, next, [...segs, zone, owner.id])) {
+        out.push(extendWalk(w, { zone, owner }))
+      }
+    }
+  }
+  return out
+}
+
+/** Prepend one hop onto a child walk, preserving its terminal kind. */
+function extendWalk(w: PathWalk, hop: PathWalk['hops'][number]): PathWalk {
+  const out: PathWalk = { terminal: w.terminal, hops: [hop, ...w.hops] }
+  if (w.token !== undefined) out.token = w.token
+  if (w.loopKey !== undefined) out.loopKey = w.loopKey
+  return out
+}
+
+/** The zone name of a walk's FIRST hop — the compiled node's own placement
+ *  hop, i.e. the requested name that routed this branch (undefined for
+ *  family-first walks). */
+function firstHopZone(w: PathWalk): string | undefined {
+  return w.hops[0]?.zone
+}
+
+/** P3 §1.2 — preference-ordered first-match (resolve-side pruning): the MOST
+ *  PREFERRED `content` anchor name in the compiled node's OWN ordered request
+ *  list (the anchors array preserves targetPlacement order, §1.1) whose
+ *  per-name placement Link has at least one container owner with a
+ *  root-viable walk. Names before it with no viable container are skipped
+ *  (not fatal); names after it are NEVER consulted; null ⇒ a whole-array
+ *  miss — nothing forks. Unit 4 enumerated all valid paths; this prunes the
+ *  compiled node's own request to the chosen name's branches (intermediate
+ *  walk hops keep walking ALL their edges — the R2.2 sibling-shared census
+ *  depends on the fan-out). */
+function chosenPlacementName(node: Node, walks: PathWalk[]): string | null {
+  const names: string[] = []
+  for (const a of node.anchors) {
+    if (a.role !== 'content' || typeof a.target !== 'string') continue
+    names.push(a.target)
+  }
+  if (names.length === 0) return null
+  const rootViable = new Set<string>()
+  for (const w of walks) {
+    if (w.terminal !== 'root') continue
+    const zone = firstHopZone(w)
+    if (zone !== undefined) rootViable.add(zone)
+  }
+  for (const name of names) {
+    if (rootViable.has(name)) return name
+  }
+  return null
+}
+
+/** §2.2 pathKey: 'root/<zone>/<ownerId>/…/<nodeId>' — the family path back to
+ *  root interleaved with the zone names that routed each hop, terminating at
+ *  the node's own id. Each placement hop contributes '/<zone>/<ownerId>';
+ *  family hops contribute '/<ownerId>'; the hop landing on the ROOT node
+ *  contributes nothing (the 'root' prefix IS the root). The root node's own
+ *  key is 'root' — the root is the only node whose family parent is the
+ *  'rootNode' token, so no other node can collide. */
+function pathKeyFor(node: Node, walk: PathWalk): string {
+  if (familyParentTokenOf(node) === 'rootNode') return 'root'
+  const segs: string[] = []
+  for (let i = walk.hops.length - 1; i >= 0; i -= 1) {
+    const h = walk.hops[i]!
+    if (familyParentTokenOf(h.owner) === 'rootNode') continue
+    segs.push(h.zone !== undefined ? `${h.zone}/${h.owner.id}` : h.owner.id)
+  }
+  return `root/${[...segs, node.id].join('/')}`
+}
+
+/** §2.3 path-derived children for a path-state: the node ids of the
+ *  level-(k+1) states whose owner-path extends this path by one level —
+ *  the node's own family children plus every node that routes a content
+ *  anchor into one of the node's container zones. A consumer whose extended
+ *  walk would revisit a node already on the path is a loop arm and is NOT a
+ *  child. Pure graph derivation — never recompiles the child states (E2E-2). */
+function pathChildrenFor(node: Node, pathNodes: ReadonlySet<NodeId>): NodeId[] {
+  const out: NodeId[] = []
+  const seen = new Set<NodeId>()
+  for (const kid of node.children) {
+    seen.add(kid.id)
+    out.push(kid.id)
+  }
+  for (const a of node.anchors) {
+    if (a.role !== 'container' || typeof a.target !== 'string') continue
+    for (const cna of linkOf(a).anchors) {
+      if (cna.role !== 'content') continue
+      const owner = cna.owner
+      if (!owner || owner === node || seen.has(owner.id) || pathNodes.has(owner.id)) continue
+      seen.add(owner.id)
+      out.push(owner.id)
+    }
+  }
+  return out
+}
+
+/** Seed a bindings record with the node's OWN published provider values
+ *  (source/duplex anchors): `bindings[name] = anchor.value` when the value is
+ *  set and the name is not already present (skip-if-present — a resolved/
+ *  consumed value or a same-name duplex resolution wins). Consumed-first key
+ *  order is preserved (own names are appended only). */
+function seedOwnBindings(node: Node, bindings: Record<string, unknown>): void {
+  for (const a of node.anchors) {
+    if (typeof a.target !== 'string') continue
+    if ((a.role === 'source' || a.role === 'duplex') && a.value !== undefined) {
+      if (bindings[a.target] === undefined) bindings[a.target] = a.value
+    }
+  }
 }
 
 /** Phase-B parent-chain walk (compile-horizon §6.1/§6.2): follows parent-anchor
@@ -183,10 +363,10 @@ export class Node {
           continue
         }
         if (role === 'parent') continue
-        const link = new Link({ name: role === 'placement' ? 'placement' : role === 'source' || role === 'target' || role === 'duplex' ? 'component' : 'parent-child' })
+        const link = new Link({ name: role === 'container' || role === 'content' ? 'placement' : role === 'source' || role === 'target' || role === 'duplex' ? 'component' : 'parent-child' })
         try {
           const a = this.addAnchor(role, target as AnchorTarget, sa.options as Anchor['options'], link)
-          if (sa.value !== undefined) a.value = sa.value
+          if (a !== null && sa.value !== undefined) a.value = sa.value
         } catch {
         }
       }
@@ -378,7 +558,7 @@ export class Node {
         const copyAnchor = copy.addAnchor(a.role, a.target as AnchorTarget, { ...a.options }, fresh)
         // provider values ride along (a clone of a data-declared provider is
         // itself a provider — same convention as hydrateAnchor)
-        if (a.value !== undefined) copyAnchor.value = a.value
+        if (copyAnchor !== null && a.value !== undefined) copyAnchor.value = a.value
       } catch {
         // unmaterializable profile entries are skipped
       }
@@ -410,12 +590,50 @@ export class Node {
     this.dirty.add(scope)
   }
 
-  addAnchor(role: Role, target: AnchorTarget | string, options: Anchor['options'], link: Link): Anchor {
+  addAnchor(role: Role, target: AnchorTarget | string, options: Anchor['options'], link: Link): Anchor | null {
     this.ensureWritable()
+    // P3 §2.2/§10.ab/ae — component-source-duplicate guard, UNCONDITIONAL
+    // (no seed-path opt-out, §10.ae): a SECOND same-name source/duplex
+    // anchor on ONE node is the unsupported anti-pattern (the fork claim is
+    // dead — identity = pathKey alone). Warn `component-source-duplicate`,
+    // keep-first, skip-second. Covers the imperative path, the constructor
+    // seed path (serialized docs), and materializeAnchors — the decl-path
+    // dedup there (same role+target ⇒ skip BEFORE addAnchor) is
+    // complementary and stays the single pre-filter for idempotent layer
+    // re-application; the guard is the single ENFORCEMENT point for
+    // everything that reaches addAnchor. source and duplex share one
+    // provider namespace (resolve's providersOn + the legacy K8
+    // reference-keyed guard), so the match is name-keyed across both roles.
+    if ((role === 'source' || role === 'duplex') && typeof target === 'string') {
+      const existing = this.anchors.find(
+        a =>
+          (a.role === 'source' || a.role === 'duplex') &&
+          typeof a.target === 'string' &&
+          a.target === target,
+      )
+      if (existing) {
+        console.warn('component-source-duplicate at', this.id, role, target)
+        return null
+      }
+    }
     const anchor: Anchor = { role, target: target as AnchorTarget, options: { ...options }, link, owner: this }
     if (role === 'child') {
       const existing = this.childAnchor()
-      if (existing) throw new SingleParentError(this.id)
+      if (existing) {
+        // The contentNodes permanent-owner token (minted at translate, P3
+        // §10.ad/F-13) is a PLACEHOLDER family edge: a real parent edge
+        // supersedes it — "attach adds a placement path to an already
+        // in-tree content root" (placement-path-spec F-13 re-verification).
+        // The single-parent invariant is preserved: the token is not a real
+        // parent, so the node always has exactly one family parent.
+        // (destroy() bypasses the parent-child link's min-1 child count —
+        // the placeholder edge dissolves as a whole.)
+        if (linkOf(existing).anchorsOf('parent')[0]?.target === 'contentNodes') {
+          linkOf(existing).destroy()
+        } else {
+          throw new SingleParentError(this.id)
+        }
+      }
     }
     link.addAnchor(anchor)
     this.anchors.push(anchor)
@@ -637,13 +855,13 @@ export class Node {
       unresolved: [],
     })
 
+    /** Seed a bindings record with the node's OWN published provider values
+     *  (source/duplex anchors): `bindings[name] = anchor.value` when the
+     *  value is set and the name is not already present (skip-if-present —
+     *  a resolved/consumed value or a same-name duplex resolution wins).
+     *  Consumed-first key order is preserved (own names are appended only). */
     const publishOwn = (node: Node, cs: CompiledState): void => {
-      for (const a of node.anchors) {
-        if (typeof a.target !== 'string') continue
-        if ((a.role === 'source' || a.role === 'duplex') && a.value !== undefined) {
-          if (cs.bindings[a.target] === undefined) cs.bindings[a.target] = a.value
-        }
-      }
+      seedOwnBindings(node, cs.bindings)
     }
 
     for (const node of slice) {
@@ -676,6 +894,15 @@ export class Node {
         }
         const cs = makeCs(node)
         cs.bindings = arm.bindings
+        // engine-defect #1 fix: a target-bearing node's arms carry only the
+        // CONSUMED names — seed the node's OWN provider values per arm so the
+        // K2 synthesized `bindings.<own-ref>` reads (self-apply) and authored
+        // `bindings.*` reads resolve on a LEGAL mixed node (consume A + provide
+        // B + self-apply B). Skip-if-present: a same-name resolved/duplex
+        // value wins; own values are node-static so every arm gets the same
+        // seed (per-arm determinism, docs/test-findings §"Stress-test review
+        // loop #2" DEFECT #1).
+        seedOwnBindings(node, cs.bindings)
         cs.unresolved = arm.unresolved
         if (arm.trace.length > 0) cs.trace = arm.trace
         if (arm.keys.length > 0) {
@@ -699,6 +926,106 @@ export class Node {
     }
 
     return { actionable, dropped, warnings }
+  }
+
+  /**
+   * Placement-path enumeration compile mode (P3 §2 — the third compile
+   * scope). For a placement-routed node (one carrying `content` anchors), or
+   * the root, enumerate every valid (node, owner-path) pair toward root —
+   * placement edges (content anchor → per-name placement Link → each
+   * container-role producer anchor → its owner) plus family edges — and mint
+   * ONE CompiledState per viable path. §1.2 preference-ordered first-match
+   * prunes the compiled node's OWN request to the chosen name's branches
+   * (names after it are never consulted; names before it with no viable
+   * container are skipped); every zone of the chosen name fans out. `forkKey`
+   * = `pathKey` on every path-state (§2.2); `activePlacement` = the chosen
+   * name (§2.5); component targets resolve path-only (Q8). Loop-terminated
+   * paths drop with a `circular-source` warning; token/no-edge-terminated
+   * paths drop silently (§2.4 arm disposition). Path-derived children attach
+   * at mint time (§2.3).
+   */
+  compilePath(): CompileResult {
+    const actionable: CompiledState[] = []
+    const dropped: CompileResult['dropped'] = []
+    const warnings: CompileResult['warnings'] = []
+    if (this.destroyed) {
+      return { actionable, dropped: [{ arm: [this.id], reason: 'owner-terminated' }], warnings }
+    }
+    this.compileLocal()
+    const walks = enumPathWalks(this, new Set<NodeId>([this.id]), [])
+    // §1.2 first-match: only the CHOSEN name's placement branches are ever
+    // consulted — later names are pruned SILENTLY (no drops, no warnings);
+    // family-first walks and the chosen name's own branches pass through
+    const chosen = chosenPlacementName(this, walks)
+    for (const w of walks) {
+      if (chosen !== null) {
+        const firstZone = firstHopZone(w)
+        if (firstZone !== undefined && firstZone !== chosen) continue
+      }
+      if (w.terminal === 'loop') {
+        const at = w.loopKey ?? this.pathKey
+        warnings.push({ code: 'circular-source', pathKey: at })
+        console.warn('circular-source at', at)
+        dropped.push({ arm: [this.id], reason: 'loop' })
+        continue
+      }
+      if (w.terminal === 'token') {
+        dropped.push({ arm: [this.id], reason: w.token === 'component' ? 'prototype-terminated' : 'owner-terminated' })
+        continue
+      }
+      if (w.terminal !== 'root') {
+        dropped.push({ arm: [this.id], reason: 'owner-terminated' })
+        continue
+      }
+      actionable.push(this.mintPathState(w))
+    }
+    return { actionable, dropped, warnings }
+  }
+
+  private mintPathState(walk: PathWalk): CompiledState {
+    const pathKey = pathKeyFor(this, walk)
+    const pathNodes = new Set<NodeId>([this.id, ...walk.hops.map(h => h.owner.id)])
+    const cs: CompiledState = {
+      nodeId: this.id,
+      pathKey,
+      // §2.2: forkKey = pathKey on EVERY path-state, unconditionally
+      forkKey: pathKey,
+      // §2.5: activePlacement — the CHOSEN name = the zone name of the
+      // state's own first placement hop. Never authored; absent on
+      // non-placement (family-first) states. (Derived `placement` root reads
+      // it per-path — derived.ts §2.3 wiring is a later unit.)
+      ...(firstHopZone(walk) !== undefined ? { activePlacement: firstHopZone(walk)! } : {}),
+      // §9-Q3: the per-path event trace — the path's node ids, root-down
+      // (hops are bottom-up; the root landing contributes nothing). The
+      // supervisor's "path-state ⇒ emit {forkKey, nodeIds}" fork payload
+      // reads this (no `#f`-grammar dependency — C-6 re-expression).
+      trace: [...walk.hops.map(h => h.owner.id).reverse(), this.id],
+      // honest label: the NODE's derived state, never hardcoded — viability
+      // is a property of the path, not the family label (§2.4)
+      state: this.state,
+      type: this.type,
+      props: this.props,
+      css: this.css,
+      content: this.content,
+      anchors: this.anchors,
+      // the path's parent: the landing owner of the node's first hop
+      parent: walk.hops.length > 0 ? walk.hops[0]!.owner.id : null,
+      // §2.3: path-derived children attach at mint time (graph-derived,
+      // never recompiling the child states)
+      children: pathChildrenFor(this, pathNodes),
+      bindings: {},
+      unresolved: [],
+    }
+    // §2.5/Q8 — per-path component-target resolution: the state's own node
+    // first, then ITS path's ancestors (nearest-wins, ≤1 hit per name per
+    // path; never the family chain beyond the path)
+    resolvePathTargets(this, walk.hops.map(h => h.owner), cs.bindings, cs.unresolved)
+    // provider seeding for the node's own published values (path-states carry
+    // their node's sources; skip-if-present — a resolved path binding wins)
+    seedOwnBindings(this, cs.bindings)
+    // derived bake: reads the path-state's own children/pathKey
+    cs.props = applyDerived(this, cs) ?? cs.props
+    return cs
   }
 
   applySlice(mutation: LayerMutationList, sourceName?: string): void {
@@ -767,12 +1094,12 @@ export class Node {
         continue
       }
       let link: Link
-      if (role === 'placement' || typeof decl.target === 'string') {
+      if (role === 'container' || role === 'content' || typeof decl.target === 'string') {
         const key = typeof decl.target === 'string' ? decl.target : 'slot'
-        const fromHub = this.hub?.linkFor(key, role === 'placement' ? 'placement' : 'component')
+        const fromHub = this.hub?.linkFor(key, role === 'container' || role === 'content' ? 'placement' : 'component')
         link = fromHub
           ? (fromHub as unknown as Link)
-          : new Link({ name: role === 'placement' ? 'placement' : 'component' })
+          : new Link({ name: role === 'container' || role === 'content' ? 'placement' : 'component' })
       } else {
         link = new Link({ name: 'component' })
       }

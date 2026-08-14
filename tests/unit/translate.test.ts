@@ -95,13 +95,15 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(pane.children[0]!.content).toBe('nested')
   })
 
-  it('template.children + content payloads become UNPLACED content nodes, never root children', () => {
+  it('template.children + content payloads become contentNodes-owned content roots (family in-tree, never root children)', () => {
     const t = translateLegacy(legacyDoc())
     // template.children (hero) + payload item (card)
     expect(t.content.map((c: NodeType) => c.type)).toEqual(['hero', 'card'])
     for (const c of t.content) {
+      // contentNodes permanent-owner minting (P3 §10.ad/F-13): family-wise
+      // the roots are 'in-tree' via the token — never 'unplaced'
       expect(c.parent).toBeNull()
-      expect(c.state).toBe('unplaced')
+      expect(c.state).toBe('in-tree')
     }
     // root children are ONLY the root's own default children
     expect(t.root.children.map((c: NodeType) => c.type)).toEqual(['header', 'pane'])
@@ -502,29 +504,33 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     })
   })
 
-  describe('K8 — targetPlacement on a component-bearing node warns (field ignored)', () => {
-    it('warns component-target-placement when a binding exists', () => {
+  describe('P3 — targetPlacement mints content anchors even on component-bearing nodes (interim warn removed)', () => {
+    it('targetPlacement: string[] on a component-bearing node MINTS ordered content anchors, no warning', () => {
       const t = translateLegacy({
         template: {
           root: {
             type: 'app',
-            placement: { placementName: 'zone', targetPlacement: 'somewhere' },
+            placement: { placementName: 'zone', targetPlacement: ['somewhere', 'elsewhere'] },
             component: { reference: 'a', value: 1 },
           },
         },
         content: [],
       })
       expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
-      expect(t.warnings).toEqual([{ code: 'component-target-placement', path: 'root' }])
-      // placementName still materializes
-      expect(t.root.anchors.find((a) => a.role === 'placement')).toBeDefined()
+      // placementName still materializes — as a 'container' role anchor (P3 §1.1)
+      expect(t.root.anchors.find((a) => a.role === 'container')).toBeDefined()
+      // and the preference list mints its content anchors in order (the old
+      // component-target-placement ignore-warn is REMOVED — §6.1 NP13/AP5)
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['somewhere', 'elsewhere'])
+      expect(t.warnings).toEqual([])
     })
 
-    it('no warning without a component binding', () => {
+    it('no component binding: targetPlacement mints content anchors with no warning', () => {
       const t = translateLegacy({
-        template: { root: { type: 'app', placement: { targetPlacement: 'somewhere' } } },
+        template: { root: { type: 'app', placement: { targetPlacement: ['somewhere'] } } },
         content: [],
       })
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['somewhere'])
       expect(t.warnings).toEqual([])
     })
   })
@@ -655,12 +661,12 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(again.warnings).toEqual([])
   })
 
-  it('materializes placement configs as placement anchors', () => {
+  it('materializes placement configs as container anchors', () => {
     const t = translateLegacy(legacyDoc())
     const card = t.content[1]!
-    const placement = card.anchors.find((a) => a.role === 'placement')!
-    expect(placement).toBeDefined()
-    expect(placement.target).toBe('slot-alpha')
+    const container = card.anchors.find((a) => a.role === 'container')!
+    expect(container).toBeDefined()
+    expect(container.target).toBe('slot-alpha')
   })
 
   it('carries legacy handlers onto the translated nodes', () => {
@@ -686,9 +692,10 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(t2.clientConfig).toEqual({ adapter: 'dom', persistence: false })
   })
 
-  it('unplaced content nodes are not actionable until placed; root subtree compiles', () => {
+  it('contentNodes-owned content roots are not actionable until placed; root subtree compiles', () => {
     const t = translateLegacy(legacyDoc())
-    // content nodes are unplaced → dropped from compile (S1.1)
+    // content roots are family-in-tree (token) but the token terminates the
+    // compile walk → dropped (P3 §2.4); root + its own children are actionable
     const res = t.root.compile(t.nodes)
     const droppedIds = res.dropped.map((d) => d.arm[0])
     for (const c of t.content) expect(droppedIds).toContain(c.id)
@@ -768,7 +775,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     const shellLink = h.linkFor('shell', 'component')
     expect(shellLink.anchorsOf('target')).toHaveLength(1)
     const slotLink = h.linkFor('slot-alpha', 'placement')
-    expect(slotLink.anchorsOf('placement')).toHaveLength(1)
+    expect(slotLink.anchorsOf('container')).toHaveLength(1)
     void t
   })
 
@@ -778,5 +785,146 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(t.nodes).toHaveLength(1)
     expect(t.content).toHaveLength(0)
     expect(t.warnings).toEqual([])
+  })
+
+  describe('P3 — contentNodes-ownership minting (translate-global)', () => {
+    it('content payload roots + template.children roots carry the contentNodes parent anchor (family in-tree)', () => {
+      const t = translateLegacy(legacyDoc())
+      // template.children (hero) + payload item (card)
+      expect(t.content.map((c: NodeType) => c.type)).toEqual(['hero', 'card'])
+      for (const c of t.content) {
+        // the contentNodes permanent-owner token labels content roots
+        // 'in-tree' at the FAMILY level (node.ts:213) — never 'unplaced'
+        expect(c.state).toBe('in-tree')
+        const child = c.childAnchor()
+        expect(child).not.toBeNull()
+        const parentAnchor = child!.link.anchorsOf('parent')[0]
+        expect(parentAnchor).toBeDefined()
+        expect(parentAnchor!.target).toBe('contentNodes')
+      }
+      // nested children inside a content node still attach within it
+      expect(t.content[1]!.children.map((c: NodeType) => c.type)).toEqual(['title'])
+      expect(t.warnings).toEqual([])
+    })
+
+    it('contentNodes-owned roots are family-in-tree but NOT compiled (token terminates the walk)', () => {
+      const t = translateLegacy(legacyDoc())
+      const res = t.root.compile(t.nodes)
+      const actionableIds = res.actionable.map((s) => s.nodeId)
+      for (const c of t.content) expect(actionableIds).not.toContain(c.id)
+      const droppedIds = res.dropped.map((d) => d.arm[0])
+      for (const c of t.content) expect(droppedIds).toContain(c.id)
+    })
+  })
+
+  describe('P3 — ordered content anchors from targetPlacement: string[]', () => {
+    it('mints one content anchor per requested name, in preference order', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { targetPlacement: ['zone-b', 'zone-a', 'zone-c'] } } },
+        content: [],
+      })
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['zone-b', 'zone-a', 'zone-c'])
+      expect(t.warnings).toEqual([])
+    })
+
+    it('content anchors land on the shared per-name placement Link', () => {
+      const h = hub()
+      const t = translateLegacy(
+        { template: { root: { type: 'app', placement: { targetPlacement: ['zone-b', 'zone-a'] } } }, content: [] },
+        { hub: h },
+      )
+      const linkB = h.linkFor('zone-b', 'placement')
+      const linkA = h.linkFor('zone-a', 'placement')
+      expect(linkB.anchorsOf('content')).toHaveLength(1)
+      expect(linkA.anchorsOf('content')).toHaveLength(1)
+      void t
+    })
+
+    it('preference order survives the serialize round-trip (content anchors excluded from the target sort)', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { targetPlacement: ['zone-b', 'zone-a', 'zone-c'] } } },
+        content: [],
+      })
+      const doc = serializeSlice(t.root, t.nodes, t.clientConfig)
+      const seeded = loadState(JSON.parse(JSON.stringify(doc)))
+      const node = new Node(seeded[0]!, hub())
+      expect(node.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['zone-b', 'zone-a', 'zone-c'])
+    })
+
+    it('back-compat: the old single-string targetPlacement is coerced to [string] with a warn', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { targetPlacement: 'zone-a' as never } } },
+        content: [],
+      })
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['zone-a'])
+      expect(t.warnings).toEqual([{ code: 'placement-string-coerced', path: 'root' }])
+    })
+
+    it('placementName (container) + targetPlacement (content) coexist on one node', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { placementName: 'my-zone', targetPlacement: ['zone-b', 'zone-a'] } } },
+        content: [],
+      })
+      expect(t.root.anchors.filter((a) => a.role === 'container').map((a) => a.target)).toEqual(['my-zone'])
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['zone-b', 'zone-a'])
+      expect(t.warnings).toEqual([])
+    })
+
+    it('targetPlacement on a component-bearing node now MINTS (the interim component-target-placement warn is gone)', () => {
+      const t = translateLegacy({
+        template: {
+          root: {
+            type: 'app',
+            placement: { placementName: 'zone', targetPlacement: ['somewhere'] },
+            component: { reference: 'a', value: 1 },
+          },
+        },
+        content: [],
+      })
+      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+      expect(t.root.anchors.filter((a) => a.role === 'container').map((a) => a.target)).toEqual(['zone'])
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['somewhere'])
+      expect(t.warnings).toEqual([])
+    })
+  })
+
+  describe('P3 — #-validation at the placement minting site (placement-name-invalid)', () => {
+    it('a placementName containing # warns and the container anchor is skipped', () => {
+      const t = translateLegacy({ template: { root: { type: 'app', placement: { placementName: 'bad#zone' } } }, content: [] })
+      expect(t.root.anchors.filter((a) => a.role === 'container')).toEqual([])
+      expect(t.warnings).toEqual([{ code: 'placement-name-invalid', path: 'root' }])
+    })
+
+    it('a targetPlacement name containing # warns and ONLY that binding is skipped', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { targetPlacement: ['ok-zone', 'bad#zone', 'ok-zone-2'] } } },
+        content: [],
+      })
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['ok-zone', 'ok-zone-2'])
+      expect(t.warnings).toEqual([{ code: 'placement-name-invalid', path: 'root' }])
+    })
+  })
+
+  describe('P3 — activePlacement is derived, never authored', () => {
+    it('an authored activePlacement produces NO anchor and NO warning', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { placementName: 'zone', targetPlacement: ['zone'], activePlacement: 'zone' } } },
+        content: [],
+      })
+      expect(t.root.anchors.filter((a) => a.role === 'container').map((a) => a.target)).toEqual(['zone'])
+      expect(t.root.anchors.filter((a) => a.role === 'content')).toHaveLength(1)
+      expect(t.warnings).toEqual([])
+    })
+  })
+
+  describe('P3 — duplicate names in targetPlacement (K8-class guard)', () => {
+    it('duplicate name → placement-duplicate-reference warn, keep-first, skip the rest', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', placement: { targetPlacement: ['zone-a', 'zone-b', 'zone-a'] } } },
+        content: [],
+      })
+      expect(t.root.anchors.filter((a) => a.role === 'content').map((a) => a.target)).toEqual(['zone-a', 'zone-b'])
+      expect(t.warnings).toEqual([{ code: 'placement-duplicate-reference', path: 'root' }])
+    })
   })
 })

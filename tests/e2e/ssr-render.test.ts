@@ -118,29 +118,32 @@ function assertTreesEqual(a: OpsTree[], b: OpsTree[]): void {
 }
 
 /**
- * A nested pane: root provides two 'feed' sources (fork candidates, walk-up
- * model per §10.8.2); dock (child of root) consumes 'feed' and nests a leaf;
- * zone (child of root) carries a placement anchor. Renderable set: dock fork
- * arms, nested leaf, zone; the consumed root provider is a fork candidate,
- * not a standalone state (FRK contract).
+ * A nested pane: dock (child of root) consumes 'feed' and nests a leaf; the
+ * two 'feed' providers live on TWO PROVIDER NODES under dock (the legitimate
+ * multiplicity — §10.ab #4; same-node same-name sources are the guarded
+ * anti-pattern); zone (child of root) carries a placement anchor. Renderable
+ * set: dock fork arms, nested leaf, zone; the consumed providers are fork
+ * candidates, not standalone states (FRK contract).
  */
 function buildNestedPane() {
   const root = makeRoot({ type: 'app', content: 'shell', css: { id: 'css-app' } })
   const dock = childOf(root, makeNode({ type: 'dock', props: { role: 'main' }, css: { id: 'css-dock' } }), 0)
   const inner = childOf(dock, makeNode({ type: 'badge', content: 'inner', css: { id: 'css-inner' } }), 0)
-  const zone = childOf(root, makeNode({ type: 'zone', content: 'slot', css: { id: 'css-zone' } }), 1)
-  addComponentSource(root, 'feed', { label: 'A' })
-  addComponentSource(root, 'feed', { label: 'B' })
+  const fA = childOf(dock, makeNode({ type: 'feedA' }), 1)
+  const fB = childOf(dock, makeNode({ type: 'feedB' }), 2)
+  addComponentSource(fA, 'feed', { label: 'A' })
+  addComponentSource(fB, 'feed', { label: 'B' })
   targetAnchor(dock, 'feed')
+  const zone = childOf(root, makeNode({ type: 'zone', content: 'slot', css: { id: 'css-zone' } }), 1)
   const plink = hub().linkFor('slot-alpha', 'placement')
-  zone.addAnchor('placement', 'slot-alpha', {}, plink)
-  return { root, dock, inner, zone }
+  zone.addAnchor('container', 'slot-alpha', {}, plink)
+  return { root, dock, inner, zone, fA, fB }
 }
 
 describe('e2e — SSR receive → complete render (Step 7)', () => {
   it('SSR-H1: server doc + client re-render produce structurally equal trees (PAR-5)', () => {
-    const { root, dock, inner, zone } = buildNestedPane()
-    const slice = [root, dock, inner, zone]
+    const { root, dock, inner, zone, fA, fB } = buildNestedPane()
+    const slice = [root, dock, inner, zone, fA, fB]
 
     // server: compile → serialized JSON doc
     const serverCr = root.compile(slice)
@@ -182,8 +185,8 @@ describe('e2e — SSR receive → complete render (Step 7)', () => {
   })
 
   it('SSR-H3: client re-resolves from anchors — shipped forks are not materialized, recompile equals own compile', () => {
-    const { root, dock, inner, zone } = buildNestedPane()
-    const slice = [root, dock, inner, zone]
+    const { root, dock, inner, zone, fA, fB } = buildNestedPane()
+    const slice = [root, dock, inner, zone, fA, fB]
 
     const doc = serializeSlice(root, slice)
     const seeded = loadState(jsonClone(doc)).map((d) => new Node(d, hub()))
@@ -195,14 +198,14 @@ describe('e2e — SSR receive → complete render (Step 7)', () => {
     expect(arms).toHaveLength(2)
     expect(new Set(arms.map((a) => a.pathKey)).size).toBe(2)
 
-    // fork arms trace THIS graph's live node ids (the root provider)
+    // fork arms trace THIS graph's live node ids (the provider nodes)
     const traces = arms.map((a) => a.trace ?? [])
-    expect(traces.every((t) => t.includes(root.id))).toBe(true)
+    expect(traces.every((t) => t.includes(fA.id) || t.includes(fB.id))).toBe(true)
   })
 
   it('SSR-H2: hydrate reuses SSR DOM via the css.id seam, then binds wires', () => {
-    const { root, dock, inner, zone } = buildNestedPane()
-    const slice = [root, dock, inner, zone]
+    const { root, dock, inner, zone, fA, fB } = buildNestedPane()
+    const slice = [root, dock, inner, zone, fA, fB]
     const doc = serializeSlice(root, slice)
 
     const seeded = loadState(jsonClone(doc)).map((d) => new Node(d, hub()))
@@ -240,8 +243,8 @@ describe('e2e — SSR receive → complete render (Step 7)', () => {
   })
 
   it('SSR-F1: a shipped fork id is never trusted — client resolution produces its own fork surface', () => {
-    const { root, dock } = buildNestedPane()
-    const slice = [root, dock]
+    const { root, dock, fA, fB } = buildNestedPane()
+    const slice = [root, dock, fA, fB]
     const doc = serializeSlice(root, slice)
 
     // tamper: plant a stale fork trace that does NOT exist in the client graph
@@ -261,8 +264,8 @@ describe('e2e — SSR receive → complete render (Step 7)', () => {
   })
 
   it('placements + components + nested: placement anchors render alongside forked component slots', () => {
-    const { root, zone, dock } = buildNestedPane()
-    const slice = [root, zone, dock]
+    const { root, zone, dock, fA, fB } = buildNestedPane()
+    const slice = [root, zone, dock, fA, fB]
     const cr = root.compile(slice)
     const zoneState = cr.actionable.find((s) => s.nodeId === zone.id)
     expect(zoneState).toBeDefined()
@@ -270,7 +273,7 @@ describe('e2e — SSR receive → complete render (Step 7)', () => {
     const doc = serializeSlice(root, slice)
     const serializedZone = (doc.content as Array<Record<string, unknown>>).find((n) => n.id === zone.id)
     const anchors = serializedZone!.anchors as Array<{ role: string; target: string }>
-    expect(anchors.some((a) => a.role === 'placement' && a.target === 'slot-alpha')).toBe(true)
+    expect(anchors.some((a) => a.role === 'container' && a.target === 'slot-alpha')).toBe(true)
 
     // client render includes the placement zone node
     const { roots } = clientRender(doc)

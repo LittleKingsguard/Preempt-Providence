@@ -4,6 +4,19 @@ Status: spec for a REWRITE of the fork-stress demo page. Companion:
 `docs/specs/fork-stress.md` (the imperative build), `docs/subagents.md`
 (workflow: spec → red → green).
 
+> **RUNTIME-variant scope note (placement-path-spec §9-Q4/§5 — read this
+> first):** this spec describes the RUNTIME fork-stress-data page (the
+> after-compile `clone-instance` expansion), which is KEPT as-is alongside
+> the new STATIC page. The static re-expression — the SAME 22-prototype
+> topology compiled by path enumeration instead of clone assembly — is the
+> placement-path model: see `docs/specs/placement-path-spec.md` §5 (page
+> re-expression + the §5.2 static census 23/4095/0/0) and the shipped page
+> `demo/path-fork-data.*` (designing-pages.md §11/§12). With the
+> translate-global contentNodes-ownership minting (P3 §10.ad/F-13), THIS
+> runtime page's census asserts are re-pinned: in-tree = 2^depth − 1 +
+> prototypes, unplaced = 0 (the prototypes never compile/render — the token
+> terminates the walk); `cloneOps` stays the journaled clone count.
+
 ## Purpose
 
 Prove the same deep binary stress tree can be assembled with:

@@ -6,7 +6,14 @@ import {
   type MinimalElement,
   type RenderAdapter,
 } from '../../src/core/render.js'
-import { emitElements } from '../../src/core/render-helpers.js'
+import {
+  emitElements,
+  applyOps as applyOpsReal,
+  treeFromOps as treeFromOpsReal,
+  treeSig,
+  wireKey,
+} from '../../src/core/render-helpers.js'
+import type { RenderTree } from '../../src/core/render-helpers.js'
 import {
   serializeNode,
   serializeSlice,
@@ -276,14 +283,18 @@ class HydrationAdapter implements RenderAdapter<PEl> {
 // SERIALIZATION HELPERS (SER gate)
 // ---------------------------------------------------------------------------
 
-/** A twin-source fork slice: two sources on the same node share `refX`. */
-function forkSlice(): { root: Node; leaf: Node } {
+/** A fork slice via TWO PROVIDER NODES — the legitimate multiplicity (§10.ab
+ *  #4): leaf's two children provide `refX`. Same-node same-name sources are
+ *  the component-source-duplicate anti-pattern (guarded, Unit 8). */
+function forkSlice(): { root: Node; leaf: Node; pA: Node; pB: Node } {
   const root = makeRoot({ type: 'root', content: 'R' })
   const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L', props: { k: 1 } }), 0)
-  addComponentSource(root, 'refX', { what: 'A' })
-  addComponentSource(root, 'refX', { what: 'B' })
   targetAnchor(leaf, 'refX')
-  return { root, leaf }
+  const pA = childOf(leaf, makeNode({ type: 'pA' }), 0)
+  const pB = childOf(leaf, makeNode({ type: 'pB' }), 1)
+  addComponentSource(pA, 'refX', { what: 'A' })
+  addComponentSource(pB, 'refX', { what: 'B' })
+  return { root, leaf, pA, pB }
 }
 
 /** Strip non-deterministic fields (link ids) for comparison. */
@@ -415,21 +426,22 @@ describe('§10.1 Serialization round-trip (SER-H1..H2, SER-F1..F6)', () => {
   })
 
   it('SER-H2 — an actionable fork round-trips with its trace and de-dupes by node id', () => {
-    const { root, leaf } = forkSlice()
-    const res = root.compile([root, leaf])
+    const { root, leaf, pA, pB } = forkSlice()
+    const res = root.compile([root, leaf, pA, pB])
     const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
     expect(arms).toHaveLength(2)
     const keys = new Set(arms.map((a) => a.pathKey))
     expect(keys.size).toBe(2)
 
-    const doc = roundTrip(root, [root, leaf])
+    const doc = roundTrip(root, [root, leaf, pA, pB])
     expect(JSON.parse(JSON.stringify(doc))).toEqual(doc)
 
     const seeded = loadState(jsonClone(doc)).map((d) => new Node(d, hub()))
+    reconcileParentTargets(seeded)
     const recompile = seeded[0]!.compile(seeded)
     const reArms = recompile.actionable.filter((s) => s.nodeId === leaf.id)
     expect(new Set(reArms.map((a) => a.pathKey))).toEqual(keys)
-    expect(new Set(seeded.map((n) => n.id))).toEqual(new Set([root.id, leaf.id]))
+    expect(new Set(seeded.map((n) => n.id))).toEqual(new Set([root.id, leaf.id, pA.id, pB.id]))
   })
 
   it('SER-F1 — non-JSON props/content (function, cycle, symbol) throws; nothing is shipped', () => {
@@ -525,8 +537,8 @@ describe('§10.2 Fork keys & non-actionable dropping (FRK-H1..H3, FRK-F1..F6)', 
   })
 
   it('FRK-H2 — N root-terminated sources are N actionable states with distinct path keys; all render', () => {
-    const { root, leaf } = forkSlice()
-    const res = root.compile([root, leaf])
+    const { root, leaf, pA, pB } = forkSlice()
+    const res = root.compile([root, leaf, pA, pB])
     const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
     expect(arms).toHaveLength(2)
 
@@ -628,8 +640,8 @@ describe('§10.2 Fork keys & non-actionable dropping (FRK-H1..H3, FRK-F1..F6)', 
   })
 
   it('FRK-F6 — an ambiguous-but-terminating set surfaces as multiple valid states, never an arbitrary pick', () => {
-    const { root, leaf } = forkSlice()
-    const res = root.compile([root, leaf])
+    const { root, leaf, pA, pB } = forkSlice()
+    const res = root.compile([root, leaf, pA, pB])
     const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
     expect(arms.length).toBe(2)
     expect(res.dropped).toHaveLength(0)
@@ -700,6 +712,10 @@ describe('§10.5 tree diff contract (D1–D5, render.md §3.2)', () => {
     // Guard against the O(N²) regressions: a 4× input must NOT cost ~16×
     // (quadratic). Threshold is deliberately loose (8×) to stay CI-safe while
     // still catching a quadratic implementation (which measured 17× at n=4095).
+    // Sampling is best-of-N (min over 5, after a warmup call): a single
+    // wall-clock sample at sub-ms magnitudes is load-flaky (one GC pause on
+    // the large run reads ≥8× for a LINEAR implementation — see the
+    // methodology test below); the min estimates the uncontended run.
     const tree = (depth: number): MinimalElement[] => {
       const els: MinimalElement[] = []
       let id = 0
@@ -717,17 +733,78 @@ describe('§10.5 tree diff contract (D1–D5, render.md §3.2)', () => {
       add(1)
       return els
     }
-    const run = (n: MinimalElement[]): number => {
+    const run = (n: MinimalElement[], now: () => number = () => performance.now()): number => {
       const prev = new Map(n.map((e) => [e.wire, { ...e, props: { ...e.props } }]))
       const next = n.map((e) => (e.wire === 'n1' ? { ...e, props: { ...e.props, text: 'changed' } } : { ...e, props: { ...e.props } }))
-      const t0 = performance.now()
+      const t0 = now()
       diffMinimal(prev, next)
-      return performance.now() - t0
+      return now() - t0
     }
-    const small = run(tree(10)) // 1023 wires
-    const big = run(tree(12)) // 4095 wires
+    /** Warmup + best-of-N (min): the least-biased wall-clock estimator under
+     *  contention — approximates the uncontended run. */
+    const bestOf = (fn: () => number, k: number): number => {
+      fn() // warmup: JIT + map/cache warm
+      let best = Number.POSITIVE_INFINITY
+      for (let i = 0; i < k; i += 1) best = Math.min(best, fn())
+      return best
+    }
+    const small = bestOf(() => run(tree(10)), 5) // 1023 wires
+    const big = bestOf(() => run(tree(12)), 5) // 4095 wires
     // linear would be ~4×; quadratic was ~17×. Assert clearly sub-quadratic.
     expect(big).toBeLessThan(small * 8)
+  })
+
+  it('ORD-P1 methodology — best-of-N is robust to a one-off pause on the large sample (single-shot is not)', () => {
+    // Deterministic simulation of the flake: both sizes measure linearly
+    // (0.04ms small / 0.04ms big — 1×, not even the 4× of n=4095) EXCEPT one
+    // single timer tick pauses the big run to 0.48ms (12×). With sub-ms
+    // magnitudes that is a realistic GC/scheduler pause under parallel test
+    // workers — the measured single-shot ratio reads ≥8× for a LINEAR diff.
+    // A fixed cumulative clock makes the simulation fully deterministic.
+    const clock = (seq: number[]): (() => number) => {
+      let i = 0
+      return () => {
+        const v = (seq[i] ?? seq[seq.length - 1]) ?? 0
+        i += 1
+        return v
+      }
+    }
+    const tree = (depth: number): MinimalElement[] => {
+      const els: MinimalElement[] = []
+      let id = 0
+      const add = (layer: number): string => {
+        const wire = 'n' + ++id
+        const node = el(wire, 'div', {})
+        els.push(node)
+        if (layer < depth) {
+          const a = add(layer + 1)
+          const b = add(layer + 1)
+          node.childOrder = [a, b]
+        }
+        return wire
+      }
+      add(1)
+      return els
+    }
+    const run = (n: MinimalElement[], now: () => number): number => {
+      const prev = new Map(n.map((e) => [e.wire, { ...e, props: { ...e.props } }]))
+      const next = n.map((e) => (e.wire === 'n1' ? { ...e, props: { ...e.props, text: 'changed' } } : { ...e, props: { ...e.props } }))
+      const t0 = now()
+      diffMinimal(prev, next)
+      return now() - t0
+    }
+    const smallEls = tree(10)
+    const bigEls = tree(12)
+    // single-shot: small clean (0.04), big paused (0.48) → ratio 12 ≥ 8 → the
+    // pre-fix methodology FAILS on a linear implementation under one pause.
+    const singleShot = run(smallEls, clock([0, 0.04]))
+    const singleShotBig = run(bigEls, clock([0, 0.48]))
+    expect(singleShotBig).toBeGreaterThanOrEqual(singleShot * 8)
+    // best-of-N: big sampled 5× (4 clean + 1 paused) → min reads the
+    // uncontended 0.04 → ratio 1, well under the threshold.
+    const bestBig = Math.min(...[0.04, 0.04, 0.04, 0.48, 0.04].map((d) => run(bigEls, clock([0, d]))))
+    const bestSmall = Math.min(...[0.04, 0.04, 0.04, 0.04, 0.04].map((d) => run(smallEls, clock([0, d]))))
+    expect(bestBig).toBeLessThan(bestSmall * 8)
   })
 })
 
@@ -784,5 +861,206 @@ describe('emitElements — component-link (prototype-as-child) def chains', () =
     expect(b1[0]!.childOrder).toEqual(['c1', 'c2'])
     expect(els.find((e) => e.wire === 'c1')!.props['text']).toBe('2.a')
     expect(els.find((e) => e.wire === 'c1')!.childOrder).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// DEFECT #1 — emitElements/emitOne drop cs.forkKey (placement-path-spec §4.3,
+// test-findings §"Stress-test review loop #1" DEFECT #1; fix shape: forward
+// s.forkKey in every emitOne return branch, mirror minimalFromState)
+// ---------------------------------------------------------------------------
+
+describe('DEFECT #1 — emitOne forwards forkKey onto emitted elements and ops', () => {
+  it('DEFECT-1a — fork arms emitted via emitElements carry cs.forkKey on elements and on create/set ops (distinct per arm)', () => {
+    const { root, leaf, pA, pB } = forkSlice()
+    const res = root.compile([root, leaf, pA, pB])
+    const arms = res.actionable.filter((s) => s.nodeId === leaf.id)
+    expect(arms).toHaveLength(2)
+    const csKeys = arms.map((a) => a.forkKey)
+    expect(csKeys.every((k) => typeof k === 'string')).toBe(true)
+    expect(new Set(csKeys).size).toBe(2)
+
+    const els = emitElements(res.actionable)
+    const armEls = els.filter((e) => e.wire.startsWith(`${leaf.id}#`))
+    expect(armEls).toHaveLength(2)
+    for (const [i, el] of armEls.entries()) {
+      expect(el.forkKey).toBe(csKeys[i])
+    }
+
+    const ops = diffMinimal(null, els)
+    const armCreates = ops.filter(
+      (o): o is Extract<RenderOp, { kind: 'create' }> => o.kind === 'create' && o.wire.startsWith(`${leaf.id}#`),
+    )
+    expect(armCreates).toHaveLength(2)
+    for (const [i, op] of armCreates.entries()) {
+      expect(op.forkKey).toBe(csKeys[i])
+    }
+    // each arm's set ops forward the same forkKey as its create (HLP-H16)
+    const armSets = ops.filter(
+      (o): o is Extract<RenderOp, { kind: 'set' }> => o.kind === 'set' && o.wire.startsWith(`${leaf.id}#`),
+    )
+    expect(armSets.length).toBeGreaterThan(0)
+    for (const op of armSets) {
+      expect(op.forkKey).toBe(csKeys[Number((op.wire as string).split('#')[1])])
+    }
+  })
+
+  it('DEFECT-1b — a non-fork state emits with NO forkKey (unchanged)', () => {
+    const root = makeRoot({ type: 'root' })
+    const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L' }), 0)
+    addComponentSource(root, 'slot', 'v')
+    targetAnchor(leaf, 'slot')
+    const res = root.compile([root, leaf])
+    const cs = compiledFor(res, leaf.id)
+    expect(cs?.forkKey).toBeUndefined()
+
+    const els = emitElements(res.actionable)
+    const el = els.find((e) => e.wire === leaf.id)!
+    expect('forkKey' in el).toBe(false)
+    expect(el.forkKey).toBeUndefined()
+    for (const op of diffMinimal(null, els)) {
+      if (op.kind !== 'append' && op.kind !== 'styles') expect(op.forkKey).toBeUndefined()
+    }
+  })
+
+  it('DEFECT-1c — applyOps/treeFromOps round-trip preserves forkKey per wire (wireKey distinctness)', () => {
+    const { root, leaf, pA, pB } = forkSlice()
+    const res = root.compile([root, leaf, pA, pB])
+    const csKeys = res.actionable.filter((s) => s.nodeId === leaf.id).map((a) => a.forkKey)
+    const els = emitElements(res.actionable)
+    const ops = diffMinimal(null, els)
+
+    // treeFromOps: arms stay distinct (wire, forkKey) entries
+    const armEls = emitElements(res.actionable.filter((s) => s.nodeId === leaf.id))
+    const armTrees = treeFromOpsReal(diffMinimal(null, armEls))
+    expect(armTrees).toHaveLength(2)
+    const treeKeys = new Set(armTrees.map((t) => t.forkKey))
+    expect(treeKeys.size).toBe(2)
+    expect(treeKeys.has(undefined)).toBe(false)
+    const wireKeys = armTrees.map((t) => wireKey(t.wire, t.forkKey!))
+    expect(new Set(wireKeys).size).toBe(2)
+
+    // applyOps: a fork-aware adapter addresses arms through (wire, forkKey) composites
+    const seen = new Set<string>()
+    const adapter = {
+      wires: new Map<string, { wire: string; type: string }>(),
+      createEl(type: string, wire: NodeRef, forkKey?: string): { wire: string; type: string } {
+        const e = { wire, type }
+        const k = wireKey(wire, forkKey)
+        this.wires.set(k, e)
+        seen.add(k)
+        return e
+      },
+      setProp(): void {},
+      appendChild(): void {},
+      hydrate(): void {},
+      removeEl(): void {},
+    }
+    applyOpsReal(adapter as RenderAdapter<{ wire: string; type: string }>, ops)
+    // every create arrives as a (wire, forkKey) composite — the root emits at
+    // its plain wire; the two arm creates at their (leaf#i, forkKey) composites
+    const creates = ops.filter((o) => o.kind === 'create')
+    expect(seen.size).toBe(creates.length)
+    for (const [i, csKey] of csKeys.entries()) {
+      expect(seen.has(wireKey(`${leaf.id}#${i}`, csKey!))).toBe(true)
+    }
+  })
+
+  it('DEFECT-1d — treeSig over forkKey-carrying ops is stable and exercises the forkKey dimension', () => {
+    const { root, leaf, pA, pB } = forkSlice()
+    const res = root.compile([root, leaf, pA, pB])
+    const els = emitElements(res.actionable)
+    const ops = diffMinimal(null, els)
+    const trees = treeFromOpsReal(ops)
+    const sig = treeSig(trees)
+    expect(sig).toBe(treeSig(jsonClone(trees)))
+    expect(sig).toBe(treeSig(treeFromOpsReal(diffMinimal(null, emitElements(res.actionable)))))
+    // the forkKey dimension is live: stripping forkKey from the same op stream
+    // changes the signature (before the fix, ops carried no forkKey and the
+    // stripped stream was indistinguishable from the real one)
+    const stripped: RenderOp[] = ops.map((o) => {
+      if ('forkKey' in o) {
+        const { forkKey: _k, ...rest } = o as { forkKey?: string } & RenderOp
+        void _k
+        return rest as RenderOp
+      }
+      return o
+    })
+    expect(treeSig(treeFromOpsReal(stripped))).not.toBe(sig)
+  })
+
+  it('DEFECT-1e — a fork carrying a def binding forwards forkKey through the def/type branch', () => {
+    const defVal = { type: 'div', label: 'lk', childOffset: 0, children: [] }
+    const els = emitElements([
+      { nodeId: 'a', type: 'span', forkKey: 'path/a', bindings: { 'link-1': defVal } },
+    ])
+    expect(els).toHaveLength(1)
+    expect(els[0]!.forkKey).toBe('path/a')
+  })
+
+  it('DEFECT-1f — applyOps/treeFromOps resolve bare-wire append/remove against forkKey-keyed elements (fork arms reach the DOM)', () => {
+    // a plain emitting parent (pane) with a forked leaf child; the two
+    // same-name providers live on TWO PROVIDER NODES under the leaf (the
+    // legitimate multiplicity — §10.ab #4; same-node duplicates are the
+    // component-source-duplicate anti-pattern)
+    const root = makeRoot({ type: 'root', content: 'R' })
+    const pane = childOf(root, makeNode({ type: 'pane' }), 0)
+    const leaf = childOf(pane, makeNode({ type: 'leaf', content: 'L' }), 0)
+    targetAnchor(leaf, 'refX')
+    const pA = childOf(leaf, makeNode({ type: 'pA' }), 0)
+    const pB = childOf(leaf, makeNode({ type: 'pB' }), 1)
+    addComponentSource(pA, 'refX', { what: 'A' })
+    addComponentSource(pB, 'refX', { what: 'B' })
+    const res = root.compile([root, pane, leaf, pA, pB])
+    const els = emitElements(res.actionable)
+    const ops = diffMinimal(null, els)
+
+    // the parent's childOrder adopts the arm wires in order (FRK-H2)
+    const parentEl = els.find((e) => e.wire === pane.id)!
+    expect(parentEl.childOrder).toEqual([`${leaf.id}#0`, `${leaf.id}#1`])
+
+    // a fork-aware adapter stores elements under (wire, forkKey) composites —
+    // exactly how DomAdapter/SSRFragmentAdapter address arms; the append ops
+    // carry the BARE arm wire and must still resolve the element
+    const appended = new Map<string, string[]>()
+    const wires = new Map<string, { wire: string; type: string }>()
+    const adapter = {
+      wires,
+      createEl(type: string, wire: NodeRef, forkKey?: string): { wire: string; type: string } {
+        const e = { wire, type }
+        this.wires.set(wireKey(wire, forkKey), e)
+        return e
+      },
+      setProp(): void {},
+      appendChild(owner: { wire: string }, child: { wire: string }): void {
+        const arr = appended.get(owner.wire) ?? []
+        arr.push(child.wire)
+        appended.set(owner.wire, arr)
+      },
+      hydrate(): void {},
+      removeEl(): void {},
+    }
+    applyOpsReal(adapter as RenderAdapter<{ wire: string; type: string }>, ops)
+
+    // every fork-arm append op actually reaches its child element — before
+    // the fix the arm elements lived under `wireKey(wire, forkKey)` and the
+    // bare-wire appends silently skipped (feature-matrix "fork arms not
+    // rendered into the DOM")
+    const armAppends = ops.filter(
+      (o): o is Extract<RenderOp, { kind: 'append' }> => o.kind === 'append' && o.child.startsWith(`${leaf.id}#`),
+    )
+    expect(armAppends).toHaveLength(2)
+    for (const op of armAppends) {
+      expect(appended.get(op.owner) ?? []).toContain(op.child)
+    }
+    expect(appended.get(pane.id)).toEqual([`${leaf.id}#0`, `${leaf.id}#1`])
+
+    // treeFromOps nests the arm trees under the parent (same resolution)
+    const trees = treeFromOpsReal(ops)
+    const flat = (ts: RenderTree[]): RenderTree[] => ts.flatMap((t) => [t, ...flat(t.children)])
+    const parent = flat(trees).find((t) => t.wire === pane.id)
+    expect(parent).toBeDefined()
+    expect(parent!.children.map((c) => c.wire)).toEqual([`${leaf.id}#0`, `${leaf.id}#1`])
+    expect(parent!.children.every((c) => c.forkKey !== undefined)).toBe(true)
   })
 })

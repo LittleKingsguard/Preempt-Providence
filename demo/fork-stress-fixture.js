@@ -161,7 +161,7 @@ export function buildForkStressBase(depth = 8) {
   const zone = add(makeNode({ type: 'section', props: { id: 'stress-zone' } }, 'fs-zone'))
   childOf(root, zone, 0)
   // placement anchor on the zone (the placement target 'stress-1')
-  zone.addAnchor('placement', placementName(1), {}, h.linkFor(placementName(1), 'placement'))
+  zone.addAnchor('container', placementName(1), {}, h.linkFor(placementName(1), 'placement'))
 
   const l1 = []
   for (let i = 0; i < layerCount(1); i += 1) {
@@ -173,7 +173,7 @@ export function buildForkStressBase(depth = 8) {
     }, id))
     attachChild(zone, n, i)
     // the placed node's own placement anchor back to the zone name
-    n.addAnchor('placement', placementName(1), {}, h.linkFor(placementName(1), 'placement'))
+    n.addAnchor('container', placementName(1), {}, h.linkFor(placementName(1), 'placement'))
     l1.push(n)
   }
   const layers = { 1: l1 }

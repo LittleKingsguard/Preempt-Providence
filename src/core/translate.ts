@@ -48,8 +48,14 @@ export interface LegacyHandlerDef {
 
 export interface LegacyPlacementConfig {
   placementName?: string
-  targetPlacement?: string
-  activePlacement?: boolean
+  /** Preference-ordered list of zone names to route this node into (P3 §1.2 —
+   *  legacy shape is `string[]`; one `content` anchor per name, in order).
+   *  A bare string (the old mis-typed shape) is coerced to `[string]` with a
+   *  `placement-string-coerced` warn (back-compat). */
+  targetPlacement?: string[]
+  /** DERIVED resolution record (P3 §2.5) — never authored, never minted into
+   *  an anchor; `nodeToLegacy` emits the derived read on reverse. */
+  activePlacement?: string
 }
 
 export interface LegacyComponentBinding {
@@ -121,7 +127,8 @@ export interface TranslatedTree {
   root: Node
   /** every translated node, root first, tree order */
   nodes: Node[]
-  /** unplaced content nodes (template.children + payload items) */
+  /** content nodes (template.children + payload items) — contentNodes-owned,
+   *  family-'in-tree' via the permanent-owner token (P3 §10.ad/F-13) */
   content: Node[]
   /** K4 — always-present additive warnings channel */
   warnings: TranslatedWarning[]
@@ -145,8 +152,8 @@ function defaultHub(): LinkConfigNameHub {
   }
 }
 
-/** Permanent-owner family edge (chain → 'rootNode' ⇒ in-tree). */
-function attachToPermanentOwner(node: Node, target: 'rootNode' | 'component'): void {
+/** Permanent-owner family edge (chain → 'rootNode' / 'contentNodes' ⇒ in-tree). */
+function attachToPermanentOwner(node: Node, target: 'rootNode' | 'component' | 'contentNodes'): void {
   const link = new Link({ name: 'parent-child' })
   node.addAnchor('child', node, { priority: 0 }, link)
   link.addAnchor({ role: 'parent', target, options: {}, link })
@@ -401,7 +408,7 @@ function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): v
     const options = plan.applyPath !== undefined ? { applyPath: plan.applyPath } : {}
     if (plan.role === 'source') {
       const a = node.addAnchor('source', plan.reference, options, link)
-      if (plan.value !== undefined) a.value = plan.value
+      if (a !== null && plan.value !== undefined) a.value = plan.value
     } else {
       node.addAnchor('target', plan.reference, options, link)
     }
@@ -430,17 +437,63 @@ function translateNodeData(
   const node = new Node(baseFrom(data, derived, warnings, path), hub, mintNodeId(), opts.asContentRoot === true)
   nodes.push(node)
 
-  // placement (PlacementConfig) → placement anchor
-  const placement = data.placement
-  if (placement && typeof placement.placementName === 'string') {
-    const plink = hub.linkFor(placement.placementName, 'placement')
-    node.addAnchor('placement', placement.placementName, {}, plink)
-  }
+  // P3 §10.ad (F-13) — contentNodes-ownership minting: every content payload
+  // root (and template.children root) is owned by the contentNodes permanent
+  // owner at translate — the content root is family-'in-tree' (node.ts:213)
+  // and the runtime fork-stress census counts it in-tree. nodeToLegacy
+  // STRIPS the minted anchor on reverse (legacy round-trips stay clean).
+  if (opts.asContentRoot === true) attachToPermanentOwner(node, 'contentNodes')
 
-  // K8 AP5/NP13 — targetPlacement on a component-bearing node: warn, field
-  // ignored (interim policy; the placement feed is a follow-up DECIDED)
-  if (plans.length > 0 && placement && typeof placement.targetPlacement === 'string' && placement.targetPlacement.length > 0) {
-    warn(warnings, 'component-target-placement', path, `targetPlacement "${placement.targetPlacement}" is ignored on component-bearing nodes`)
+  // placement (PlacementConfig) → container/content anchors on the shared
+  // per-name placement Link (P3 §1.1 — producer 'container' role from
+  // placementName; consumer 'content' role, one anchor per requested name in
+  // preference order). activePlacement is DERIVED (§2.5) — never minted.
+  const placement = data.placement
+  if (placement) {
+    // producer side: placementName → 'container' anchor
+    if (typeof placement.placementName === 'string' && placement.placementName.length > 0) {
+      if (placement.placementName.includes('#')) {
+        warn(warnings, 'placement-name-invalid', path, `placementName "${placement.placementName}" contains '#': container anchor skipped (P3 §1.3)`)
+      } else {
+        const plink = hub.linkFor(placement.placementName, 'placement')
+        node.addAnchor('container', placement.placementName, {}, plink)
+      }
+    }
+    // consumer side: targetPlacement → ordered 'content' anchors (P3 §1.2).
+    // Back-compat: the old mis-typed STRING shape is coerced to [string]
+    // with a warn; anything else is rejected with a warn and skipped.
+    if (placement.targetPlacement !== undefined && placement.targetPlacement !== null) {
+      const raw = placement.targetPlacement
+      let names: string[] = []
+      if (typeof raw === 'string') {
+        warn(warnings, 'placement-string-coerced', path, `targetPlacement "${raw}" is the old string shape; coerced to [string] (legacy type is string[])`)
+        names = [raw]
+      } else if (Array.isArray(raw)) {
+        names = raw
+      } else {
+        warn(warnings, 'placement-target-invalid', path, `targetPlacement must be a string or string[]; field skipped`)
+      }
+      // K8-class guard across the new minting: duplicate name → warn,
+      // keep-first, skip the rest (consistent with component-duplicate-reference)
+      const seen = new Set<string>()
+      for (const name of names) {
+        if (typeof name !== 'string' || name.length === 0) {
+          warn(warnings, 'placement-name-invalid', path, `targetPlacement entry "${String(name)}" is not a valid placement name; binding skipped (P3 §1.3)`)
+          continue
+        }
+        if (name.includes('#')) {
+          warn(warnings, 'placement-name-invalid', path, `targetPlacement "${name}" contains '#': binding skipped (P3 §1.3)`)
+          continue
+        }
+        if (seen.has(name)) {
+          warn(warnings, 'placement-duplicate-reference', path, `targetPlacement "${name}" is already requested on this node; duplicate skipped (keep-first)`)
+          continue
+        }
+        seen.add(name)
+        const plink = hub.linkFor(name, 'placement')
+        node.addAnchor('content', name, {}, plink)
+      }
+    }
   }
 
   applyPlans(node, plans, hub)
@@ -485,20 +538,17 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   })
   attachToPermanentOwner(root, 'rootNode')
 
-  // K8 AP5/NP13 — targetPlacement on the root's component-bearing config
-  if (rootPlan.count > 0 && typeof template.root.placement?.targetPlacement === 'string' && template.root.placement.targetPlacement.length > 0) {
-    warn(warnings, 'component-target-placement', 'root', `targetPlacement "${template.root.placement.targetPlacement}" is ignored on component-bearing nodes`)
-  }
-
   // K6 — a value-carrying root binding is a SOURCE (provider) anchor; the
   // dead-value target anchor of the pre-kernel translator is gone. A
   // value-less binding stays a target consumer.
   applyPlans(root, rootPlan.plans, hub)
 
-  // content nodes: template.children + content payloads — UNPLACED (no
-  // parent anchor). metadata/userData surfaced from the first payload.
-  // Registered as payload-owned content: they persist in the background
-  // while unplaced (placement may return) and are dropped with their payload.
+  // content nodes: template.children + content payloads — contentNodes-owned
+  // (family-'in-tree' via the permanent-owner token, P3 §10.ad/F-13; NOT
+  // attached under the root). metadata/userData surfaced from the first
+  // payload. Registered as payload-owned content: they persist in the
+  // background while unplaced (placement may return) and are dropped with
+  // their payload.
   const content: Node[] = []
   let metadata: unknown
   let userData: unknown
@@ -633,8 +683,26 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   }
   if (bindings.length === 1) data.component = bindings[0]!
   else if (bindings.length > 1) data.component = bindings
-  const placement = node.anchors.find((a) => a.role === 'placement' && typeof a.target === 'string')
-  if (placement) data.placement = { placementName: placement.target as string }
+  // P3 §6.2 — reverse placement emission: the container anchor (placementName)
+  // and the ordered content anchors (targetPlacement: string[] in MINT order —
+  // the node's anchors array preserves the preference order). activePlacement
+  // is the DERIVED read (§2.5): the FIRST name with at least one known
+  // container, emitted only when it exists. The minted contentNodes parent
+  // anchor is never emitted (legacy has no representation for the token).
+  const placement: Record<string, string | string[]> = {}
+  const containerAnchor = node.anchors.find((a) => a.role === 'container' && typeof a.target === 'string')
+  if (containerAnchor) placement.placementName = containerAnchor.target as string
+  const contentAnchors = node.anchors.filter((a) => a.role === 'content' && typeof a.target === 'string')
+  if (contentAnchors.length > 0) {
+    placement.targetPlacement = contentAnchors.map((a) => a.target as string)
+    for (const a of contentAnchors) {
+      if (a.link.anchorsOf('container').length > 0) {
+        placement.activePlacement = a.target as string
+        break
+      }
+    }
+  }
+  if (Object.keys(placement).length > 0) data.placement = placement
   const kids = node.children.filter((c) => !isContentRoot(c))
   if (kids.length > 0) data.children = kids.map((k) => nodeToLegacy(k, isContentRoot))
   return data
