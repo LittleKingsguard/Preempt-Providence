@@ -168,7 +168,7 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
   // sections (incl. pass2 flush windows, page-side construction, handler
   // bodies) must cover ~all of the total; appends counts the diffMinimal
   // append ops — the DOM-churn proxy the shim cannot time (RCA:
-  // docs/session-defect-review.md "imperative fork-stress").
+  // archive/reviews/2026-08-15/2026-08-15-session-defect-review.md "imperative fork-stress").
   const prof = globalThis.__forkStressProfile
   if (!prof) {
     console.error(`fork-stress (depth ${depth}) profile missing — page did not finish profiling`)
@@ -239,7 +239,7 @@ for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
     globalThis.__forkStressDataDone,
     new Promise((r) => setTimeout(r, 30000)),
   ]).catch(() => {})
-  // performance-tracking guard (RCA: docs/session-defect-review.md "missing
+  // performance-tracking guard (RCA: archive/reviews/2026-08-15/2026-08-15-session-defect-review.md "missing
   // timing steps"): the timed sections must cover ~all of the page total, so
   // "total" can never hide an unmeasured pipeline again. The residual is the
   // flush timers + checks; a regression that balloons the pass-2 region while
@@ -366,7 +366,7 @@ function assertStaticPathCensus(prof) {
   // performance guard (AGENTS.md item-4 watch applies to the path-enumeration
   // bootstrap pass): the timed sections (incl. the ONE enumeration compile)
   // must cover ~all of the page total, so "total" can never hide an untimed
-  // pipeline (RCA: docs/session-defect-review.md).
+  // pipeline (RCA: archive/reviews/2026-08-15/2026-08-15-session-defect-review.md).
   const covered = prof.coveredMs ?? 0
   const residual = prof.totalMs - covered
   if (residual > Math.max(prof.totalMs * 0.15, 25)) {
@@ -421,6 +421,114 @@ function assertStaticPathCensus(prof) {
     globalThis.__translateShowcaseDone,
     new Promise((r) => setTimeout(r, 30000)),
   ]).catch(() => {})
+}
+
+// ---- legacy-shape page: the REAL-LEGACY-SHAPE regression page (D1–D8) -------
+// The main envelope is the blind-test translate-stack fixture (17 nodes → ONE
+// compilePath bootstrap → 12 path-states → 16 elements); the K4 side cards
+// exercise placement-entry-invalid + payload-shape-obsolete with pure DATA
+// envelopes. Census guard: the page publishes registered / inTree / unplaced /
+// destroyed / cloneOps / states / elements / passes / warningsMain / fanOut /
+// stylesRules on the profile; the D1–D8 census is pinned here so it can never
+// silently drift (the smoke asserts stay consistent with the page's own
+// checks).
+const LEGACY_SHAPE_RULES = [
+  '.blind-card{border: 1px solid #ccc;padding: 16px;}',
+  'nav{display: flex;gap: 8px;align-items: center;}',
+  '.blind-badge{background-color: #ffe08a;}',
+  '.blind-menu{background-color: #222;color: #fff;}',
+  '.blind-item{border-left: 3px solid #2a7;}',
+  'nav{@media (max-width: 600px){flex-direction:column;}}',
+]
+function assertLegacyShapeCensus(prof) {
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'cloneOps', 'prototypes', 'states', 'elements', 'passes', 'warningsMain', 'fanOut', 'stylesRules']) {
+    if (typeof prof[f] === 'undefined') {
+      console.error(`legacy-shape profile missing census field "${f}" — D1–D8 census not published`)
+      process.exit(1)
+    }
+  }
+  if (prof.registered !== 17) {
+    console.error(`legacy-shape census registered mismatch: registered=${prof.registered}, expected 17 (16 envelope nodes + the blind-test fixture root)`)
+    process.exit(1)
+  }
+  if (prof.inTree !== 11) {
+    console.error(`legacy-shape census in-tree mismatch: inTree=${prof.inTree}, expected 11 (the 6 def prototypes stay OUT-OF-TREE — D8/F16)`)
+    process.exit(1)
+  }
+  if (prof.prototypes !== 6) {
+    console.error(`legacy-shape census prototypes mismatch: prototypes=${prof.prototypes}, expected 6 (def roots + children, 'component'-token pre-minted)`)
+    process.exit(1)
+  }
+  if (prof.unplaced !== 0) {
+    console.error(`legacy-shape census unplaced mismatch: unplaced=${prof.unplaced}, expected 0`)
+    process.exit(1)
+  }
+  if (prof.destroyed !== 0) {
+    console.error(`legacy-shape census destroyed mismatch: destroyed=${prof.destroyed}, expected 0`)
+    process.exit(1)
+  }
+  if (prof.cloneOps !== 0) {
+    console.error(`legacy-shape census cloneOps mismatch: cloneOps=${prof.cloneOps}, expected 0 (no clone-instance ops)`)
+    process.exit(1)
+  }
+  if (prof.states !== 12) {
+    console.error(`legacy-shape census states mismatch: states=${prof.states}, expected 12 (10 family states + 2 placement path-states)`)
+    process.exit(1)
+  }
+  if (prof.elements !== 16) {
+    console.error(`legacy-shape census elements mismatch: elements=${prof.elements}, expected 16`)
+    process.exit(1)
+  }
+  if (prof.passes !== 1) {
+    console.error(`legacy-shape bootstrap passes mismatch: passes=${prof.passes}, expected 1 (ONE compilePath bootstrap)`)
+    process.exit(1)
+  }
+  if (prof.warningsMain !== 0) {
+    console.error(`legacy-shape main-envelope warnings mismatch: warnings=${prof.warningsMain}, expected 0 (zero K4 warnings)`)
+    process.exit(1)
+  }
+  if (prof.fanOut !== 2) {
+    console.error(`legacy-shape fan-out mismatch: fanOut=${prof.fanOut}, expected 2 (both side-zone containers)`)
+    process.exit(1)
+  }
+  if (!Array.isArray(prof.stylesRules) || prof.stylesRules.length !== LEGACY_SHAPE_RULES.length || new Set(prof.stylesRules).size !== LEGACY_SHAPE_RULES.length) {
+    console.error(`legacy-shape styles rules mismatch: got ${JSON.stringify(prof.stylesRules)}`)
+    process.exit(1)
+  }
+  for (const rule of LEGACY_SHAPE_RULES) {
+    if (!prof.stylesRules.includes(rule)) {
+      console.error(`legacy-shape styles rules missing ${rule}: ${JSON.stringify(prof.stylesRules)}`)
+      process.exit(1)
+    }
+  }
+}
+{
+  const pageHtml = await readFile(`${base}demo/legacy-shape.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/legacy-shape.js`).catch((e) => {
+    console.error('legacy-shape failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__legacyShapeDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__legacyShapeProfile
+  if (!prof) {
+    console.error('legacy-shape profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  // performance guard (same contract as the other pages): the timed sections
+  // (incl. the ONE enumeration compile + the side-card renders + the checks)
+  // must cover ~all of the page total, so "total" can never hide an untimed
+  // pipeline (RCA: archive/reviews/2026-08-15/2026-08-15-session-defect-review.md).
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`legacy-shape profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  assertLegacyShapeCensus(prof)
 }
 
 // Give microtasks a chance (Supervisor event flushes + async page checks).
@@ -495,6 +603,10 @@ if (!banners.some((b) => b.includes('feature-showcase') && /0 failed/.test(b))) 
 }
 if (!banners.some((b) => b.includes('translate-showcase') && /0 failed/.test(b))) {
   console.error('translate-showcase page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('legacy-shape') && /0 failed/.test(b))) {
+  console.error('legacy-shape page did not complete its checks (banner missing)')
   process.exit(1)
 }
 

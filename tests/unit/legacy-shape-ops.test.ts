@@ -41,6 +41,10 @@
  * RED set today: 1, 3, 4, 5, 7, 8. Green-by-accident pins (flag): 2, 6, 7b.
  */
 import { describe, it, expect } from 'vitest'
+import { Supervisor } from '../../src/core/supervisor.js'
+import { EventBridge } from '../../src/core/events.js'
+import { emitElements } from '../../src/core/render-helpers.js'
+import { reverseTranslate } from '../../src/core/translate.js'
 import { translateLegacy } from '../../src/core/translate.js'
 import { Node, type Node as NodeType } from '../../src/core/node.js'
 import { Link } from '../../src/core/link.js'
@@ -235,5 +239,186 @@ describe('D7 — the def' + "'s PLACEMENT links ride the seam layer (ALS-1/ALS-6
     t.root.compile(t.nodes)
     const container = consumer.anchors.find((a) => a.role === 'container' && a.target === 'zone')
     expect(container).toBeDefined()
+  })
+})
+
+describe('DEFECT-9/11 — clone link reuse + runtime-node reverse guard (user directives 2026-08-15)', () => {
+  // #9: a cloned seam consumer must materialize its seam — NAME-KEYED
+  // anchors (component source/target/duplex + placement container/content)
+  // REUSE the shared per-name registry Link; a fresh link is minted only
+  // for genuinely new connections (the family child case).
+  it('[9] a cloned seam consumer materializes the seam against the SHARED per-name link (1 seam parent, def-root gets the 2nd child set)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'menu', value: { type: 'nav', css: { classes: ['menu-bar'] }, children: [
+              { type: 'span', content: 'logo' }, { type: 'span', content: 'links' },
+            ] } },
+          ],
+          children: [
+            { type: 'div', content: 'shell text', component: [{ reference: 'menu', target: 'children' }] },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const original = t.root.children[0]!
+    const clone = original.clone()
+    sup.registerNode(clone)
+    // the NEW connection (supervisor clone-instance slot pattern): destroy the
+    // inherited family edge, then attach the clone as a second child of the root
+    const inherited = clone.childAnchor()
+    if (inherited) {
+      inherited.link.destroy()
+      const idx = clone.anchors.indexOf(inherited)
+      if (idx !== -1) clone.anchors.splice(idx, 1)
+    }
+    clone.addAnchor('child', clone, { priority: 1 }, t.root.familyLinkFor()!)
+    const cr = t.root.compile([...t.nodes, clone])
+    expect(cr.actionable.length).toBeGreaterThan(0)
+    // the clone's seam materialized via the SHARED link (the provider is on it)
+    const seamParents = clone.anchors.filter((a) => a.role === 'parent' && a.options.seam !== undefined)
+    expect(seamParents.length).toBe(1)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els = emitElements(cr.actionable, byNode)
+    const cloneEl = els.find((e) => e.wire === clone.id)!
+    // B1 shell + def-root render for the CLONE too (the clone has NO
+    // authored children of its own — childOrder = the def-root only)
+    expect(cloneEl.props['text']).toBe('shell text')
+    expect(cloneEl.childOrder.length).toBe(1)
+    const cloneDefRoot = els.find((e) => e.wire === cloneEl.childOrder[0])!
+    expect(cloneDefRoot.type).toBe('nav')
+    expect(cloneDefRoot.props['css:classes']).toEqual(['menu-bar'])
+  })
+
+  it('[11] runtime-created family children (clone-instance) reverse as NOTHING — the authored envelope is base truth', () => {
+    const t = translateLegacy({
+      template: {
+        root: { type: 'app', children: [{ type: 'div', props: { id: 'authored-child' }, content: 'authored' }] },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    // runtime expansion: clone the authored child + attach the clone under the root
+    const authored = t.root.children[0]!
+    const clone = authored.clone()
+    sup.registerNode(clone)
+    const inherited = clone.childAnchor()
+    if (inherited) {
+      inherited.link.destroy()
+      const idx = clone.anchors.indexOf(inherited)
+      if (idx !== -1) clone.anchors.splice(idx, 1)
+    }
+    clone.addAnchor('child', clone, { priority: 1 }, t.root.familyLinkFor()!)
+    const out = reverseTranslate(t.root)
+    const kids = out.template.root.children ?? []
+    // ONLY the authored child reverses — the runtime clone is excluded
+    expect(kids.map((k) => k.props?.id)).toEqual(['authored-child'])
+  })
+})
+
+describe('DEFECT-10 — removeLayer removes its generating anchors (node.md §6.2 letter; stress round 4 S37/S38, 2026-08-15)', () => {
+  // S37: an AnchorLayer minting a seam target anchor — removeLayer must
+  // remove the decl'd anchor, and the next materializeSeam must REVERT the
+  // seam links it drove (no seam parents, def-root no longer renders).
+  it('removing an anchor layer removes its seam target anchor AND reverts the seam links', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'menu', value: { type: 'nav', css: { classes: ['menu-bar'] }, children: [{ type: 'span', content: 'logo' }] } },
+          ],
+          children: [{ type: 'div', props: { id: 'layer-host' }, content: 'shell text' }],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const host = t.root.children[0]!
+    // the AnchorLayer mints the seam target anchor (same shape translate plans)
+    host.addLayer({ id: 'probe-seam', sourceName: 'probe', anchors: [{ role: 'target', target: 'menu', options: { seam: 'children' } }] } as never)
+    const cr1 = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els1 = emitElements(cr1.actionable, byNode)
+    const hostEl1 = els1.find((e) => e.wire === host.id)!
+    // the seam materialized: shell (own text) + the def-root (nav.menu-bar);
+    // the host has NO authored children → childOrder = [def-root]
+    expect(hostEl1.props['text']).toBe('shell text')
+    expect(hostEl1.childOrder.length).toBe(1)
+    const defRoot1 = els1.find((e) => e.wire === hostEl1.childOrder[0])!
+    expect(defRoot1.type).toBe('nav')
+    expect(host.anchors.some((a) => a.role === 'target' && a.target === 'menu' && a.options.seam === 'children')).toBe(true)
+
+    // remove the layer: the generating anchor leaves + the seam reverts
+    host.removeLayer('probe-seam')
+    expect(host.anchors.some((a) => a.role === 'target' && a.target === 'menu')).toBe(false)
+    const cr2 = t.root.compile(t.nodes)
+    // the recompile's materializeSeam REVERTS the seam links the removed
+    // anchor drove (DEFECT #10 reversion pass)
+    expect(host.anchors.some((a) => a.role === 'parent' && a.options.seam !== undefined)).toBe(false)
+    const els2 = emitElements(cr2.actionable, byNode)
+    const hostEl2 = els2.find((e) => e.wire === host.id)!
+    // after the revert the host is a plain div: own text, NO children
+    expect(hostEl2.childOrder.length).toBe(0)
+    expect(els2.some((e) => Array.isArray(e.props['css:classes']) && (e.props['css:classes'] as string[]).includes('menu-bar'))).toBe(false)
+  })
+
+  // S38: a layer-minted container anchor — the fan-out grows and SHRINKS.
+  it('removing a container-minting layer shrinks the placement fan-out back to 1', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [
+            { type: 'div', props: { id: 'consumer' }, placement: [{ targetPlacement: ['zone'] }] },
+            { type: 'aside', props: { id: 'prod-a' }, placement: [{ placementName: 'zone' }], content: 'a', css: { style: { width: '1px' } } },
+            { type: 'aside', props: { id: 'prod-b' }, placement: [], content: 'b', css: { style: { width: '1px' } } },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const consumer = t.root.children[0]!
+    const prodB = t.root.children[2]!
+    const fanOut = () => consumer.compilePath().actionable.filter((s) => s.activePlacement === 'zone').length
+    expect(fanOut()).toBe(1)
+    // mint a second container on prod-b via an anchor layer
+    prodB.addLayer({ id: 'mint-zone', sourceName: 'probe', anchors: [{ role: 'container', target: 'zone' }] } as never)
+    expect(fanOut()).toBe(2)
+    // remove the layer → the container anchor leaves → fan-out shrinks
+    prodB.removeLayer('mint-zone')
+    expect(prodB.anchors.some((a) => a.role === 'container' && a.target === 'zone')).toBe(false)
+    expect(fanOut()).toBe(1)
+  })
+
+  it('double-remove is a no-op; re-adding the layer re-materializes cleanly (idempotency)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'menu', value: { type: 'nav', css: { classes: ['menu-bar'] }, children: [{ type: 'span', content: 'logo' }] } },
+          ],
+          children: [{ type: 'div', content: 'shell text' }],
+        },
+      },
+      content: [],
+    } as never)
+    const host = t.root.children[0]!
+    const decl = { id: 'probe-seam', sourceName: 'probe', anchors: [{ role: 'target', target: 'menu', options: { seam: 'children' } }] }
+    host.addLayer(decl as never)
+    host.removeLayer('probe-seam')
+    host.removeLayer('probe-seam') // no-op
+    host.addLayer(decl as never)   // re-add works
+    expect(host.anchors.some((a) => a.role === 'target' && a.target === 'menu' && a.options.seam === 'children')).toBe(true)
   })
 })

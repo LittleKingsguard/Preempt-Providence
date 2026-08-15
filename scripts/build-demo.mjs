@@ -13,6 +13,10 @@
  *                             surface (legacy translate → placements,
  *                             components/forks, handlers, payload lifecycle,
  *                             loop-safety, reverse translation, PAR-5)
+ *   demo/legacy-shape.html   — the REAL-LEGACY-SHAPE regression page (D1–D8):
+ *                             the blind-test translate-stack envelope + two
+ *                             K4 side-card envelopes (PAR-5 expected page
+ *                             through the SSRFragmentAdapter)
  */
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -176,4 +180,12 @@ async function emitPage(templateName, outName, doc, serverData) {
 // expected page) at import.
 {
   await import('./translate-showcase-page.mjs')
+}
+
+// ---- page 19: legacy-shape (the REAL-LEGACY-SHAPE regression page, D1–D8) ---
+// The blind-test translate-stack fixture + two K4 side-card envelopes; the
+// builder writes demo/legacy-shape.html (+ the PAR-5 expected page through
+// the real SSRFragmentAdapter) at import.
+{
+  await import('./legacy-shape-page.mjs')
 }

@@ -4,18 +4,18 @@ Status: SUMMARY DOC. Drawn entirely from the documented record. It answers
 one question: **what did the rebuild misunderstand about legacy placement,
 how did the misreadings compound, and what does the revision restore?** It
 is the narrative companion to `docs/specs/placement-path-spec.md` (the FINAL
-contract) and `docs/specs/path-fork-review.md` (the gate record); it adds no
+contract) and `archive/reviews/2026-08-15/2026-08-15-path-fork-review.md` (the gate record); it adds no
 new decisions.
 
 Provenance: `docs/specs/placement-path-spec.md` (§0 E2E constraints;
 §1.1/§1.2 two-sided role + multiplicity; §2 path compile; §8–§10.af decision
-history; Provenance at :23-54); `docs/specs/path-fork-review.md` (round-1
+history; Provenance at :23-54); `archive/reviews/2026-08-15/2026-08-15-path-fork-review.md` (round-1
 REJECT §2.1–§2.5, round-2 re-review R2.1–R2.8); `docs/specs/
-legacy-component-ref-only-review.md` (AP5/NP13/Appendix D/E — the "no
+archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md` (AP5/NP13/Appendix D/E — the "no
 consumer seam" rationale and interim decisions); `docs/specs/
-state-first-analysis.md` (§2.2.2 impossibility, §4 census); `docs/
-test-findings.md` (stress loop #1 scenario 10, DEFECT #1, blind tests #1/#2);
-`docs/session-defect-review.md` (fork-stress-data pass-2 RCA); and the
+archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md` (§2.2.2 impossibility, §4 census); `docs/
+archive/findings/2026-08-15/2026-08-15-test-findings.md` (stress loop #1 scenario 10, DEFECT #1, blind tests #1/#2);
+`archive/reviews/2026-08-15/2026-08-15-session-defect-review.md` (fork-stress-data pass-2 RCA); and the
 legacy sources the audit finally read — `/media/ryan/Shared Files1/Projects/
 Preempt/docs/skills/placements.md` + `components.md` (the placement
 owner/zone model, `targetPlacement` routing, multiplicity, first-match,
@@ -37,10 +37,10 @@ row :764). The engine never implemented it: static compile forks fire only
 on component `target` anchors (`src/core/node.ts:660-663`),
 `src/core/resolve.ts` has zero placement references
 (placement-path-spec.md:35-37); probes confirmed the claim "inert at static
-compile" (stress-test-scenarios.md:655-688; test-findings.md:553). The
+compile" (archive/test-data/2026-08-15/2026-08-15-stress-test-scenarios.md:655-688; archive/findings/2026-08-15/2026-08-15-test-findings.md:553). The
 pipeline stage was likewise a "dead promise" (pipeline.md:67; the registry
 row at `src/core/pipeline.ts:78` "exists but translate never feeds it" —
-legacy-component-ref-only-review.md:531). **The spec described a legacy
+archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:531). **The spec described a legacy
 behavior the engine lacked.**
 
 ### (b) The consumer half of the placement pair was dropped at the boundary
@@ -53,15 +53,15 @@ anchor, translate.ts:434-437) and dropped `targetPlacement` at the translate
 boundary: "Unknown extra fields … are ignored" (translate.md §2; TR-F2),
 warn `component-target-placement` + ignore (translate.ts:440-444), NP13 —
 "targetPlacement translation gap: legacy content routing dead"
-(legacy-component-ref-only-review.md:433). The recorded rationale was
+(archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:433). The recorded rationale was
 **"placement pipeline is placementName-keyed — targetPlacement has no
-consumer seam"** (AP5 row, legacy-component-ref-only-review.md:403) — a
+consumer seam"** (AP5 row, archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:403) — a
 statement about the rebuild's own design, not about legacy, where the
 consumer seam is the entire point (placements.md:18-19, 31-36;
 overview.md:23-24). The repair was recorded as a follow-up ("feed wiring
-TODO", legacy-component-ref-only-review.md:494-495, 538) that **never
+TODO", archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:494-495, 538) that **never
 landed** — the interim "keep-unplaced + warn" decision stood throughout
-(standing decision #7, legacy-component-ref-only-review.md:494-495).
+(standing decision #7, archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:494-495).
 
 ### (c) Runtime clone-instance + after-compile recursion substituted for static fan-out
 
@@ -73,7 +73,7 @@ rebuild. The fork-stress page re-expressed it as clone ceremony: 22
 prototypes + handler bodies that `clone-instance` 4094 graph nodes and
 attach them at runtime (`fork-stress-data.md` §Purpose / §1.3;
 `supervisor.ts:388-411`; census 4117 registered = 4095 in-tree + 22 unplaced,
-state-first-analysis.md:203-209) — what legacy stated in data became a
+archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:203-209) — what legacy stated in data became a
 runtime construction ritual, though the 4095-state tree IS expressible
 statically (placement-path-spec.md:44-48).
 
@@ -87,35 +87,35 @@ The mis-typing is the boundary's own record of the misreading: a preference
 **array** read as a scalar, a **string** resolution record read as a
 boolean. Fixed in the revision (`targetPlacement?: string[]`,
 `activePlacement?: string` — placement-path-spec.md:768, 862, 1108;
-test-findings.md:137).
+archive/findings/2026-08-15/2026-08-15-test-findings.md:137).
 
 ### (e) The review-loop phase: the gate validated the misreading
 
 When the path-fork proposal arrived, the three-agent gate rejected it as
 stated, and the rejection is instructive twice over:
 
-1. **"Multi-parent placement inexpressible"** (path-fork-review.md:97-118,
+1. **"Multi-parent placement inexpressible"** (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:97-118,
    blocker 2) — true of the rebuild's own data model (single-anchor minting
    translate.ts:434-437; one child anchor per node node.ts:416-419; the
    `'placement'` role "carries no parent semantics at all",
-   path-fork-review.md:116-118), **false of legacy**: multiplicity lives on
+   archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:116-118), **false of legacy**: multiplicity lives on
    the **shared name** (one name, N zone-owners, one source fans out into
-   all of them — R2.2, path-fork-review.md:311-316; audit,
+   all of them — R2.2, archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:311-316; audit,
    placement-path-spec.md:29-33). The gate was reading the rebuild
    correctly and the legacy it was supposed to be faithful to incorrectly.
 2. **The arithmetic error**: round 1 computed "path-only keying gives
    Σ 2^(k−1) + 1 = **2048** states — 2047 short of 4095"
-   (path-fork-review.md:78-79) and called both fix-ups fatal. R2.2 records
+   (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:78-79) and called both fix-ups fatal. R2.2 records
    the truth: it was a **keying-model error, not an arithmetic error** — the
    (prototype, path) keying with the sibling-shared owner-name topology
-   yields exactly Σ 2^k + root = 4095 (path-fork-review.md:304-325). The
+   yields exactly Σ 2^k + root = 4095 (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:304-325). The
    error briefly reinforced the rejection; the corrected bijection is what
    made the model load-bearing.
 
 Round 2 re-review closed the round-1 blockers on the model level but still
 rejected "FOR THE STATED GOAL" as DOMINATED by coalesced compiles — while
 identifying the proposal's unique remainder: **static P3, a FEATURE worth
-specing separately** (R2.8 ¶3, path-fork-review.md:455-466).
+specing separately** (R2.8 ¶3, archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:455-466).
 
 ### (f) The legacy-fidelity audit confirmed all three suspicions
 
@@ -148,11 +148,11 @@ the spec claiming behavior the engine lacked. The divergence was **recorded**
 in the DECIDED ledger (S3.6 "Placement is attachment/compile only — no
 legacy `Placement`", RENDER_PROCESS_NOTES.md:534; §10.8.2 "not carried
 over", :464; NP13 interim keep-unplaced + warn,
-legacy-component-ref-only-review.md:494-495) — but **the records themselves
+archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:494-495) — but **the records themselves
 encoded the misreading**: recording a decision is not validating it against
 the legacy ground truth. The audit (placement-path-spec.md:29-43) and the
 gate's own self-correction (R2.2 keying-model admission,
-path-fork-review.md:304-325) are what finally exposed it.
+archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:304-325) are what finally exposed it.
 
 ---
 
@@ -178,7 +178,7 @@ tests/e2e/path-fork-e2e.test.ts, static census 23/4095/0/0):
    (E2E-1; §5, §5.2 census; the R2.2 bijection).
 5. **The four fixed E2E constraints** — E2E-1 no-node-creation, E2E-2
    node-local invalidation, E2E-3 component consumers only, E2E-4
-   placement-add affected set (§0; all four pinned in test-findings.md:35-37).
+   placement-add affected set (§0; all four pinned in archive/findings/2026-08-15/2026-08-15-test-findings.md:35-37).
 6. Ancillary restorations: `activePlacement` as the derived first-match
    read (§2.5), the ancestor-name veto (§1.3), the placement-path cycle
    guard (§1.4), the `placement-attach` op (§3.3), and the corrected
@@ -191,7 +191,7 @@ tests/e2e/path-fork-e2e.test.ts, static census 23/4095/0/0):
 1. **The three-agent gate validates proposals against the current spec —
    and when the spec itself encodes a misreading, the gate validates the
    misreading.** The round-1 "multi-parent placement inexpressible" blocker
-   (path-fork-review.md:97-118) was code-verified and true of the rebuild's
+   (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:97-118) was code-verified and true of the rebuild's
    data model; it was false of legacy, whose model the rebuild had silently
    discarded. A gate that checks proposals against `translate.ts:434-437`
    cannot see a legacy field the boundary already dropped. The gate's
@@ -217,8 +217,8 @@ tests/e2e/path-fork-e2e.test.ts, static census 23/4095/0/0):
    re-classification rounds (§10.y, §10.ac), and the F-1…F-13 final-review
    rewrite list (§10.af.1) retired the old framing everywhere it survived —
    including supersession banners on the earlier records themselves
-   (path-fork-review.md:3-17; state-first-analysis.md:3-16;
-   test-findings.md:553). A decision record is kept as history, never as
+   (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:3-17; archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:3-16;
+   archive/findings/2026-08-15/2026-08-15-test-findings.md:553). A decision record is kept as history, never as
    current contract.
 5. **"Recorded" ≠ "validated."** The DECIDED ledger faithfully recorded the
    divergence (S3.6, NP13) — recording made it deliberate, not correct.

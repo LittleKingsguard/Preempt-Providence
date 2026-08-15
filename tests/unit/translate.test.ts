@@ -8,7 +8,7 @@
  * `TranslatedTree.content`, awaiting placement.
  *
  * Component bindings follow the POST-K1–K8 contract
- * (docs/specs/legacy-component-ref-only-review.md §2.2 + Appendix E;
+ * (archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md §2.2 + Appendix E;
  * docs/specs/translate.md §2/§2.1): `target` is the LOCAL `props.<key>`
  * apply path (flat only); `component` accepts a single binding OR an array
  * (K7); vacuous bindings warn `component-binding-empty` (K3, never throw);
@@ -277,24 +277,24 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
       expect(t.warnings).toEqual([])
     })
 
-    it('{reference, value, target: "props.<key>"} → source anchor (self-provider) + same synthesis (provide-and-self-apply)', () => {
+    it('{reference, value, target: "props.<key>"} → DUPLEX anchor (S19 ruling 2026-08-15: value+target ⇒ duplex, not source) + same synthesis (provide-and-self-apply)', () => {
       const t = translateLegacy({
         template: { root: { type: 'app', component: { reference: 'p10', value: 'v10', target: 'props.name' } } },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'p10', value: 'v10', applyPath: 'props.name' }])
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'p10', value: 'v10', applyPath: 'props.name' }])
       expect(t.root.derived?.props?.name).toEqual({ $: 'bindings.p10' })
       expect(t.warnings).toEqual([])
     })
 
-    it('no second-name target anchor is created for a props.<key> target (duplex is legacy-unexpressible)', () => {
+    it('no SECOND-NAME target anchor is created for a props.<key> target — the target is the applyPath ON the duplex anchor (S19: value+target is NOW expressible as duplex)', () => {
       const t = translateLegacy({
         template: { root: { type: 'app', component: { reference: 'val', value: 42, target: 'props.theme' } } },
         content: [],
       })
       const anchors = compAnchors(t.root)
       expect(anchors.filter((a) => a.target === 'theme')).toEqual([])
-      expect(anchors).toEqual([{ role: 'source', target: 'val', value: 42, applyPath: 'props.theme' }])
+      expect(anchors).toEqual([{ role: 'duplex', target: 'val', value: 42, applyPath: 'props.theme' }])
     })
 
     it('synthesis rides the compiled derived bake (self-provider ⇒ own value)', () => {
@@ -330,7 +330,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         template: { root: { type: 'app', component: { reference: 'a.b', value: 1, target: 'props.x' } } },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a.b', value: 1 }]) // kept, NO applyPath
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a.b', value: 1 }]) // kept, NO applyPath
       expect(t.root.derived?.props?.x).toBeUndefined()
       expect(t.warnings).toEqual([{ code: 'component-target-skipped', path: 'root' }])
     })
@@ -340,7 +340,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         template: { root: { type: 'app', component: { reference: 'a', value: 1, target: 'props.id' } } },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
       expect(t.root.derived?.props?.id).toBeUndefined()
       expect(t.warnings).toEqual([{ code: 'component-target-skipped', path: 'root' }])
     })
@@ -350,7 +350,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         template: { root: { type: 'app', component: { reference: 'a', value: 1, target: 'props.a.b' } } },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
       expect(t.root.derived).toBeUndefined()
       expect(t.warnings).toEqual([{ code: 'component-target-skipped', path: 'root' }])
     })
@@ -366,7 +366,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
       expect(t.root.derived?.props?.x).toEqual({ $: 'type' })
       expect(t.warnings).toEqual([])
     })
@@ -389,7 +389,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
           template: { root: { type: 'app', component: { reference: 'a', value: 1, target } } },
           content: [],
         })
-        expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+        expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
         expect(t.root.derived).toBeUndefined()
         expect(t.warnings).toEqual([{ code: 'component-target-gap', path: 'root' }])
       }
@@ -402,7 +402,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
           template: { root: { type: 'app', component: { reference: 'a', value: 1, target } } },
           content: [],
         })
-        expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+        expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
         expect(t.root.derived).toBeUndefined()
         expect(t.warnings).toEqual([{ code: 'component-target-gap', path: 'root' }])
       }
@@ -415,7 +415,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
           template: { root: { type: 'app', component: { reference: 'a', value: 1, target } } },
           content: [],
         })
-        expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+        expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
         expect(t.root.derived).toBeUndefined()
         expect(t.warnings).toEqual([{ code: 'component-target-skipped', path: 'root' }])
       }
@@ -453,7 +453,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1, applyPath: 'props.x' }])
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' }])
       expect(t.root.derived?.props?.x).toEqual({ $: 'bindings.a' })
       expect(t.warnings).toEqual([{ code: 'component-duplicate-target', path: 'root' }])
     })
@@ -472,8 +472,8 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         content: [],
       })
       expect(compAnchors(t.root)).toEqual([
-        { role: 'source', target: 'a', value: 1, applyPath: 'props.x' },
-        { role: 'source', target: 'b', value: 2, applyPath: 'props.y' },
+        { role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' },
+        { role: 'duplex', target: 'b', value: 2, applyPath: 'props.y' },
       ])
       expect(t.root.derived?.props?.x).toEqual({ $: 'bindings.a' })
       expect(t.root.derived?.props?.y).toEqual({ $: 'bindings.b' })
@@ -493,7 +493,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         },
         content: [],
       })
-      expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'a', value: 1 }])
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
       // first binding's target is itself a recognition-only gap → gap warn,
       // THEN the second is blocked as a duplicate
       expect(t.warnings).toEqual([
@@ -634,7 +634,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
       const node = new Node(seeded[0]!, hub())
       const anchors = compAnchors(node)
       expect(anchors).toEqual([
-        { role: 'source', target: 'a', value: 1, applyPath: 'props.x' },
+        { role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' },
         { role: 'target', target: 'b', applyPath: 'props.y' },
       ])
     })
@@ -656,7 +656,7 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     expect(out.template?.root.children?.[0]?.component).toEqual({ reference: 'panel', value: { variant: 'a' } })
     // the reversed doc re-translates into the identical anchors (no warnings)
     const again = translateLegacy(out)
-    expect(compAnchors(again.root)).toEqual([{ role: 'source', target: 'val', value: 42, applyPath: 'props.theme' }])
+    expect(compAnchors(again.root)).toEqual([{ role: 'duplex', target: 'val', value: 42, applyPath: 'props.theme' }])
     expect(again.warnings).toEqual([])
   })
 

@@ -271,4 +271,4 @@ expects 2^depth − 1 elements for every variant.
 `docs/specs/fork-stress.md` (add a "data-driven variant" section),
 `docs/skills/designing-pages.md` §11/§12 (new page row/entry),
 `demo/index.html`, `RENDER_PROCESS_NOTES.md` (DECIDED entry), the
-session-defect-review "Where the rules live now".
+archive/reviews/2026-08-15/2026-08-15-session-defect-review "Where the rules live now".

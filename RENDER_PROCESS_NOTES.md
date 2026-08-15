@@ -874,7 +874,7 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   so in-browser render data ≡ server render data. Fork arms are wired
   `<nodeId>#<i>`; a parent whose `childOrder` references a forked node id
   adopts the arm wires (in arm order) so `diffMinimal` attaches every arm.
-  Elaboration (feature-matrix-review.md §4.1): a forked node NEVER emits an
+  Elaboration (archived 2026-08-15: archive/reviews/2026-08-15/feature-matrix-review.md §4.1): a forked node NEVER emits an
   element for its base id `node-X` — only the `<nodeId>#<i>` arms, all leaves.
   The emitter MUST expand a forked-child reference in a parent's `childOrder`
   into the arm wires in arm order; leaving the base id would make `diffMinimal`
@@ -926,7 +926,7 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   display matches its raw source. Headless coverage: `scripts/demo-smoke.mjs`
   imports `demo/mode-toggle.js?mode=…` as three cache-busted module instances,
   asserting a zero-failure banner per mode. Session defect review + the
-  authoring/browser-realism rules derived from it: `docs/session-defect-review.md`,
+  authoring/browser-realism rules derived from it: `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md`,
   folded into `docs/skills/designing-pages.md` §14.
 - **DECIDED (fork-stress demo, runtime child-creation stress test):**
   `demo/fork-stress-d{2,4,6,8,9,10,11,12}.html` stress-tests the forking
@@ -1010,7 +1010,7 @@ carries a `DECIDED:` record; reviewers verify against these + the specs.
   drop as `loop` + `circular-source` at op time (FS-5) and compile time
    (FS-7). Fork-stress depths 9-12 become compilable (L8/L9/L10/L11 layers
    actionable; depth-12 needs a longer smoke settle). Landed via the
-   subagents workflow: spec `docs/specs/compile-horizon-review.md` §6
+   subagents workflow: spec `archive/reviews/2026-08-15/2026-08-15-compile-horizon-review.md` §6
    (reviewer loop exit criteria met); TestWriter red set + Implementer per
    that spec's §6.4/§6.5.
 - **DECIDED (derived state, variant D — docs/specs/derived-state.md):**

@@ -118,7 +118,7 @@ from anchors (the markdown handler today reads only authored `content`/`props`).
 
 | TODO | Gap vs docs | Prerequisites | Where |
 | --- | --- | --- | --- |
-| 3. Skeleton server entry (`src/server.ts` + `src/index.ts`) | `contract.md` §Server and `FRESH-CONTEXT-SUMMARY.md` §2.9 document `/health`, `POST /api/apply`, `GET /api/state?node=`, WS `/ws` — **no file exists**; `package.json` `start`/`dev` point at missing `dist/index.js`/`src/index.ts`. | none for implementation (`clientAPI.apply`/`getState` already exist); else **decision**: park it explicitly in `contract.md` like S4.3 instead of implementing | `src/server.ts`, `src/index.ts`, `package.json` |
+| 3. Skeleton server entry (`src/server.ts` + `src/index.ts`) | `contract.md` §Server and `archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY.md` §2.9 document `/health`, `POST /api/apply`, `GET /api/state?node=`, WS `/ws` — **no file exists**; `package.json` `start`/`dev` point at missing `dist/index.js`/`src/index.ts`. | none for implementation (`clientAPI.apply`/`getState` already exist); else **decision**: park it explicitly in `contract.md` like S4.3 instead of implementing | `src/server.ts`, `src/index.ts`, `package.json` |
 
 ### Tier 4 — documentation maintenance (no code)
 

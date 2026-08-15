@@ -151,17 +151,24 @@ applied as a layer like any other value.
 ## 6. Known gaps (PARKED / TODO)
 
 - **TODO (D6 — live-prod disposition 2026-08-14, `live-prod/placeholderLanding/
-  FINDINGS.md`):** legacy handler DEFS stored as `template.component` values
+  FINDINGS.md`; corrected 2026-08-15, stress-test review loop round 3):**
+  legacy handler DEFS stored as `template.component` values
   (`{name, body}` — e.g. `AuthInitHandler`, `LogoutHandler`,
   `ToggleUserDropdown`, `enterEditMode`, `showComments`,
   `toggleCommentsButton` in the placeholderLanding envelope) are misparsed as
   component SOURCE anchors: the K7 source-anchor plan makes them value-carrying
   providers, nothing wires them to phases/events, and the `handler-phase-unknown`
-  guard never fires (they never become HandlerDefs) — the defs die SILENTLY.
+  guard never fires (they never become HandlerDefs). **They do NOT die
+  silently:** such a def has NO `reference`, so the K3 vacuous guard fires —
+  ONE `component-binding-empty` warn at the def's path (`root` for
+  `template.component`), zero anchors, def skipped; the defs are
+  dead-as-components, never HandlerDefs, never dispatched, no crash (the
+  "die SILENTLY" claim in the original D6 note was STALE — probe-verified:
+  `component-binding-empty@root` fires for `{name, body}` defs).
   The legacy system wired them through `handlers.afterAssembly`-style targets +
   HandlerDef phases (old `core/Handler.ts:13`). Handler implementation changed
   for understood reasons; the misparse gap is **accepted and parked as a TODO —
   no fix**. Bodies of such defs use the legacy context API
   (`receiveNextState`/`findNode`/`supervisor.userData`) and would need the
   documented re-authoring carve-out if a fix ever lands. No new warn code is
-  introduced for this gap.
+  introduced for this gap (the K3 warn that fires is pre-existing).

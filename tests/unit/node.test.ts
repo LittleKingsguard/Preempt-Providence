@@ -266,7 +266,7 @@ describe('methods — mutating surface inside an op (§6.1–§6.5)', () => {
     expect(n.type).toBe('c')
   })
 
-  it('M-6 clone copies base + layers + anchor profile by default; fresh id; NO shared links or cache', () => {
+  it('M-6 clone copies base + layers + anchor profile by default; fresh id; name-keyed links SHARED (DEFECT #9), family links fresh; runtime-minted flag set', () => {
     const src = makeNode({ type: 'box', props: { kind: 'copy' } })
     src.addLayer({ id: 'extra', type: 'flex' })
     addComponentSource(src, 'persona', { n: 1 })
@@ -281,8 +281,15 @@ describe('methods — mutating surface inside an op (§6.1–§6.5)', () => {
     expect(copy.props.kind).toBe('copy')
     expect(copy.dirty.size).toBe(0)
 
-    const srcLinks = new Set(src.anchors.map(a => a.link))
-    for (const a of copy.anchors) expect(srcLinks.has(a.link)).toBe(false)
+    // DEFECT #9: NAME-KEYED anchors (source/target/duplex/container/content/
+    // component) SHARE the original per-name registry link; fresh links are
+    // only for genuinely new connections (the family-child attach case)
+    for (const a of copy.anchors) {
+      if (['source', 'target', 'duplex', 'component', 'container', 'content'].includes(a.role)) {
+        expect(src.anchors.find((x) => x.role === a.role && x.target === a.target)?.link).toBe(a.link)
+      }
+    }
+    expect(copy.runtimeMinted).toBe(true)
     expect(copy.anchors.map(a => a.role)).toEqual(src.anchors.map(a => a.role))
     // provider values ride along: a cloned source anchor keeps its value
     // (a clone of a data-declared provider is itself a provider)
@@ -1219,7 +1226,7 @@ describe('placement roles surface — container/content (P3 §1.1)', () => {
 })
 
 describe('engine defect #1 — publishOwn bypass on mixed nodes (own-value seed into resolveArms bindings)', () => {
-  // docs/test-findings.md §"Stress-test review loop #2" DEFECT #1: a node
+  // archive/findings/2026-08-15/2026-08-15-test-findings.md §"Stress-test review loop #2" DEFECT #1: a node
   // carrying ANY target (consumer) anchor routed through resolveArms never
   // published its own source/duplex values, so synthesized `{$:'bindings.B'}`
   // reads (K2 self-apply) and authored `bindings.*` reads evaluated null on a

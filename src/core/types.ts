@@ -68,6 +68,11 @@ export interface AnchorOptions {
    *  resolved value is applied to; persisted so reverseTranslate can re-emit
    *  `target` on the round-trip (translate.ts sets it at synthesis). */
   applyPath?: string
+  /** DEFECT #10 (2026-08-15) — the seam target anchor NAME that drove a seam
+   *  parent link: the materializeSeam reversion pass removes seam links
+   *  whose driving seam anchor is gone (removeLayer unwinds the seam it
+   *  minted). */
+  seamTarget?: string
   /** D7/F17 — the anchor-layer seam marker: `true` on layer-materialized seam
    *  parent/child anchors (F15/F19 — the role-scoped single-parent exemption
    *  and the familyLinkFor filter key off it); the persisted seam target

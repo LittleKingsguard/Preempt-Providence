@@ -39,6 +39,12 @@ function linkOf(a: Anchor): Link {
   return a.link as unknown as Link
 }
 
+/** DEFECT #9 (2026-08-15) — the name-keyed anchor roles whose links are the
+ *  shared per-name registries (component per-name Links + placement per-name
+ *  Links): clones REUSE these links; fresh links are only for genuinely new
+ *  connections (the family-child attach case). */
+const NAME_KEYED_ROLES = new Set(['source', 'target', 'duplex', 'component', 'container', 'content'])
+
 /** P3 §1.3 ancestor-name veto predicate — shared by the op-time half
  *  (placement-attach, ops.ts) and the translate-time half (producer
  *  minting, translate.ts): does any FAMILY ancestor of `node` carry a
@@ -313,6 +319,12 @@ export class Node {
   readonly base: Readonly<NodeBaseData>
   layers: NodeLayer[]
   destroyed = false
+  /** DEFECT #11 (2026-08-15) — runtime-minted family nodes (clone-instance
+   *  artifacts): reverseTranslate EXCLUDES them (the authored envelope is
+   *  base truth; the graph redesign removed the need for literal cloning in
+   *  placement/component logic — clone-instance is a legacy artifact guard).
+   *  Runtime-only; never serialized. */
+  runtimeMinted = false
 
   private readonly _anchors: Anchor[]
   private readonly _dirty: Set<DirtyScope>
@@ -546,16 +558,49 @@ export class Node {
     this.ensureWritable()
     const idx = this.layers.findIndex(l => l.id === id)
     if (idx === -1) return
-    this.layers.splice(idx, 1)
+    const [layer] = this.layers.splice(idx, 1)
+    if (layer === undefined) return
+    // DEFECT #10 fix (S37/S38, stress round 4): the layer's GENERATING
+    // anchors are removed with it (node.md §6.2 — "removed together with
+    // its generating anchor"): each decl'd anchor leaves the node; the next
+    // materializeSeam unwinds the seam links the removed anchor drove. The
+    // placement fan-out then shrinks on recompile (no stale containers).
+    if (Array.isArray(layer.anchors) && layer.anchors.length > 0) {
+      for (const decl of layer.anchors) {
+        if (typeof decl.target !== 'string') continue
+        const match = this.anchors.find(a =>
+          a.role === decl.role && a.target === decl.target
+          && (decl.options?.seam === undefined || a.options.seam === decl.options.seam),
+        )
+        if (match) this.removeAnchor(match)
+      }
+    }
     this.compileLocal()
+    this.markDirty('anchor-populate')
     this.markRemote()
+    scheduleSweep(true)
   }
 
   removeLayersForSource(sourceName: string): void {
     this.ensureWritable()
+    const removed = this.layers.filter(l => l.sourceName === sourceName)
     this.layers = this.layers.filter(l => l.sourceName !== sourceName)
+    // DEFECT #10 — source-scoped removal also unwinds the generating anchors
+    for (const layer of removed) {
+      if (!Array.isArray(layer.anchors) || layer.anchors.length === 0) continue
+      for (const decl of layer.anchors) {
+        if (typeof decl.target !== 'string') continue
+        const match = this.anchors.find(a =>
+          a.role === decl.role && a.target === decl.target
+          && (decl.options?.seam === undefined || a.options.seam === decl.options.seam),
+        )
+        if (match) this.removeAnchor(match)
+      }
+    }
     this.compileLocal()
+    this.markDirty('anchor-populate')
     this.markRemote()
+    scheduleSweep(true)
   }
 
   clone(actor?: string, opts: { ignore?: string[] } = {}): Node {
@@ -578,12 +623,25 @@ export class Node {
       }))
     }
     copy.compileLocal()
+    // DEFECT #9 fix (user directive 2026-08-15): NAME-KEYED anchors — the
+    // component per-name roles (source/target/duplex/component) and the
+    // placement per-name roles (container/content) — REUSE the ORIGINAL
+    // shared per-name registry Link: the registry IS the connection (the
+    // provider/zone resolution keys on the link), so a fresh link would
+    // orphan the clone from resolution and seam materialization. A fresh
+    // link is minted ONLY when the operation creates a connection that did
+    // not exist before — the FAMILY child case (adding the clone as a child
+    // to a previously childless host), which the skips below leave to the
+    // attach path. DEFECT #11 fix: the clone is marked runtime-minted so
+    // reverseTranslate excludes it (the authored envelope is base truth —
+    // the graph redesign removed the need for literal cloning in
+    // placement/component logic; clone-instance is a legacy artifact).
     for (const a of this.anchors) {
       if (a.role === 'child' && typeof a.target === 'string') continue
       if (a.role === 'parent' && a.target instanceof Node) continue
-      const fresh = new Link({ name: linkOf(a).config.name })
+      const link = NAME_KEYED_ROLES.has(a.role) ? linkOf(a) : new Link({ name: linkOf(a).config.name })
       try {
-        const copyAnchor = copy.addAnchor(a.role, a.target as AnchorTarget, { ...a.options }, fresh)
+        const copyAnchor = copy.addAnchor(a.role, a.target as AnchorTarget, { ...a.options }, link)
         // provider values ride along (a clone of a data-declared provider is
         // itself a provider — same convention as hydrateAnchor)
         if (copyAnchor !== null && a.value !== undefined) copyAnchor.value = a.value
@@ -591,6 +649,7 @@ export class Node {
         // unmaterializable profile entries are skipped
       }
     }
+    copy.runtimeMinted = true
     return copy
   }
 
@@ -932,6 +991,15 @@ export class Node {
         .filter(a => a.role === 'target' && typeof a.target === 'string')
         .map(a => a.target as string)
 
+      // D7/ALS-1..7 (G23-G28) — the seam materialization runs for EVERY
+      // viable node (DEFECT #10: the reversion pass must also run for
+      // nodes whose seam anchors were REMOVED — a target-less node still
+      // needs its stale seam links unwound). Materialized before makeCs so
+      // the compiled state reads the merged slot + the seam anchors.
+      // Idempotent across recompiles (no re-mint, no double-add; the
+      // reversion unwinds links whose driving seam anchor is gone).
+      node.materializeSeam()
+
       if (!hasAnyTarget || targetNames.length === 0) {
         if (hasAnyTarget && isResolutionParticipant(node) && !isSeamProvider(node)) continue
         const cs = makeCs(node)
@@ -945,15 +1013,6 @@ export class Node {
 
       const arms = resolveArms(node, targetNames, slice, viable, kinds)
       let warnedUnresolved = false
-      // D7/ALS-1..7 (G23-G28) — the seam materialization: a translate-planned
-      // seam binding (`options.seam = 'type'|'content'|'children'`) whose def
-      // resolves delivers — onto the CONSUMER — the def's pre-minted
-      // prototype children as child links (ALS-1/ALS-2/ALS-4), the def's
-      // PLACEMENT links (ALS-6), and the def's TEXT content for `'content'`
-      // targets (ALS-7). Materialized before makeCs so the compiled state
-      // reads the merged slot + the seam anchors. Idempotent across
-      // recompiles (no re-mint, no double-add).
-      node.materializeSeam()
       for (const arm of arms) {
         if (arm.drop) {
           if (arm.drop.reason === 'loop') {
@@ -971,7 +1030,7 @@ export class Node {
         // `bindings.*` reads resolve on a LEGAL mixed node (consume A + provide
         // B + self-apply B). Skip-if-present: a same-name resolved/duplex
         // value wins; own values are node-static so every arm gets the same
-        // seed (per-arm determinism, docs/test-findings §"Stress-test review
+        // seed (per-arm determinism, archive/findings/2026-08-15/2026-08-15-test-findings §"Stress-test review
         // loop #2" DEFECT #1).
         seedOwnBindings(node, cs.bindings)
         cs.unresolved = arm.unresolved
@@ -1023,6 +1082,14 @@ export class Node {
       return { actionable, dropped: [{ arm: [this.id], reason: 'owner-terminated' }], warnings }
     }
     this.compileLocal()
+    // D7/ALS-1..7 — the seam materialization in the PATH scope (blind-test
+    // engine defect 2026-08-15): compile(slice) materializes seams before
+    // makeCs (node.ts:956), but compilePath never did — so a CONTENT-target
+    // seam consumer (the graph-side ALs-7 layer) rendered textless in the
+    // path-enumeration compile while the emit-side type/children seams
+    // (SED-1/2) worked per-path. Idempotent (content-equality guard,
+    // hasSeamParentFor, stale-layer clearing) — safe before every walk.
+    this.materializeSeam()
     const walks = enumPathWalks(this, new Set<NodeId>([this.id]), [])
     // §1.2 first-match: only the CHOSEN name's placement branches are ever
     // consulted — later names are pruned SILENTLY (no drops, no warnings);
@@ -1193,8 +1260,27 @@ export class Node {
    *  registry) — never scalarBinding, never the def's children. */
   private materializeSeam(): void {
     let contentChanged = false
+    // DEFECT #10 reversion (S37): seam links generated by a seam anchor that
+    // no longer exists are REVERTED — a removed anchor layer must unwind the
+    // seam it drove (node.md §6.2 "removed together with its generating
+    // anchor"). The seam parent anchors carry `seamTarget` = their driving
+    // seam anchor name; the link destroy cascades to both sides (the
+    // consumer's parent anchor + the def-root/proto child anchor).
+    const activeSeamTargets = new Set<string>()
     for (const a of this.anchors) {
-      if (a.role !== 'target' || typeof a.target !== 'string') continue
+      if ((a.role !== 'target' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+      if (a.options.seam !== undefined) activeSeamTargets.add(a.target)
+    }
+    for (const pa of [...this.anchors]) {
+      if (pa.role !== 'parent' || pa.options.seamTarget === undefined) continue
+      if (activeSeamTargets.has(pa.options.seamTarget)) continue
+      linkOf(pa).destroy()
+    }
+    for (const a of this.anchors) {
+      // S19 — seam detection reads target AND duplex anchors (a self-provider
+      // `{reference, value, target: <seam>}` plans a duplex — the seam flag
+      // must materialize from it)
+      if ((a.role !== 'target' && a.role !== 'duplex') || typeof a.target !== 'string') continue
       const seam = a.options.seam
       if (seam === undefined) continue
       const link = linkOf(a)
@@ -1246,7 +1332,9 @@ export class Node {
       if (seam === 'children' && defRoot !== undefined) {
         if (!this.hasSeamParentFor(defRoot)) {
           const seamLink = new Link({ name: 'parent-child' })
-          this.addAnchor('parent', this, { seam: true }, seamLink)
+          // seamTarget tags the link's driving seam anchor (DEFECT #10 — the
+          // reversion pass removes seam links whose anchor is gone)
+          this.addAnchor('parent', this, { seam: true, seamTarget: a.target }, seamLink)
           defRoot.addAnchor('child', defRoot, { seam: true }, seamLink)
         }
         for (const proto of protos) {
@@ -1265,7 +1353,7 @@ export class Node {
       for (const proto of protos) {
         if (this.hasSeamParentFor(proto)) continue
         const seamLink = new Link({ name: 'parent-child' })
-        this.addAnchor('parent', this, { seam: true }, seamLink)
+        this.addAnchor('parent', this, { seam: true, seamTarget: a.target }, seamLink)
         proto.addAnchor('child', proto, { seam: true }, seamLink)
         for (const pa of proto.anchors) {
           if ((pa.role !== 'container' && pa.role !== 'content') || typeof pa.target !== 'string') continue

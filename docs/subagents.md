@@ -57,7 +57,9 @@ All artifacts get committed in the repo alongside the notes.
 - **User gate:** present items 1–4 to the user conversationally. Do NOT
   advance to Step 3 until the user answers the blocking questions.
 
-Store: `docs/arch_review.md`.
+Store: `archive/reviews/2026-08-15/2026-08-15-arch_review.md` (the historical
+architecture review artifact — archived by the 2026-08-15 cleanup pass; the
+current engine state is described by the active `docs/specs/*.md`).
 
 ## Step 3 — Reviewer loop (Reviewer sub-agent)
 
@@ -65,7 +67,7 @@ Hand-off prompt (copied verbatim into each Task call):
 
 > You are the Reviewer for the Preempt-Providence rewrite. Input:
 > `RENDER_PROCESS_NOTES.md` (§10 proposal + §8 observations) and
-> `docs/arch_review.md`. DO NOT EDIT ANY FILE. Re-read the whole §10 pair
+> `archive/reviews/2026-08-15/2026-08-15-arch_review.md` (historical). DO NOT EDIT ANY FILE. Re-read the whole §10 pair
 > paragraph by paragraph. Find and enumerate:
 > 1. Contradictions internal to §10 (pillar A–F vs Pillar G, APIs, lifecycle
 >    state table, compile two-pass);

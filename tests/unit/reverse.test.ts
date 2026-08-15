@@ -140,7 +140,7 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
     const out = reverseTranslate(t.root, { content: t.content })
     expect(out.template.root.children![0]!.component).toEqual({ reference: 'p10', value: 'v10', target: 'props.mood' })
     const again = translateLegacy(out)
-    expect(compAnchors(again.root.children[0]!)).toEqual([{ role: 'source', target: 'p10', value: 'v10', applyPath: 'props.mood' }])
+    expect(compAnchors(again.root.children[0]!)).toEqual([{ role: 'duplex', target: 'p10', value: 'v10', applyPath: 'props.mood' }])
     expect(again.warnings).toEqual([])
   })
 
@@ -197,7 +197,7 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
     ])
     const again = translateLegacy(out)
     expect(compAnchors(again.root)).toEqual([
-      { role: 'source', target: 'a', value: 1, applyPath: 'props.x' },
+      { role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' },
       { role: 'target', target: 'b', applyPath: 'props.y' },
     ])
     expect(again.warnings).toEqual([])
@@ -242,7 +242,7 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
     // authored-derived collision, no component-target-skipped warning
     const again = translateLegacy(out)
     expect(again.warnings).toEqual([])
-    expect(compAnchors(again.root)).toEqual([{ role: 'source', target: 'a', value: 1, applyPath: 'props.x' }])
+    expect(compAnchors(again.root)).toEqual([{ role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' }])
     expect(again.root.derived?.props?.x).toEqual({ $: 'bindings.a' })
     expect(again.root.derived?.props?.authored).toBe('AUTH')
   })
@@ -253,11 +253,11 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
       content: [],
     }
     const t = translateLegacy(doc)
-    expect(compAnchors(t.root)).toEqual([{ role: 'source', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
+    expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
     const out = reverseTranslate(t.root, { content: t.content })
     expect(out.template.component).toEqual({ reference: 'rootp', value: 'rv', target: 'props.rt' })
     const again = translateLegacy(out)
-    expect(compAnchors(again.root)).toEqual([{ role: 'source', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
+    expect(compAnchors(again.root)).toEqual([{ role: 'duplex', target: 'rootp', value: 'rv', applyPath: 'props.rt' }])
     expect(again.warnings).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 # Fork-Stress Demo Spec — layered runtime child-creation stress test
 
 Status: spec for the `fork-stress` demo series. Companion review:
-`docs/session-defect-review.md`. Design skill: `docs/skills/designing-pages.md`
+`archive/reviews/2026-08-15/2026-08-15-session-defect-review.md`. Design skill: `docs/skills/designing-pages.md`
 §14 (authoring + browser-realism rules apply).
 
 ## Purpose
@@ -207,7 +207,7 @@ grows recursively from the data alone. Spec: `docs/specs/fork-stress-data.md`.
 ## Docs to update on completion
 
 - `docs/skills/designing-pages.md` §11 (matrix row) + §12 (demo pages list).
-- `docs/session-defect-review.md` "Where the rules live now" + demo list if
+- `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md` "Where the rules live now" + demo list if
   referenced.
 - `demo/index.html` (page list).
 - `RENDER_PROCESS_NOTES.md` §10.10 DECIDED entry (fork-stress demo; the

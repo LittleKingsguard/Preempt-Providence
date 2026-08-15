@@ -14,7 +14,7 @@
 //   clientConfig    run* gates                            → {adapter,persistence}
 //
 // Component bindings follow the K1–K8 kernel
-// (docs/specs/legacy-component-ref-only-review.md §2.2 + Appendix E):
+// (archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md §2.2 + Appendix E):
 // `target` is the LOCAL `props.<key>` apply path (never a second component
 // name — the runtime duplex anchor shape is legacy-unexpressible); a single
 // binding or an ARRAY of bindings is accepted (K7); vacuous bindings warn +
@@ -355,7 +355,7 @@ function instantiateHandlerBody(src: string): (...args: unknown[]) => unknown {
  *  the D7 anchor-layer seam target (F17). */
 interface BindingPlan {
   reference: string
-  role: 'source' | 'target'
+  role: 'source' | 'target' | 'duplex'
   value?: unknown
   applyPath?: string | undefined
   synthesized?: DerivedDecl | undefined
@@ -471,7 +471,15 @@ function planBindings(
       }
       seenTargets.add(target)
     }
-    const plan: BindingPlan = { reference, role: binding!.value !== undefined ? 'source' : 'target' }
+    // S19 (user directive 2026-08-15): a binding with BOTH value and target
+    // is a DUPLEX (provider + consumer on one anchor), not a source — the
+    // self-provider seam form `{reference, value, target: <seam>}` must plan
+    // a duplex anchor so the seam flag is READ (the seam-detection sites
+    // key on target/duplex/source)
+    const plan: BindingPlan = {
+      reference,
+      role: binding!.value !== undefined ? (target !== undefined ? 'duplex' : 'source') : 'target',
+    }
     if (binding!.value !== undefined) plan.value = binding!.value
     if (target !== undefined) {
       const t = classifyTarget(target, reference, authoredDerived, warnings, path)
@@ -514,8 +522,8 @@ function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): v
     const options: Record<string, unknown> = {}
     if (plan.applyPath !== undefined) options.applyPath = plan.applyPath
     if (plan.seam !== undefined) options.seam = plan.seam
-    if (plan.role === 'source') {
-      const a = node.addAnchor('source', plan.reference, options, link)
+    if (plan.role === 'source' || plan.role === 'duplex') {
+      const a = node.addAnchor(plan.role, plan.reference, options, link)
       if (a !== null && plan.value !== undefined) a.value = plan.value
     } else {
       node.addAnchor('target', plan.reference, options, link)
@@ -558,7 +566,7 @@ function mintDefPrototypes(
   seamRefs: ReadonlySet<string>,
 ): void {
   for (const plan of plans) {
-    if (plan.role !== 'source' || plan.value === undefined) continue
+    if ((plan.role !== 'source' && plan.role !== 'duplex') || plan.value === undefined) continue
     const value = plan.value
     if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
     const def = value as LegacyNodeData
@@ -789,6 +797,15 @@ function translateNodeData(
   if (data.children !== undefined) {
     if (Array.isArray(data.children)) {
       data.children.forEach((childData, i) => {
+        // DEFECT #7 fix (stress round 3, 2026-08-15): a non-OBJECT ENTRY
+        // inside a valid children array (null / number / string) must warn
+        // `children-entry-invalid` and skip THAT entry only — the old
+        // behavior crashed translate with an uncaught TypeError (whole-doc
+        // abort, a fail-safe violation). The rest of the array still maps.
+        if (childData === null || typeof childData !== 'object' || Array.isArray(childData)) {
+          warn(warnings, 'children-entry-invalid', path, `children[${i}] is not a NodeData object; entry skipped (the rest of the array still maps)`)
+          return
+        }
         // CHILD-SIDE family attach (DEFECT #3-1): the child attaches itself
         // inside its own translate (before its placement minting) — the
         // parent passes itself + the index down
@@ -811,7 +828,13 @@ function translateNodeData(
  * result (first payload wins).
  */
 export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHub }): TranslatedTree {
-  if (!doc || typeof doc !== 'object' || !doc.template || typeof doc.template !== 'object' || !doc.template.root) {
+  // DEFECT #8 fix (stress round 3, 2026-08-15): a TRUTHY NON-OBJECT root
+  // (42, an array) is a malformed envelope too — silently minting a default
+  // div with zero warns was the defect. The root must be a NodeData OBJECT.
+  if (
+    !doc || typeof doc !== 'object' || !doc.template || typeof doc.template !== 'object'
+    || !doc.template.root || typeof doc.template.root !== 'object' || Array.isArray(doc.template.root)
+  ) {
     throw new Error('legacy-envelope-mismatch: expected { template: { root }, content?, clientConfig? }')
   }
   const hub = opts?.hub ?? defaultHub()
@@ -996,7 +1019,14 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
     seenReferences.add(reference)
     const binding: LegacyComponentBinding = { reference }
     if (isProvider && a.value !== undefined) binding.value = a.value
+    // S26 (DEFECT #6 fix, 2026-08-15) — `target` = the apply path OR the
+    // D7 seam target (never a second name — K1-K8 invariant): a seam anchor
+    // must reverse with `target: <seam>` so re-translate reproduces the
+    // SAME seam plan (TR-H16). Without this the seam wiring was silently
+    // lost on every save/load round-trip (re-render collapsed into the
+    // P-EMIT-3 fill).
     if (applyPath !== undefined) binding.target = applyPath
+    else if (typeof a.options.seam === 'string') binding.target = a.options.seam
     bindings.push(binding)
   }
   if (bindings.length === 1) data.component = bindings[0]!
@@ -1041,7 +1071,7 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
     }
     if (Object.keys(placement).length > 0) data.placement = placement
   }
-  const kids = node.children.filter((c) => !isContentRoot(c))
+  const kids = node.children.filter((c) => !isContentRoot(c) && !c.runtimeMinted)
   if (kids.length > 0) data.children = kids.map((k) => nodeToLegacy(k, isContentRoot))
   return data
 }

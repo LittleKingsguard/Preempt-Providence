@@ -64,38 +64,49 @@ interface ReverseTranslateOptions {
 function reverseTranslate(root: Node, opts?): LegacyInitialData
 ```
 
-**Envelope shape contract (D2, 2026-08-14 — SPEC-ENCODED, fix pass PENDING;
-expect RED):** the reversed document ALWAYS
+**Envelope shape contract (D2, 2026-08-14 — LANDED):** the reversed document ALWAYS
 emits `content` as an ARRAY of payloads (`ContentPayload[]`) — the obsolete
 single-payload OBJECT form `{content, metadata}` is never emitted (it is
 outdated legacy; translate warns `payload-shape-obsolete` on ANY non-array
 `content`, translate.md §2/§3). `R-4`'s single-group `opts.content` emits a
 ONE-ELEMENT array.
-**Payload item content (D5, SPEC-ENCODED, fix pass PENDING):** payload
+**Payload item content (D5, LANDED):** payload
 `NodeData.content` values are TEXT
 only — the legacy dual-parse (content as NodeData ⇒ children) is discontinued;
 children reverse from the `children` field only.
-**D3/F7 reverse (2026-08-14 — SPEC-ENCODED, fix pass PENDING; expect RED):**
+**D3/F7 reverse (2026-08-14 — LANDED):**
 a node's serialized `css.style` STRING is
 ALWAYS parsed back to the `Record<string,string>` object on reverse — no
 provenance tracking; a string-authored style becomes an object on save
 (legacy format is object-native, accepted). The string form is never
 re-emitted.
-**D1/F2 reverse (2026-08-14 — SPEC-ENCODED, fix pass PENDING; expect RED):**
+**D1/F2 reverse (2026-08-14 — LANDED):**
 placement reverses as ONE flat object per
 node (merged anchors: `placementName` + `targetPlacement: string[]` in mint
 order); only a multi-producer node (2+ container anchors) emits the `placement`
 ARRAY (one entry per container anchor, content names in the first entry);
 re-translate of either emission is anchor-identical (translate.md TR-H11).
-**D7/F20 reverse (2026-08-14 — SPEC-ENCODED, fix pass PENDING; expect RED):**
+**D7/F20 reverse (2026-08-14 — LANDED):**
 seam-wired def children are NOT emitted as
 the consumer's authored `data.children` — they stay in the def's JSON home;
 the consumer reverses with its authored children ONLY (translate.md TR-H16).
+**Runtime-created nodes (PINNED — stress-test review loop round 4,
+scenario 42; DEFECT #11):** `clone-instance` copies — the handler-created
+class, P-6 — reverse as NOTHING: silent exclusion, the authored children are
+the ONLY children reversed (mirror of the contentNodes-token strip, F-13).
+R-1's "authored in-tree children" letter is the contract: a payload root's
+family children that were RUNTIME-created (no authored JSON basis) never
+ship as `data.children` — the reversed document reproduces the AUTHORED
+envelope (2 prototype payload roots, no clones). Engine gap: no provenance
+marker exists (`Node.clone` carries no source pointer; `clone-instance`
+registers no prototype ref — archive/analysis/2026-08-15/2026-08-15-state-first-analysis §5) and `nodeToLegacy`
+walks the family children unconditionally (translate.ts:1074-1076) — the
+exclusion cannot be expressed today; see the finding.
 
 | # | Rule |
 | --- | --- |
 | R-1 | Template root + authored in-tree children (EXCLUDING content roots) → `template.root`/`template.children`; content roots emit as ContentPayload items, never template children — placement/component-induced tree state is reversed. |
-| R-2 | Component bindings map back to `component.reference` (lifted to `template.component` for the root); placement anchors → `placement.placementName`; **`content` anchors → `placement.targetPlacement: string[]` in MINT order** (preference order preserved — P3 §6.2 reverse rows), plus the derived `activePlacement: string` read (P3 §2.5); the minted `contentNodes` permanent-owner anchor is **STRIPPED** on reverse (P3 §10.ad/F-13) — the reverse never ships the token edge. **K5 (landed):** the apply path persists on anchor options (`options.applyPath`) and emits as the legacy `target` field — consumer `{reference, target}`, provider `{reference, value, target}`; anchors WITHOUT an apply path emit the pre-kernel form (`{reference}` / `{reference, value}`). The runtime duplex shape is legacy-unexpressible: **any applyPath-less non-provider (consumer) anchor coexisting with a provider anchor on the same node is DROPPED** — this covers the name-target (no apply path) AND, because the drop is shape-based, the DECIDED plain-consumer form `{reference}` and gap/skipped-target consumers, whose graph shape is indistinguishable from the runtime two-name duplex (the reverse never emits a two-name duplex — `target` means apply path, never a second name; broadened from "a name-target" per stress scenario 10) — and same-reference runtime forks keep the first provider (legacy rejects duplicate references, K8 blocks them pre-anchor on re-translate). Multi-binding nodes reverse as the K7 array form, one binding per component anchor in anchor order. |
+| R-2 | Component bindings map back to `component.reference` (lifted to `template.component` for the root); placement anchors → `placement.placementName`; **`content` anchors → `placement.targetPlacement: string[]` in MINT order** (preference order preserved — P3 §6.2 reverse rows), plus the derived `activePlacement: string` read (P3 §2.5); the minted `contentNodes` permanent-owner anchor is **STRIPPED** on reverse (P3 §10.ad/F-13) — the reverse never ships the token edge. **K5 (landed):** the apply path persists on anchor options (`options.applyPath`) and emits as the legacy `target` field — consumer `{reference, target}`, provider `{reference, value, target}`; anchors WITHOUT an apply path emit the pre-kernel form (`{reference}` / `{reference, value}`). **Seam targets (extension pinned — stress-test review loop #3, scenario 26):** a D7 seam anchor (`options.seam = 'type' | 'content' | 'children'`) emits its seam target as the legacy `target` field too (`{reference, target: <seam>}` / `{reference, value, target: <seam>}`), so re-translate reproduces the seam plan (TR-H16). `target` = apply path OR seam target, never a second component name. (ENGINE GAP vs this pin: `nodeToLegacy` emits `target` for `options.applyPath` only — seam plans are currently lost on reverse; reported in archive/findings/2026-08-15/2026-08-15-test-findings §"Stress-test review loop #3".) The runtime duplex shape is legacy-unexpressible: **any applyPath-less non-provider (consumer) anchor coexisting with a provider anchor on the same node is DROPPED** — this covers the name-target (no apply path) AND, because the drop is shape-based, the DECIDED plain-consumer form `{reference}` and gap/skipped-target consumers, whose graph shape is indistinguishable from the runtime two-name duplex (the reverse never emits a two-name duplex — `target` means apply path or seam target, never a second name; broadened from "a name-target" per stress scenario 10) — and same-reference runtime forks keep the first provider (legacy rejects duplicate references, K8 blocks them pre-anchor on re-translate). Multi-binding nodes reverse as the K7 array form, one binding per component anchor in anchor order. |
 | R-3 | USER-CREATED edits are preserved: type/content/props/css/handlers read from the LIVE node state. |
 | R-4 | `opts.payloads` emits one ContentPayload per group (metadata/userData per group); `opts.content` emits a single group. |
 | R-5 | The reversed document re-translates through `translateLegacy` (round-trip) — apply-path bindings round-trip exactly (`{reference, target: 'props.<k>'}` re-synthesizes the same anchor + `bindings.*` derived read). **N1 (landed):** the translate-synthesized derived keys (K2 `bindings.*` machinery) are STRIPPED on reverse; authored derived stays, so the reversed doc carries no Preempt-only derived pollution and re-translates without self-collision (`component-target-skipped`/duplicate warnings never fire from the round-trip). |
@@ -122,6 +133,5 @@ the consumer reverses with its authored children ONLY (translate.md TR-H16).
 | R-H8 | seam children on reverse (D7/F20) | seam-wired def children NOT emitted as the consumer's `data.children` — they stay in the def's JSON home; the consumer reverses with its authored children only |
 | R-F1 | dropped/refreshed payload | no longer present in reversed output |
 
-> **Rows R-H4..R-H8 are SPEC-ENCODED (2026-08-14 — fix pass PENDING; a
-> TestWriter reading this file alone expects RED for these rows until the
-> engine fix pass lands).**
+> **Rows R-H4..R-H8 are LANDED (2026-08-14 — the engine fix pass shipped;
+> a TestWriter reading this file alone expects GREEN for these rows).**

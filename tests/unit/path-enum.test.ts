@@ -35,7 +35,7 @@ function flushSweep(): Promise<void> {
 }
 
 /** R2.2 sibling-shared owner-name topology via a legacy envelope
- *  (path-fork-review.md R2.2: "both level-(k−1) prototypes own ONE placement
+ *  (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.2: "both level-(k−1) prototypes own ONE placement
  *  name; both level-k prototypes target it"): L1 prototypes are
  *  template.root.children (family in-tree, producers) sharing ONE zone name;
  *  L2..L(depth−1) are content payload roots (contentNodes-owned) that target
@@ -326,5 +326,71 @@ describe('placement-path enumeration — compilePath (P3 §2)', () => {
       expect(cs.props.label).toBe('updated')
       expect(cs.children).toEqual([t.content[2]!.id, t.content[3]!.id])
     }
+  })
+})
+
+describe('path-enum — seam content delivery in the path scope (blind-test engine defect 2026-08-15)', () => {
+  // DEFECT: materializeSeam ran only in compile(slice) (node.ts:956) — the
+  // content-target seam layer (ALS-7) never materialized for nodes compiled
+  // via compilePath, so a def-carrying content seam rendered empty in the
+  // path-enumeration scope (blind-test SED-3 FAIL). Type/children seams are
+  // emit-side and path-agnostic; the content seam is graph-side (a layer on
+  // the node) — hence scope-bound.
+  it('a content-target seam consumer compiled via compilePath carries the def text in its path-states', () => {
+    const env: LegacyInitialData = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'titleDef', value: { type: 'span', content: 'The def text' } },
+          ],
+          children: [
+            // placement-routed consumer: requests side-zone (multi-zone fan-out)
+            {
+              type: 'h1',
+              placement: [{ targetPlacement: ['side-zone'] }],
+              component: [{ target: 'content', reference: 'titleDef' }],
+            },
+            { type: 'div', placement: [{ placementName: 'side-zone' }], content: 'zone-a', css: { style: { color: 'red' } } },
+            { type: 'div', placement: [{ placementName: 'side-zone' }], content: 'zone-b', css: { style: { color: 'blue' } } },
+          ],
+        },
+      },
+      content: [],
+    }
+    const t = translateLegacy(env)
+    // compilePath is PER-NODE (the demos loop translated.nodes)
+    const states = t.nodes.flatMap((n) => n.compilePath().actionable)
+    // the h1 is a family child AND placement-routed → 1 family-first
+    // state + path-states for BOTH zones (fan-out) = 3
+    const h1States = states.filter((s: CompiledState) => s.nodeId === t.root.children[0]!.id)
+    expect(h1States.length).toBe(3)
+    expect(h1States.filter((s: CompiledState) => s.activePlacement === 'side-zone')).toHaveLength(2)
+    for (const cs of h1States) {
+      // the def's text rides every path-state of the content-seam consumer
+      expect(cs.content).toBe('The def text')
+    }
+  })
+
+  it('a family-first content-seam consumer compiled via compilePath also carries the def text', () => {
+    const env: LegacyInitialData = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'titleDef', value: { type: 'span', content: 'The def text' } },
+          ],
+          children: [
+            { type: 'h1', component: [{ target: 'content', reference: 'titleDef' }] },
+          ],
+        },
+      },
+      content: [],
+    }
+    const t = translateLegacy(env)
+    const states = t.nodes.flatMap((n) => n.compilePath().actionable)
+    const h1 = states.find((s: CompiledState) => s.nodeId === t.root.children[0]!.id)
+    expect(h1).toBeDefined()
+    expect(h1!.content).toBe('The def text')
   })
 })

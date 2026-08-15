@@ -114,7 +114,7 @@ export function serializeNode(node: Node): RenderNodeState {
   if (node.derived !== undefined) state.derived = node.derived
   // deterministic anchor order for stable round-trips
   state.anchors.sort((x, y) => {
-    const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, target: 3, duplex: 4, container: 5, content: 6, component: 7 }
+    const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, duplex: 3, target: 4, container: 5, content: 6, component: 7 }
     const r = (roleOrder[x.role] ?? 9) - (roleOrder[y.role] ?? 9)
     if (r !== 0) return r
     // content anchors keep their MINT order — the targetPlacement preference

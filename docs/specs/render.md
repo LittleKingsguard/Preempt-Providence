@@ -3,7 +3,7 @@
 Canon: `RENDER_PROCESS_NOTES.md` §10.6 (Pillar F), §10.8.2, §10.8.4, §10.9
 ledgers (S1.1, S2.3, S3.1, S4.2, S4.3, S-R2.5, S-R2.6, S-R3.3, S-R3.10,
 S-R3.12, S-R4.3) and the state-serialization decision (node state MUST round-trip to the JSON schemas —
-notes §10.6 "State round-trips … (decided)", `arch_review.md` D4).
+notes §10.6 "State round-trips … (decided)", `archive/reviews/2026-08-15/2026-08-15-arch_review.md` D4).
 Supporting legacy mapping: §3.1 (NodeSchema), §5.1 (hydration seam),
 §6.8/§6.9 (client vs SSR element/assembly), §8.2 (parity).
 
@@ -25,7 +25,7 @@ notes §10.8.4) and emits **declarative render ops**; adapters map ops to a host
 | Serialized anchors as typed refs (never live objects) | Adapter calls: DOM mutations, HTML string, `hydrate` |
 
 Pipeline output is a **first-class JSON document, never an in-object proxy**
-(notes §10.6, `arch_review.md` D4).
+(notes §10.6, `archive/reviews/2026-08-15/2026-08-15-arch_review.md` D4).
 
 ---
 
@@ -133,7 +133,7 @@ Every emitted op **forwards the element's `forkKey`** — the DEFECT #1 fix (P3 
 
 ---
 
-### 3.4 cssDef → stylesheet rules + def-chain scoping (D4/D8, live-prod disposition 2026-08-14 — SPEC-ENCODED, fix pass PENDING)
+### 3.4 cssDef → stylesheet rules + def-chain scoping (D4/D8, live-prod disposition 2026-08-14 — LANDED)
 
 #### 3.4.1 Styles-op generation from `css.cssDef` (D4)
 
@@ -159,7 +159,7 @@ nothing produced the op from cssDef; the raw object flowed to
 side by side and — worse — IMPLEMENTED as one mechanism (the seam's SED-2
 branch was nested inside the def-chain's empty-host branch, which narrowed
 the children-target contract to empty hosts and dropped the wrapper's own
-content; RCA: `docs/session-defect-review.md` "B1 children-target collapse
+content; RCA: `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md` "B1 children-target collapse
 miscommunication"). They are different contracts on different layers:
 
 | Family | Mechanism | Layer | Targets | Delivery |
@@ -182,7 +182,7 @@ empty-host fill (Family B).
 
 | Rule | Statement |
 | --- | --- |
-| DFC-1 | The ONLY emit-time def-chain case is the fork-stress link method — and ONLY at `offset`/`childOffset` 0 (F22): `def.children` 1:1 covers the node's real children from the first wire on (prototype-as-child; `def.children.length === childWires.length`). There the def re-types the covered real children, each keeping its OWN authored css/props. **P-EMIT-3 carve-out (the CHILDLESS-host def-fill — pinned, path-emit.test.ts):** a def-carrying state with NO children (`childWires.length === 0`, non-seam, and NOT covered by a family parent's chain — the fork-stress leaves are covered and skipped, which is why the 4095 census holds) re-types the host to `def.type` and emits the def's children as SYNTHETIC `` `${wire}:${bind}` `` elements in order — emit-time only, the graph children stay empty (derived `stress:expanded` unaffected). This is the ONE case synthetic wires exist (the seam SED-2 path uses the def-root wire `` `${wire}:0` ``, never bind-synthetic wires). Every OTHER case (count mismatch, non-zero offset, blocked) emits NO def children: no re-typing, no drops, no synthetic wires |
+| DFC-1 | The ONLY emit-time def-chain case is the fork-stress link method — and ONLY at `offset`/`childOffset` 0 (F22): `def.children` 1:1 covers the node's real children from the first wire on (prototype-as-child; `def.children.length === childWires.length`). There the def re-types the covered real children, each keeping its OWN authored css/props. **P-EMIT-3 carve-out (the CHILDLESS-host def-fill — pinned, path-emit.test.ts):** a def-carrying state with NO children (`childWires.length === 0`, non-seam, and NOT covered by a family parent's chain — the fork-stress leaves are covered and skipped, which is why the 4095 census holds) re-types the host to `def.type` and emits the def's children as SYNTHETIC `` `${wire}:${bind}` `` elements in order — emit-time only, the graph children stay empty (derived `stress:expanded` unaffected). This is the ONE case synthetic wires exist (the seam SED-2 path uses the def-root wire `` `${wire}:0` ``, never bind-synthetic wires). **Nested seam exclusion (pinned — stress-test review loop #3, scenario 23):** a nested seam consumer inside a SEAM-LESS def's fill (a def-child carrying `component: {target, reference}` inside a P-EMIT-3 def value) does NOT materialize — B2 scoping (translate.md D8/F16) mints no prototype for the def-child, and the emit-side nested seam branch requires the prototype's seam anchor. The fill child emits its OWN authored content; nested seam delivery requires a D7 seam-targeted OUTER binding (Family A). Every OTHER case (count mismatch, non-zero offset, blocked) emits NO def children: no re-typing, no drops, no synthetic wires |
 | DFC-2 | **Gate = length equality AND link-method provenance** (F23): the emit-time chain applies ONLY when `def.children.length === childWires.length` AND the binding is a link-method def value (the fork-stress-data `link-<layer>` providers) — a SEAM-TARGET def (`options.seam` set, translate.md TR-H15) NEVER drives an emit-time CHILD-WIRE chain. **Ruling carve-out:** a seam `type`-target's ELEMENT-level def-fill (the consumer's element taking the def's type + css — shell collapse, SED-1) is the sanctioned type-target delivery, not a child-wire re-typing. Any other case — count mismatch, non-zero offset, `children`/`content` seam targets — emits NO def children at all: the old clobber (real wires re-typed to def children, id-less orphans at host level, duplicated text) is a defect |
 | DFC-3 | Everything else (component-type/content/children wiring with real sub-trees) materializes through the D7 anchor-layer seam (ops.md §2.7) — the emit layer never invents def-children where the seam is the materialization path. Real children beyond a (never-applicable) covered slice would keep their own order — no drops, no re-typing |
 
@@ -267,7 +267,7 @@ pages: 4094 dirty nodes × 4095-node slices would be O(n²)).
 
 ---
 
-## 5. JSON-schema serialization contract (notes §10.6, `arch_review.md` D4 — DECIDED)
+## 5. JSON-schema serialization contract (notes §10.6, `archive/reviews/2026-08-15/2026-08-15-arch_review.md` D4 — DECIDED)
 
 Compiled/render node state — **including its anchor/link form** — serializes
 back to the existing `NodeSchema` shapes (notes §3.1): `NodeData` inside
@@ -403,7 +403,7 @@ re-derived forks de-dupe by node IDs.
 | NVS-2 | Dropped-arm residue: no ops, no tombstones, no serialized state from non-actionable arms | notes §10.8.4, SER-R4 |
 | NVS-3 | `'prototype'` / `'unplaced'` / `'destroyed'` nodes as render targets — compile of not-in-tree returns **no usable state**. **P3 §2.4 carve-out:** placement-ROUTED nodes are render targets — their path-states are actionable output even when the family label reads `unplaced` (the label stays honest; only token-terminated/loop walks drop) | S1.1, P3 §2.4 |
 | NVS-4 | Unresolved component **targets as renderable bound values** — the unresolved binding is simply absent and flagged (`unresolved-reference` status); the node itself still renders **its own state** with a logged warning (viable compile, S-R4.3) | notes §10.8.2, S-R4.3 |
-| NVS-5 | Live object graphs / in-object proxies — only first-class JSON docs, anchors as typed refs | notes §10.6, `arch_review.md` D4 |
+| NVS-5 | Live object graphs / in-object proxies — only first-class JSON docs, anchors as typed refs | notes §10.6, `archive/reviews/2026-08-15/2026-08-15-arch_review.md` D4 |
 | NVS-6 | Partial batches / mid-op walk results — emits follow the completed sweep only | R-ORD-1..5 |
 | NVS-7 | Server-only fragment forms | PAR-4 |
 
@@ -414,7 +414,7 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 
 ## 10. Exhaustiveness gate — states & fail-states for TestWriter
 
-### 10.1 Serialization round-trip (notes §10.6, `arch_review.md` D4)
+### 10.1 Serialization round-trip (notes §10.6, `archive/reviews/2026-08-15/2026-08-15-arch_review.md` D4)
 
 | ID | State / fail-state | Expected |
 | --- | --- | --- |
@@ -500,7 +500,7 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | DFC-F1 | def-chain node with MISMATCHED counts (`def.children.length !== childWires.length`) | NO re-typing/aliasing of real child wires; def children NOT emitted by the host (out-of-tree pre-minted prototypes, DFC-2/3) — no id-less orphans, no duplicated text, real wires keep their own types and order |
 | DFC-F2 | component-type/content/children wiring with real sub-trees, OR a SEAM-TARGET def (`options.seam` set), OR a non-zero offset link def | never routed through the emit-time def chain — no def children emitted; materializes via the D7 anchor-layer seam (DFC-2/3, F23); the seam `type`-target's element-level def-fill (SED-1) is the sanctioned exception, NOT a child-wire chain |
 
-### 10.7 Seam emission shapes (SED-1..3, §3.4.2 — delivery-shape ruling 2026-08-14, SPEC-ENCODED)
+### 10.7 Seam emission shapes (SED-1..3, §3.4.2 — delivery-shape ruling 2026-08-14, LANDED)
 
 | ID | State / fail-state | Expected |
 | --- | --- | --- |

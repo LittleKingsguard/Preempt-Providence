@@ -31,7 +31,7 @@ Context management guidelines for agents working in this repository:
    totals must stay within ~1.5× of the placement d12 total. A blow-up (or
    `total − Σ(measured sections)` dominating the total) means the supervisor
    pass-2 pipeline is scaling badly — the page profiler does NOT time
-   pass-2 (RCA: docs/session-defect-review.md, fork-stress-data section).
+   pass-2 (RCA: archive/reviews/2026-08-15/2026-08-15-session-defect-review.md, fork-stress-data section).
    Flag any regression before reporting completion. (The smoke ASSERTS a
    looser 2.5× CI-safe bound, demo-smoke.mjs — the ~1.5× here is the human
    watch; the asserted guard is the tripwire that catches pipeline
@@ -51,16 +51,37 @@ Context management guidelines for agents working in this repository:
    `RENDER_PROCESS_NOTES.md` §10.10 as `DECIDED:` entries. Keep both in sync
    with implementation and with `docs/skills/designing-pages.md`.
 
+6. **Document-archival loop**: the git-visible `docs/` tree is for ACTIVE
+   development work and skill/feature documentation of the CURRENT engine
+   state. After EACH significant feature change or test suite, run a cleanup
+   pass: (a) merge the new/changed information into the core docs
+   (`docs/specs/*.md`, `docs/skills/designing-pages.md`,
+   `RENDER_PROCESS_NOTES.md` §10.10, and the condensed current-state
+   trackers `docs/defects.md` + `docs/decisions.md`); (b) archive
+   obsolete documentation, stale test data, findings reports, feedback
+   reviews, and historical review records into the GITIGNORED `archive/`
+   directory (`archive/<topic>/<date>-<name>.md` — see `archive/README.md`);
+   (c) repoint or remove every reference to an archived file — never leave a
+   citation pointing at a moved file; never archive a still-cited file
+   without repointing it. The `archive/` dir is excluded from builds, tests,
+   and the smoke.
+   **Active trackers (maintained every pass):** `docs/defects.md` (the
+   active defect list — open defects on top, fixed rows with their fix
+   reference, superseded rows archived) and `docs/decisions.md` (the active
+   decisions summary — ACTIVE/SUPERSEDED status, pinned contracts with their
+   sources). A change that fixes a defect or lands a decision MUST update
+   these trackers in the same pass.
+
 ## Process & TDD compliance for sub-agents
 
-6. **Follow the `docs/subagents.md` workflow before delegating**: never jump
+7. **Follow the `docs/subagents.md` workflow before delegating**: never jump
    straight from a §10/proposal to an implementation sub-agent. A code task is
    only delegable once its step gate has passed: spec(s) exist in
    `docs/specs/*.md` (Step 4) AND the Step 3 reviewer loop returned an empty
    list (or parked the remainder with a decision record). If the contract does
    not exist, delegate a SpecWriter unit — not an implementation unit.
 
-7. **Test-first, always (TDD)**: every sub-agent prompt that requires writing
+8. **Test-first, always (TDD)**: every sub-agent prompt that requires writing
    or changing source code MUST be structured as red → green → verify, in this
    order:
    a. Write tests that encode every state/fail-state in the spec (red);
@@ -73,10 +94,10 @@ Context management guidelines for agents working in this repository:
    no test is itself a review finding. Reviewer sub-agents stay read-only and
    never edit files to "fix" findings.
 
-8. **User proposal review — three-agent gate (before any spec or code work)**
+9. **User proposal review — three-agent gate (before any spec or code work)**
    : every user/design proposal goes through three sequential sub-agent
    review steps first (pattern established by the compile max-depth change,
-   `docs/specs/compile-horizon-review.md`). Never jump from a proposal
+   `archive/reviews/2026-08-15/2026-08-15-compile-horizon-review.md`). Never jump from a proposal
    straight to a spec or implementation unit:
    a. **Validity agent (step 1)** — analyzes the proposal against the
       current codebase: can it be implemented as stated? Does it actually
@@ -100,11 +121,11 @@ Context management guidelines for agents working in this repository:
    verdict / gaps + costs-benefits). Only a passing review plus the user's
    go-ahead may proceed to the item 6 step gates.
 
-9. **Blind-test → subagent review loop (documentation test + error checking/
+10. **Blind-test → subagent review loop (documentation test + error checking/
    consistency tool — run after ANY major feature update)**: when a feature
    or behavior change ships, its documentation, demo, and test claims must be
    verified by agents who did NOT write them (the feature-showcase blind test,
-   `docs/test-findings.md` §"Blind test #1", is the pattern):
+   `archive/findings/2026-08-15/2026-08-15-test-findings.md` §"Blind test #1", is the pattern):
    a. A **writer** produces the artifact from the DOCUMENTATION ONLY
       (specs + skill docs; no implementation reading). For a demo page this
       means: legacy-JSON envelope input, handler bodies as function-STRING
@@ -116,24 +137,27 @@ Context management guidelines for agents working in this repository:
    c. A **page reviewer agent** tests the render (full validation trio,
       item 4), verifies intended-vs-actual output, and fixes **data only**
       to produce the intended output.
-   Findings land in `docs/test-findings.md` (append; latest on top), and
+   Findings MERGE into the active trackers (`docs/defects.md` defect rows,
+   `docs/decisions.md` decision records) and the full reports are written to
+   `archive/<topic>/<date>-<name>.md` (append; latest on top), and
    new rules from the findings go back into `docs/skills/designing-pages.md`
    §14-style lessons + the relevant specs. The trio must be green before the
    loop is reported complete.
 
-10. **Stress-test review loop (after major features — break the pipeline
+11. **Stress-test review loop (after major features — break the pipeline
     on purpose)**: run three sequential sub-agents to hunt compile/render
     breakage with VALID legacy-JSON data:
     a. **Scenario agent** — frames N specs for valid legacy envelope data
        that should break or surprise the compile/render pipeline; each
        scenario records the example situation, the expected output, and the
-       suspected failure stage. Artifact: `docs/specs/stress-test-scenarios.md`.
+       suspected failure stage. Artifact: `archive/test-data/2026-08-15/2026-08-15-stress-test-scenarios.md`.
     b. **Probe agent** — completes every scenario using ONLY core
        (`dist/core/*`) + legacy JSON (probe scripts, no page-side logic);
        records real vs expected output.
     c. **Review agent** — analyzes failure states; any real-vs-expected
        mismatch is either a doc/spec bug (fix the doc), a data-authoring bug
        (fix the scenario data), or a genuine engine defect (report —
-       do not fix engine code in this loop). Findings append to
-       `docs/test-findings.md` §"Stress-test review loop".
+       do not fix engine code in this loop). Findings MERGE into
+       `docs/defects.md`/`docs/decisions.md` and the full reports are
+       appended to `archive/<topic>/<date>-<name>.md` (§"Stress-test review loop").
     Each agent verifies the validation trio (item 4) after its work.

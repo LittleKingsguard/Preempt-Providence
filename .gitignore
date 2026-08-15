@@ -7,3 +7,7 @@ coverage/
 # live production example payloads — data stays local, README is tracked
 live-prod/*
 !live-prod/README.md
+
+# document archive — obsolete docs/reviews/stale test data, README is tracked
+archive/*
+!archive/README.md

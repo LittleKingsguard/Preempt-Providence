@@ -7,7 +7,7 @@ model, driven by a confirmed legacy-fidelity audit. It encodes the four fixed
 user requirements (E2E-1…E2E-4, §0) as behaviors and lists every surface
 change (§6) with file:line anchors. The underlying proposal passed the
 three-agent review gate (step-3 change-analysis verdict:
-`path-fork-review.md` round-2 — "coherent, addressing-correct, DOMINATED —
+`archive/reviews/2026-08-15/2026-08-15-path-fork-review.md` round-2 — "coherent, addressing-correct, DOMINATED —
 but static P3 is a FEATURE worth specing separately", R2.8 ¶3; this document
 is that separate spec), five user review rounds (§9, §10.x–§10.af), and the
 final review returned **PROCEED-TO-IMPLEMENT** (§10.af.2) with no surviving
@@ -22,7 +22,7 @@ census (demo/path-fork-data.*, 23/4095/0/0).
 
 Provenance:
 
-- Proposal review record: `docs/specs/path-fork-review.md` — round-1 REJECT
+- Proposal review record: `archive/reviews/2026-08-15/2026-08-15-path-fork-review.md` — round-1 REJECT
   (§2.1–§2.5), round-2 refinement re-review (R2.2–R2.8; the four corrections
   close the round-1 blockers; the arithmetic bijection (prototype, path) →
   4095 states is recorded at R2.2).
@@ -44,14 +44,14 @@ Provenance:
 - The fork-stress tree is expressible statically: ~22 prototypes with
   placement links (each level's prototypes targeted by both parents' zone
   names) → 2^12−1 path-keyed compiled states, one per valid (prototype,
-  owner-path) pair back to root (path-fork-review.md R2.2), NO nodes created
+  owner-path) pair back to root (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.2), NO nodes created
   beyond the prototypes.
 
-Companions: `docs/specs/state-first-analysis.md` (§2.2.2 impossibility,
+Companions: `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md` (§2.2.2 impossibility,
 §4 census — the model is NOT state-first; §7 Unchanged), `docs/specs/api.md`
 §4/§5, `docs/specs/node.md`, `docs/specs/pipeline.md`, `docs/specs/render.md`,
 `docs/specs/derived-state.md`, `docs/specs/ops.md`, `docs/specs/translate.md`,
-`docs/test-findings.md` ("Stress-test review loop #1" — DEFECT #1).
+`archive/findings/2026-08-15/2026-08-15-test-findings.md` ("Stress-test review loop #1" — DEFECT #1).
 
 ---
 
@@ -166,7 +166,7 @@ A user node's `content` anchors are a **preference-ordered request list**
 - Multi-owner zone names (the fork-stress topology — two owners of one
   name) multiply the fork: each zone (container anchor) is a separate path
   hop, so a user under two owners of one name gets one state per
-  owner-path (path-fork-review.md R2.2's "(prototype, path) keying").
+  owner-path (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.2's "(prototype, path) keying").
 - `activePlacement` — the legacy resolution record
   (`Preempt/src/types/NodeSchema.ts:24`) — is **derived**: the FIRST link
   in the `targetPlacement` array that has any containers. Never authored
@@ -222,7 +222,7 @@ rebuild carries the guard as a **translate-time veto**:
 
 Placement links participate in NO cycle guard today (chain classification
 walks family anchors only, `src/core/node.ts:512-562`; `findCycle`
-`node.ts:861-871`; the round-1 blocker, path-fork-review.md §2.5 "Loop
+`node.ts:861-871`; the round-1 blocker, archive/reviews/2026-08-15/2026-08-15-path-fork-review.md §2.5 "Loop
 safety"). The path enumeration (§2) carries a **per-walk visit set**:
 
 - During enumeration, every hop (placement edge or family edge) records the
@@ -320,7 +320,7 @@ compilePath(node /* a content node or the root */):
   child THROUGH the parent), so children attach to the parent state's
   `childOrder` at mint time — free, no second pass (the R2.7 resolution:
   "attached during the top-down enumeration, where the parent is already
-  known and attaching is free", path-fork-review.md R2.7). This is the
+  known and attaching is free", archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.7). This is the
   **chosen** option (over a new tree-assembly pass in emitElements) —
   justification: no second enumeration, no re-derivation, and the
   `children.length` derived contract (`docs/specs/derived-state.md` §9.2 —
@@ -389,7 +389,7 @@ The affected-set derivation rule: **every dirty set is graph-topology-derived
 from the op's target — never state-enumerated.** Ops stay node-scoped and
 journaled (Pillar B, §7); the set of path-states that REGENERATE is derived
 from the graph, so the incremental contract stays bounded (O(depth), not
-O(half-document) — the round-1 blocker 2.5 resolution, path-fork-review.md
+O(half-document) — the round-1 blocker 2.5 resolution, archive/reviews/2026-08-15/2026-08-15-path-fork-review.md
 R2.3).
 
 ### 3.1 Node-local invalidation (E2E-2)
@@ -406,7 +406,7 @@ R2.3).
 - The rendered element is **reused**: wires are pathKey-stable (§2.2), so
   `diffMinimal`'s prevMap (render.ts:50-90) emits set-only ops for that
   wire (D4, render.md §3.2 line 94). E2E-2 asserts BOTH: no other node
-  compiles (compile-scope assertion, session-defect-review B-3 rule) AND
+  compiles (compile-scope assertion, archive/reviews/2026-08-15/2026-08-15-session-defect-review B-3 rule) AND
   the element object survives (wire-identity assertion).
 - **Apply-gate prerequisite (resolved)**: the fixture node is a
   contentNodes-owned content root — family-'in-tree' (node.ts:213) once
@@ -466,6 +466,31 @@ R2.3).
   (§1.2 silent abort). The client op-spread (`client.ts:28-53`) carries
   the trigger fields through untouched (verified in the ref-resolution
   loop, :39-49).
+- **Scope pin — layer-driven registry changes (PINNED — stress-test
+  review loop round 4, scenario 38):** the E2E-4 affected set
+  (`container + added node`) is scoped to the **`placement-attach` op
+  only**. A LAYER-driven registry change (an `AnchorLayer` minting or
+  removing a `container`/`content` anchor via the node API
+  `addLayer`/`removeLayer`) marks NO placement consumer dirty: node-API
+  layer mutations dirty the family scope only (`markRemote`, node.md
+  §6.1 Post-3). The consumers' STORED path-states stay stale until the
+  consumer itself is recompiled — a fresh `compilePath` is authoritative
+  (the fan-out census grows with the minted container; the stale-store
+  render diverges from the fresh census silently until then). The
+  layer-driven removal additionally depends on node.md §6.2's
+  generating-anchor removal (DEFECT #10) — without it the census never
+  shrinks and the reverse ships a phantom zone.
+- **Scope pin — attach into a family-routed container (PINNED — stress-
+  test review loop round 4, scenario 40(c)):** a `placement-attach` into
+  a container that is NOT placement-routed (container anchors only — no
+  `content` anchor) leaves the added node's path-state ORPHANED: per-path
+  append ops come from the parent PATH-state's `childOrder` (§2.3
+  mint-time attach, §4.2); a family-routed container's FAMILY state
+  (focused-slice `makeCs`) lists the family children ONLY, so the added
+  node's element is created on its pathKey wire with NO append op — the
+  widget does not render. The E2E-4 render promise ("the container's
+  path-states pick up the added path-child") holds for placement-ROUTED
+  containers only.
 
 ---
 
@@ -506,7 +531,7 @@ R2.3).
   through `emitElements`. The def branch additionally resolves a
   def-covered path child's node via `pathKey → nodeId` and adopts the
   child state's own converted childOrder.
-- The R2.6 emit regressions (path-fork-review.md R2.6) are resolved by
+- The R2.6 emit regressions (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.6) are resolved by
   re-expressing the two `armIdx === undefined` gates — under the path model
   EVERY state is a path-state, so:
   - **IMPL-DECISION (Unit 7, shipped): the gate re-expression.** The gates
@@ -541,10 +566,10 @@ R2.3).
   `stress:expanded`-class derived props — all read the compiled state, not
   the graph.
 - **Prerequisite (blocking): DEFECT #1 — `emitOne` drops `cs.forkKey`**
-  (docs/test-findings.md §"Engine defects", lines 432-460): fork-arm ops
+  (archive/findings/2026-08-15/2026-08-15-test-findings.md §"Engine defects", lines 432-460): fork-arm ops
   carry no forkKey, so fork arms stay distinct only via positional wires.
   The path model makes forkKey the WIRE, so the defect is load-bearing:
-  the fix shape is already recorded (test-findings.md:456-460 — forward
+  the fix shape is already recorded (archive/findings/2026-08-15/2026-08-15-test-findings.md:456-460 — forward
   `s.forkKey` in every `emitOne` return branch, mirroring
   `minimalFromState` at render-helpers.ts:36-38; red test: compile →
   emitElements → diffMinimal asserts every create AND set op carries
@@ -553,7 +578,7 @@ R2.3).
 - `treeSig`'s forkKey dimension (render-helpers.ts:127-138) and
   applyOps' `wireKey` composite (render-helpers.ts:22-25, `:57-86`) then
   exercise the canonical path for the first time (the DEFECT #1
-  "unexercised contract" note, test-findings.md:449-455).
+  "unexercised contract" note, archive/findings/2026-08-15/2026-08-15-test-findings.md:449-455).
 
 ---
 
@@ -585,7 +610,7 @@ assembly to the static model:
   prototypes at any pipeline stage — the contentNodes-ownership minting
   (§6.2 translate row) adds ANCHORS, never nodes (10.af.1(b)).
 - The runtime fork-stress page (`docs/specs/fork-stress.md`) is KEPT as-is
-  alongside (path-fork-review.md R2.8 ¶4: "add a static page alongside
+  alongside (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.8 ¶4: "add a static page alongside
   rather than converting the runtime one"); both ship (Q4 resolved — §8
   ledger). The runtime page stays in the smoke set with its census asserts
   KEPT and re-pinned per the F-13 reading (§5.2).
@@ -611,7 +636,7 @@ translate-global contentNodes-ownership minting (§6.2 translate row), the
 RUNTIME page's 22 prototypes are in-tree too, so its census asserts re-pin
 to `in-tree = 2^depth − 1 + prototypes` (4117), `unplaced = 0`; `cloneOps`
 (4094) is unchanged. `nodeToLegacy` strips the minted contentNodes anchor
-on reverse (§6.2 translate row). `state-first-analysis.md` §4.1 stands as
+on reverse (§6.2 translate row). `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md` §4.1 stands as
 the PRE-minting runtime record (annotated).
 
 ---
@@ -624,13 +649,13 @@ the PRE-minting runtime record (annotated).
 | --- | --- |
 | `docs/specs/api.md` | §5 P1–P4 rewrite (lines 250-268): P3 changes from "forks exactly like components" (line 267, unimplemented) to the §1 two-sided-role + §2 path-fork contract; P1/P2 unchanged (role separation); P4 unchanged (state-slice hard-block) + placement-attach op added. §1.2 viability (lines 93-103) + T2/T3 rows: placement-path-to-root viable carve-out (supersedes S1.1 for placement-routed nodes — §2.4). §3.3 (lines 162-175) gains the placement-attach-op note. §4.2 F2 (line 289): forkKey = pathKey on every path-state. §7 W2/W3 (lines 317-320): per-path events for the affected set — the "≤1 `state` event per node per tick" letter dies (per-path keys fall out of forkKey = pathKey; events.ts needs no code change). §8 matrix: T6/T16 updated, new rows for content minting, path fork, veto, cycle, E2E-2/3/4. |
 | `docs/specs/translate.md` | §1 `LegacyPlacementConfig` type fix (lines 46-50): `targetPlacement?: string[]` (was `string`, line 48), `activePlacement?: string` (was `boolean`, line 49). §2 placement rows (line 148): `targetPlacement` gains a mapping row (→ N `content` anchors, preference order preserved); "Unknown extra fields … `targetPlacement` … ignored" (lines 158-159) reversed for placement; the NP13/AP5 `component-target-placement` warn (lines 253-254, 440-444) is REMOVED (the feed is implemented); §2.1 "Placement inside component sub-trees … `targetPlacement` … anti-patterns" (lines 262-264) revised; TR-H3 (line 403) gains the content case; TR-F2 (line 412) drops `targetPlacement` from the ignored list; content-root handling (lines 430, 507-521): each `content` payload root (and `template.children` root) receives the `contentNodes` parent anchor at translate — translate-global minting (§10.ad, F-13); reverse emission (`nodeToLegacy`) gains `content` anchors → `targetPlacement: string[]` round-trip (the §2 reverse row, lines 354-377 pattern) + derived `activePlacement: string`, and STRIPS the minted contentNodes anchor. |
-| `docs/specs/pipeline.md` | Stage 1 `targetPlacementResolution` (line 67) becomes IMPLEMENTED (was "resolution expressed as 'placement'-role anchors via attach + compile" — a dead promise; `pipeline.ts:78` registry row exists but translate never feeds it, legacy-component-ref-only-review.md:531); stage 2 `placementAssembly` (line 68) re-expressed without clone-instance decomposition (the placement fork no longer decomposes into `attach` + `clone-instance`, notes §10.2/§10.7 reference removed). §2.1 DropReason (lines 121-131) gains nothing (the three arm reasons suffice) but F10 (line 380) gains the placement-path viability carve-out. §3 slice scoping (lines 139-167): the path-enumeration compile mode added to the two scopes. |
+| `docs/specs/pipeline.md` | Stage 1 `targetPlacementResolution` (line 67) becomes IMPLEMENTED (was "resolution expressed as 'placement'-role anchors via attach + compile" — a dead promise; `pipeline.ts:78` registry row exists but translate never feeds it, archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:531); stage 2 `placementAssembly` (line 68) re-expressed without clone-instance decomposition (the placement fork no longer decomposes into `attach` + `clone-instance`, notes §10.2/§10.7 reference removed). §2.1 DropReason (lines 121-131) gains nothing (the three arm reasons suffice) but F10 (line 380) gains the placement-path viability carve-out. §3 slice scoping (lines 139-167): the path-enumeration compile mode added to the two scopes. |
 | `docs/specs/node.md` | §2 (lines 90-103): `CompiledState` — `children` path-derived for path-states, `pathKey` multi-path (placement paths), `forkKey` on every path-state. §8.2 placement row (line 323): the borrow-algorithm note replaced by the §2 enumeration contract. §8.3 (lines 325-337): forking extended to placement paths (per-path keys replace "each candidate is a separate CompiledState keyed by its path" wording — now literal). §8.4 (lines 339-348): third compile scope (path enumeration). FS-7 (line 377): placement-path cycle guard; FS-10 (line 380): unchanged block + placement-attach op. `chainRoot` (lines 512-562) and `findCycle` (861-871): placement-edge walk extension. |
 | `docs/specs/render.md` | §3.1/§3.2 (lines 64-99): pathKey-based wires for path-states; MinimalElement.forkKey now canonical (DEFECT #1). §4 (lines 116-141): third scope + the slice note (per-name placement Link is the zone registry, mirroring the component-Link note at lines 131-140). §6 (lines 197-220): path-states (all arms) replace the fork table's component-only framing; leaves-by-fiat lifted. §10.2 FRK matrix (lines 288-298): path-fork rows. |
 | `docs/specs/derived-state.md` | §3 path roots (lines 89-107): `placement` root reads the path-state's final zone name (per-path, §2.3); `children.length` source = path-derived children (§2.3). §9.2 (lines 220-261): the `stress:expanded` adoption note now reads path-states. DV-H rows: per-path-state evaluation. |
 | `docs/specs/ops.md` | §1 (lines 9-37): placement-attach op (dedicated structural kind — the `attach.zone` alternative is REJECTED, §9 Q2) with the trigger-identity payload `{ kind: 'placement', linkName, direction }` (10.ac.2 #7). §2.1 attach (lines 43-53): stays family-only; the placement-attach executor mints the `content` anchor(s) + §1.3 veto + the `container` anchor. §2.4 clone-instance (lines 72-76): no longer the placement mechanism. §7 G-rows (lines 186-210): placement-attach + E2E-4 rows. State-slice placement block (lines 19-27) UNCHANGED. |
 | `docs/specs/contract.md` | §types (line 39): Role union + `'content'`; line 148 `DEFAULT_PLACEMENT` roles = `['container','content']`. |
-| `RENDER_PROCESS_NOTES.md` | DECIDED revisions: S3.6 (line 534) — placement is attachment/compile-only REVISED: the legacy `Placement`/`PlacementConfig` consumer feed (`targetPlacement`) is carried over as the two-sided role + path compile (superseding the "not carried over" line); §10.8.2 (lines 455-466) — the placement paragraph (line 464) rewritten for the two-sided role + static multiplicity; §10.10.1 (lines 613-633) — the translate-mapping bullet gains the `targetPlacement` minting row; NP13 disposition (legacy-component-ref-only-review.md:433, :494, :531) — RESOLVED, the interim keep-unplaced + warn is replaced by the implemented feed. |
+| `RENDER_PROCESS_NOTES.md` | DECIDED revisions: S3.6 (line 534) — placement is attachment/compile-only REVISED: the legacy `Placement`/`PlacementConfig` consumer feed (`targetPlacement`) is carried over as the two-sided role + path compile (superseding the "not carried over" line); §10.8.2 (lines 455-466) — the placement paragraph (line 464) rewritten for the two-sided role + static multiplicity; §10.10.1 (lines 613-633) — the translate-mapping bullet gains the `targetPlacement` minting row; NP13 disposition (archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:433, :494, :531) — RESOLVED, the interim keep-unplaced + warn is replaced by the implemented feed. |
 | `docs/specs/fork-stress-data.md` | Purpose (lines 7-36) rewritten: the page becomes the STATIC re-expression (§5) — two prototypes per layer with placement links, no handler/clone expansion; §"Data envelope" gains the `targetPlacement` arrays; §"Page module" loses the handler-body installation; §"Checks" gains the §5.2 census. |
 | `docs/specs/fork-stress.md` | §"Data-driven variant" (lines 163-188) gains the static sibling page reference; the four-mechanism cycle doc stays for the RUNTIME page (kept). |
 | `docs/skills/designing-pages.md` | §11 matrix (lines 248-249 rows) + §12 demo list (lines 321-348) updated for the re-expressed page and the new static-vs-runtime distinction (AGENTS.md item 3). |
@@ -645,7 +670,7 @@ the PRE-minting runtime record (annotated).
 | `src/core/node.ts` | Path-enumeration compile mode (per-node focused + root-out stay; lines 658-663 gain the placement branch); `makeCs` path-derived children attach at mint time (lines 623-638); per-path `pathKey` over placement edges (lines 300-316); `cs.forkKey = cs.pathKey` set UNCONDITIONALLY (lines 699-706); viability rule for placement-routed nodes (lines 564-605, the `selfProviding` branch at 589-603 grows `placementRouted`); chain classification + `findCycle` walk placement edges (lines 512-562, 861-871); per-walk visit set (§1.4); **`component-source-duplicate` guard at `addAnchor` (line 413)**: UNCONDITIONAL warn, keep-first, skip-second — no seed-path opt-out (§10.ab/ad/ae; K8 covers the legacy boundary; seed/hydration is covered by the same guard); `#`-check on authored ids (line 143). |
 | `src/core/resolve.ts` | Placement walk: first-match preference loop over the node's ORDERED `content` anchors + per-name Link membership (lines 205-244; C-3); per-zone fan-out of the chosen name off the Link's `container` anchors; placement hops emit pathKey segments, NEVER `#f:` keys (lines 152-156; the `#f:` arm machinery dies with the forks); `container`/`content` enumeration off the per-name Link (lines 31-40 pattern); hub fallback (lines 96-132) covers placement names. |
 | `src/core/supervisor.ts` | Slice/compile-mode switch for path enumeration (lines 246-258); **relevance pre-check** before `node.compile` (silent abort — §1.2) and **trigger identity through `supervisor.apply`** (lines 307-313; 10.ac.2 #7); affected-set derivation for E2E-2/3/4 (§3 — `markRemote` at node.ts:809-813 + per-name-Link dirty sets); event filter lifted to the affected set (lines 271-278) and the `#f` gate re-expressed to "path-state ⇒ emit `{ forkKey: pathKey, nodeIds: trace }`" (line 275; R2-Q6); placement-attach op executor (lines 351-364 gains the dedicated kind — not attach-with-zone). |
-| `src/core/render-helpers.ts` | Path-state emit (**Unit 7 shipped**): pathKey wires (§2.2/§4.1 — `isPathState` discriminator `forkKey === pathKey` + `#`-free key; `emitElements` groups by WIRE, so every path-state emits at wire = pathKey and can never be armIdx'd; family states keep wire = nodeId; `#f:` component forks keep `nodeId#<i>`); per-path child conversion (§4.2 — trace-indexed child-state lookup rewrites path-state childOrder to the child pathKey wires; leaves-by-fiat removed for path-states, lines 236-240/349-350); def-retyping + `on:*` gates re-expressed as path-state gates (lines 309, 341-347 — path-states are single-wire groups, so the branches flow; the def branch resolves def-covered path children via `pathKey → nodeId`); `minimalFromState` emits the pathKey wire (childOrder as-is — single-state callers); root emits at the conventional wire `root`; **DEFECT #1 fix first** (EmitState/emitElements gain `forkKey`; every `emitOne` branch forwards it — test-findings.md:456-460, §6.5). |
+| `src/core/render-helpers.ts` | Path-state emit (**Unit 7 shipped**): pathKey wires (§2.2/§4.1 — `isPathState` discriminator `forkKey === pathKey` + `#`-free key; `emitElements` groups by WIRE, so every path-state emits at wire = pathKey and can never be armIdx'd; family states keep wire = nodeId; `#f:` component forks keep `nodeId#<i>`); per-path child conversion (§4.2 — trace-indexed child-state lookup rewrites path-state childOrder to the child pathKey wires; leaves-by-fiat removed for path-states, lines 236-240/349-350); def-retyping + `on:*` gates re-expressed as path-state gates (lines 309, 341-347 — path-states are single-wire groups, so the branches flow; the def branch resolves def-covered path children via `pathKey → nodeId`); `minimalFromState` emits the pathKey wire (childOrder as-is — single-state callers); root emits at the conventional wire `root`; **DEFECT #1 fix first** (EmitState/emitElements gain `forkKey`; every `emitOne` branch forwards it — archive/findings/2026-08-15/2026-08-15-test-findings.md:456-460, §6.5). |
 | `src/core/ops.ts` | placement-attach executor (dedicated kind in the `execute` switch, lines 71-108) + veto; `attach` stays family-only (lines 29-56); state-slice block unchanged (lines 21-27). |
 | `src/core/serialize.ts` | `roleOrder` gains `container`/`content` (line 117); **content anchors EXCLUDED from the target-string sort** — `targetPlacement` preference order survives round-trip (lines 115-123; 10.ac.2 #8); contentNodes-anchor round-trip (stripped on reverse at translate). |
 | `src/core/derived.ts` | Per-path `placement` root: reads the path-state's final zone name (lines 172-175 — the first-anchor `'placement'` read is replaced; role rename); BARE_ROOTS update (line 32). |
@@ -677,7 +702,7 @@ the PRE-minting runtime record (annotated).
 ### 6.5 EMIT PREREQUISITE (ships before the model)
 
 - DEFECT #1 — `emitElements`/`emitOne` dropping `cs.forkKey`
-  (test-findings.md:432-460): fixed as its own red→green unit (§4.3) with
+  (archive/findings/2026-08-15/2026-08-15-test-findings.md:432-460): fixed as its own red→green unit (§4.3) with
   the recorded fix shape; without it the pathKey-wire scheme has no
   forwarding path.
 
@@ -687,8 +712,8 @@ the PRE-minting runtime record (annotated).
 
 | Item | Basis |
 | --- | --- |
-| Graph is the truth; no per-arm authored data | state-first-analysis.md §2.2.2 impossibility — the path model adds NO arm-scoped authored state (path-fork-review.md R2.2: "nothing arm-scoped is authored; per-slot identity comes from the two-sided placement Link") |
-| Pillar B — node-scoped, journaled ops | ops.md §6; journal identity/replay/undo-redo/payload/containment stay node-keyed (path-fork-review.md R2.3; the round-1 addressing impasse resolution) |
+| Graph is the truth; no per-arm authored data | archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md §2.2.2 impossibility — the path model adds NO arm-scoped authored state (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.2: "nothing arm-scoped is authored; per-slot identity comes from the two-sided placement Link") |
+| Pillar B — node-scoped, journaled ops | ops.md §6; journal identity/replay/undo-redo/payload/containment stay node-keyed (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.3; the round-1 addressing impasse resolution) |
 | Journal contract | ops.md §6 unchanged: ops named + replayable; `ClientAPI.apply` the sole public entry |
 | Two-scope compile shape | pipeline.md §3 (root-out deep + node-local focused) stays; path enumeration is a THIRD mode, not a replacement |
 | Read-only compiled states | node.md §3/§8: states immutable within a compile; slice locked until resolution (S2.3) |
@@ -696,7 +721,7 @@ the PRE-minting runtime record (annotated).
 | Component source/target/duplex semantics | api.md §4 unchanged: depth-0, nearest-shadows-far, root fallback, unresolved status, three arm dispositions, coerced pick never synthesized |
 | Def re-typing for NON-path consumers | render-helpers.ts `isLinkDef`/def→re-type seam unchanged for ordinary (non-path) consumers; only the `armIdx === undefined` GATE is re-expressed (§4.2) |
 | State-slice placement hard-block | api.md §3.3 / node.md FS-10 / ops.ts:21-27 — placement writes stay blocked; placement changes go through the placement-attach op |
-| The runtime fork-stress page | fork-stress.md + fork-stress-data (runtime variants) kept as the after-compile expansion proof (path-fork-review.md R2.8 ¶4); the static page is ADDED alongside |
+| The runtime fork-stress page | fork-stress.md + fork-stress-data (runtime variants) kept as the after-compile expansion proof (archive/reviews/2026-08-15/2026-08-15-path-fork-review.md R2.8 ¶4); the static page is ADDED alongside |
 | The per-name component Link as provider registry | resolve.ts:96-132 stays; the placement Link gains the same role for zones (§2.1) |
 
 ---
@@ -864,21 +889,21 @@ Spec citations use section numbers (§1.1, §2.4, §3.x, §5.x, §6.x, §9).
 | `docs/skills/designing-pages.md:309-317,349-351` | §12 demo list: fork-stress-data pages (clone-based; single-method variants) | §5.1: static-vs-runtime distinction; new static page | §12 updates (listed) |
 | `docs/specs/fork-stress.md:163-188` | "Data-driven variant" sections describe clone-instance assembly as THE variant | §5.1/§6.1: static sibling page reference added; four-mechanism cycle doc stays for the runtime page | (listed) |
 | `docs/specs/fork-stress-data.md:7-36` | Purpose: "Two prototypes per layer, everything else dynamically assembled" (clone-instance, handler bodies) | §5.1/§6.1: page becomes the STATIC re-expression (no handler/clone expansion) | Purpose + envelope + page-module + checks rewrites (listed) |
-| `docs/test-findings.md:422` | Stress loop #1, scenario 10 verdict: DATA-FIX (premise) "placement multiplicity forks like components (P3) is NOT expressible from a static legacy envelope … P3 forks materialize only dynamically" | §1.2/§2: P3 IS now statically expressible (path model) | Supersession note: verdict re-recorded as the model the new spec implements |
-| `docs/test-findings.md:432-460` | DEFECT #1 — `emitOne` drops `cs.forkKey` (severity MEDIUM, "masked by the arm-wire convention") | §4.3/§6.5: becomes the blocking PREREQUISITE (pathKey wires need forkKey forwarding) | Severity/status update; fix shape already recorded there |
-| `docs/test-findings.md:34` | Blind test #2 scenario 7: "handler defs and `targetPlacement` gone" (reverse round-trip claim) | §6.1: `targetPlacement` now ROUND-TRIPS (content anchors → array) | Supersession note on the claim |
-| `docs/test-findings.md:41-42` | Blind test #2 scenarios 14/15: placement co-existence records | §1.2: content minting changes the translate surface | Marginal — re-check on the translate re-record |
-| `docs/test-findings.md:209-211,299-311` | Validation runs: fork-stress d12 ratio numbers (placement 3.9s baseline) | §5.2/§9-Q6: ratio baseline re-pinned to the static page's placement d12 | Re-baseline note on future runs |
-| `docs/session-defect-review.md:440-444` | Profile table: placement d12 = 4727.7ms, 99.1% unmeasured gap | §5.2/§9-Q6: static page's ONE path-enumeration bootstrap replaces 4094 per-node passes; the profiler gap RCA applies to the RUNTIME page | Section note: numbers describe the runtime page; static page re-baselines |
-| `docs/session-defect-review.md:486-495` | "the Rule" (total − Σ(measured) guard) promoted from manual to asserted | AGENTS.md item-4 wording change (§10.1 below) | Wording re-point |
-| `docs/specs/legacy-component-ref-only-review.md:433` | NP13: "targetPlacement translation gap: legacy content routing dead" | §1.2/§6.1: RESOLVED — feed implemented | NP13 disposition (listed via §6.1 RENDER_PROCESS_NOTES row) |
-| `docs/specs/legacy-component-ref-only-review.md:494-495` | Standing decision #7: "targetPlacement routing (NP13) — interim keep-unplaced + warn is DECIDED; feed wiring TODO" | §1.2: the interim is replaced by the implemented feed | Supersede #7 |
-| `docs/specs/legacy-component-ref-only-review.md:531` | (registry row context: pipeline stage 1 dead-promise record) | §6.1 pipeline row cites this anchor | Annotate resolved |
-| `docs/specs/path-fork-review.md:222-228,272-277` | Round-1 REJECT + round-2 "REVISED-but-reject FOR THE STATED GOAL" verdict text | The approved spec is that round-2 ¶3 separately-specced FEATURE (R2.8 ¶3) — verdicts are the decision RECORD, not the current contract | Add a supersession banner: §2.1-§2.5 round-1 blockers and R2.3/R2.4/R2.6/R2.7 verdict text are superseded as CONTRACT by placement-path-spec.md (they remain the historical record) |
-| `docs/specs/state-first-analysis.md:134-138` | "Placement forks (`api.md` §5 P3 …) are UNVERIFIED dynamically — … a static legacy envelope cannot express a placement fork" | §1.2/§2: now expressible (the §2.2.2 impossibility does not apply — R2.2) | Supersede the P3 note |
-| `docs/specs/state-first-analysis.md:177-197` | §4.1 census: 4117 registered = 4095 in-tree + 22 unplaced; cloneOps 4094 | §5.2: this remains the RUNTIME page census; the static page census is registered=23, states/elements=2^12−1, cloneOps=0 | Keep as runtime census; add the static census reference |
-| `docs/specs/state-first-analysis.md:266,280,303` | P3-as-holes cross-references; "static P3 (placement forks authorable in legacy data)" as a landing path | §9: static P3 approved as a feature | Mark resolved |
-| `docs/FRESH-CONTEXT-SUMMARY.md:17-18,23,31,55-56,65,102,148,173,184` | Role lists without `'content'`; two-pass compile "component/placement borrow"; S1.1 in-tree gating; translate/reverse placement mapping | §1.1/§2.1/§2.4 | Refresh the summary (role rename, path mode, viability carve-out, content minting) — **§6.1 omits this file** |
+| `archive/findings/2026-08-15/2026-08-15-test-findings.md:422` | Stress loop #1, scenario 10 verdict: DATA-FIX (premise) "placement multiplicity forks like components (P3) is NOT expressible from a static legacy envelope … P3 forks materialize only dynamically" | §1.2/§2: P3 IS now statically expressible (path model) | Supersession note: verdict re-recorded as the model the new spec implements |
+| `archive/findings/2026-08-15/2026-08-15-test-findings.md:432-460` | DEFECT #1 — `emitOne` drops `cs.forkKey` (severity MEDIUM, "masked by the arm-wire convention") | §4.3/§6.5: becomes the blocking PREREQUISITE (pathKey wires need forkKey forwarding) | Severity/status update; fix shape already recorded there |
+| `archive/findings/2026-08-15/2026-08-15-test-findings.md:34` | Blind test #2 scenario 7: "handler defs and `targetPlacement` gone" (reverse round-trip claim) | §6.1: `targetPlacement` now ROUND-TRIPS (content anchors → array) | Supersession note on the claim |
+| `archive/findings/2026-08-15/2026-08-15-test-findings.md:41-42` | Blind test #2 scenarios 14/15: placement co-existence records | §1.2: content minting changes the translate surface | Marginal — re-check on the translate re-record |
+| `archive/findings/2026-08-15/2026-08-15-test-findings.md:209-211,299-311` | Validation runs: fork-stress d12 ratio numbers (placement 3.9s baseline) | §5.2/§9-Q6: ratio baseline re-pinned to the static page's placement d12 | Re-baseline note on future runs |
+| `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md:440-444` | Profile table: placement d12 = 4727.7ms, 99.1% unmeasured gap | §5.2/§9-Q6: static page's ONE path-enumeration bootstrap replaces 4094 per-node passes; the profiler gap RCA applies to the RUNTIME page | Section note: numbers describe the runtime page; static page re-baselines |
+| `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md:486-495` | "the Rule" (total − Σ(measured) guard) promoted from manual to asserted | AGENTS.md item-4 wording change (§10.1 below) | Wording re-point |
+| `archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:433` | NP13: "targetPlacement translation gap: legacy content routing dead" | §1.2/§6.1: RESOLVED — feed implemented | NP13 disposition (listed via §6.1 RENDER_PROCESS_NOTES row) |
+| `archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:494-495` | Standing decision #7: "targetPlacement routing (NP13) — interim keep-unplaced + warn is DECIDED; feed wiring TODO" | §1.2: the interim is replaced by the implemented feed | Supersede #7 |
+| `archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:531` | (registry row context: pipeline stage 1 dead-promise record) | §6.1 pipeline row cites this anchor | Annotate resolved |
+| `archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:222-228,272-277` | Round-1 REJECT + round-2 "REVISED-but-reject FOR THE STATED GOAL" verdict text | The approved spec is that round-2 ¶3 separately-specced FEATURE (R2.8 ¶3) — verdicts are the decision RECORD, not the current contract | Add a supersession banner: §2.1-§2.5 round-1 blockers and R2.3/R2.4/R2.6/R2.7 verdict text are superseded as CONTRACT by placement-path-spec.md (they remain the historical record) |
+| `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:134-138` | "Placement forks (`api.md` §5 P3 …) are UNVERIFIED dynamically — … a static legacy envelope cannot express a placement fork" | §1.2/§2: now expressible (the §2.2.2 impossibility does not apply — R2.2) | Supersede the P3 note |
+| `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:177-197` | §4.1 census: 4117 registered = 4095 in-tree + 22 unplaced; cloneOps 4094 | §5.2: this remains the RUNTIME page census; the static page census is registered=23, states/elements=2^12−1, cloneOps=0 | Keep as runtime census; add the static census reference |
+| `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:266,280,303` | P3-as-holes cross-references; "static P3 (placement forks authorable in legacy data)" as a landing path | §9: static P3 approved as a feature | Mark resolved |
+| `archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY.md:17-18,23,31,55-56,65,102,148,173,184` | Role lists without `'content'`; two-pass compile "component/placement borrow"; S1.1 in-tree gating; translate/reverse placement mapping | §1.1/§2.1/§2.4 | Refresh the summary (role rename, path mode, viability carve-out, content minting) — **§6.1 omits this file** |
 | `AGENTS.md:29-35` | Item 4: "the values/link-only d12 totals must stay within ~1.5× of the placement d12 total … the page profiler does NOT time pass-2" | §5.2/§9-Q6: the guard now applies to the static page's path-enumeration bootstrap (a NEW baseline); pass-2 IS the enumeration on the static page | Re-point the guard wording (demo-smoke.mjs enforces 2.5× at :288-295 vs AGENTS' ~1.5× — reconcile) |
 | `docs/framework-feature-summary.md:42` | Pipeline stage list (names unchanged) | none for the stage names; check placement feature text when the static page ships | Verify after the page lands |
 
@@ -988,10 +1013,10 @@ every reader-facing document must be checked for wording drift:
 2. **The legacy `content` TARGET PATH** — translate.md §2.1 vocabulary table
    (`content` slot target — scalar string or `NodeData`; the "slot" injection
    family), and `css.content`-style derived-key patterns in demos
-   (translate-stress-scenarios.md:988 — "`content` … is just a key").
+   (archive/test-data/2026-08-15/2026-08-15-translate-stress-scenarios.md:988 — "`content` … is just a key").
 3. **The legacy envelope `content` array** — `LegacyInitialData.content:
    ContentPayload[]`, and `TranslatedTree.content` (the UNPLACED content node
-   array — translate.ts:125; payload.md lifecycle; FRESH-CONTEXT-SUMMARY.md:55).
+   array — translate.ts:125; payload.md lifecycle; archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY.md:55).
 4. **The `'contentNodes'` permanent-owner token** — one word away from the
    role name; `AnchorTarget.'contentNodes'` (node.ts:61, serialize.ts:11,
    registry.ts:61). Docs MUST write `'content'`-role anchor vs the
@@ -1037,12 +1062,12 @@ first pass but **INCOMPLETE**. Missing surfaces found by this sweep:
   `validation.md` (Role union); `payload.md` (R-2 reverse emission + removal
   semantics); `designing-pages.md` §3/§5/§8 (only §11/§12 listed);
   `RENDER_PROCESS_NOTES.md` §10.8.3 + the §10.10.4 DECIDED revision;
-  `FRESH-CONTEXT-SUMMARY.md` (entire file); `AGENTS.md` item-4 wording;
-  `docs/test-findings.md` specific supersession records (scenario-10 P3
+  `archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY.md` (entire file); `AGENTS.md` item-4 wording;
+  `archive/findings/2026-08-15/2026-08-15-test-findings.md` specific supersession records (scenario-10 P3
   verdict, blind-test #2 scenario-7 `targetPlacement` round-trip claim);
-  `docs/session-defect-review.md` runtime-vs-static re-baseline note;
-  `docs/specs/state-first-analysis.md` P3 note + §4 census;
-  `docs/specs/path-fork-review.md` supersession banner;
+  `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md` runtime-vs-static re-baseline note;
+  `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md` P3 note + §4 census;
+  `archive/reviews/2026-08-15/2026-08-15-path-fork-review.md` supersession banner;
   `scripts/stress-probes/RESULTS.md` + `scripts/translate-stress-probes/
   RESULTS.md` supersession records.
 - **Code:** `src/core/events.ts` (W2 coalescing re-key); `src/core/derived.ts`
@@ -1168,14 +1193,14 @@ rows (the §10.7 "58/35/22/14" counts are wrong — see C-9).
 | designing-pages.md:60-61,73 | SUPERSEDED | Resolution 4 verbatim (the FRK-H2 pin) |
 | designing-pages.md:91-114, 162-180, 246-249, 309-317/349-351 | STILL-OPEN | §5 / §8 / §11 / §12 |
 | fork-stress.md:163-188; fork-stress-data.md:7-36 | STILL-OPEN | Static-vs-runtime rewrites |
-| test-findings.md:422, 432-460, 34, 41-42, 209-211/299-311 | STILL-OPEN | Supersession records / DEFECT #1 / round-trip claims / re-baseline |
-| session-defect-review.md:440-444, 486-495 | STILL-OPEN | Runtime-vs-static numbers / "the Rule" wording |
-| legacy-component-ref-only-review.md:433 | PARTIALLY-RESOLVED | Resolution 2 = the feed semantics; NP13 disposition annotation remains |
-| legacy-component-ref-only-review.md:494-495 | SUPERSEDED | Resolution 2 replaces the interim keep-unplaced+warn |
-| legacy-component-ref-only-review.md:531 | STILL-OPEN | Registry-row annotation |
-| path-fork-review.md:222-228,272-277 | STILL-OPEN | Supersession banner |
-| state-first-analysis.md:134-138, 177-197, 266/280/303 | STILL-OPEN | P3 note / census / resolved marks |
-| FRESH-CONTEXT-SUMMARY.md; AGENTS.md:29-35; framework-feature-summary.md:42 | STILL-OPEN | Refresh / ratio reconciliation (2.5× demo-smoke.mjs:291 vs ~1.5× AGENTS; stress-probes/RESULTS.md:217-218) / verify-after-land |
+| archive/findings/2026-08-15/2026-08-15-test-findings.md:422, 432-460, 34, 41-42, 209-211/299-311 | STILL-OPEN | Supersession records / DEFECT #1 / round-trip claims / re-baseline |
+| archive/reviews/2026-08-15/2026-08-15-session-defect-review.md:440-444, 486-495 | STILL-OPEN | Runtime-vs-static numbers / "the Rule" wording |
+| archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:433 | PARTIALLY-RESOLVED | Resolution 2 = the feed semantics; NP13 disposition annotation remains |
+| archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:494-495 | SUPERSEDED | Resolution 2 replaces the interim keep-unplaced+warn |
+| archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:531 | STILL-OPEN | Registry-row annotation |
+| archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:222-228,272-277 | STILL-OPEN | Supersession banner |
+| archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:134-138, 177-197, 266/280/303 | STILL-OPEN | P3 note / census / resolved marks |
+| archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY.md; AGENTS.md:29-35; framework-feature-summary.md:42 | STILL-OPEN | Refresh / ratio reconciliation (2.5× demo-smoke.mjs:291 vs ~1.5× AGENTS; stress-probes/RESULTS.md:217-218) / verify-after-land |
 
 **10.2 CODE (41 rows):**
 
@@ -1398,14 +1423,14 @@ surface work remains), **SUPERSEDED** (decision is the fix verbatim),
 | designing-pages.md:60-61,73 | SUPERSEDED | SUPERSEDED | now by §10.aa/ab (pathKey-alone, not "pathKey+#<i>") |
 | designing-pages.md:91-114, 162-180, 246-249, 309-317/349-351 | STILL-OPEN | STILL-OPEN | unchanged |
 | fork-stress.md:163-188; fork-stress-data.md:7-36 | STILL-OPEN | STILL-OPEN | §10.aa census decides the numbers; rewrite remains |
-| test-findings.md:422, 432-460, 34, 41-42, 209-211/299-311 | STILL-OPEN | STILL-OPEN | DEFECT #1 fix shape CONFIRMED live (10.ac.2 #2) |
-| session-defect-review.md:440-444, 486-495 | STILL-OPEN | STILL-OPEN | unchanged |
-| legacy-component-ref-only-review.md:433 | PARTIALLY | PARTIALLY | NP13 disposition annotation |
-| legacy-component-ref-only-review.md:494-495 | SUPERSEDED | SUPERSEDED | res2 |
-| legacy-component-ref-only-review.md:531 | STILL-OPEN | STILL-OPEN | unchanged |
-| path-fork-review.md:222-228,272-277 | STILL-OPEN | STILL-OPEN | banner |
-| state-first-analysis.md:134-138, 177-197, 266/280/303 | STILL-OPEN | STILL-OPEN | §10.aa census keeps the runtime census claim valid |
-| FRESH-CONTEXT-SUMMARY / AGENTS.md:29-35 / framework-feature-summary.md:42 | STILL-OPEN | STILL-OPEN | ratio reconcile + refresh |
+| archive/findings/2026-08-15/2026-08-15-test-findings.md:422, 432-460, 34, 41-42, 209-211/299-311 | STILL-OPEN | STILL-OPEN | DEFECT #1 fix shape CONFIRMED live (10.ac.2 #2) |
+| archive/reviews/2026-08-15/2026-08-15-session-defect-review.md:440-444, 486-495 | STILL-OPEN | STILL-OPEN | unchanged |
+| archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:433 | PARTIALLY | PARTIALLY | NP13 disposition annotation |
+| archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:494-495 | SUPERSEDED | SUPERSEDED | res2 |
+| archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:531 | STILL-OPEN | STILL-OPEN | unchanged |
+| archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:222-228,272-277 | STILL-OPEN | STILL-OPEN | banner |
+| archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:134-138, 177-197, 266/280/303 | STILL-OPEN | STILL-OPEN | §10.aa census keeps the runtime census claim valid |
+| archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY / AGENTS.md:29-35 / framework-feature-summary.md:42 | STILL-OPEN | STILL-OPEN | ratio reconcile + refresh |
 
 **10.2 CODE (10 §10.y rows):**
 
@@ -1437,7 +1462,7 @@ surface work remains), **SUPERSEDED** (decision is the fix verbatim),
 #### 10.ac.2 The eight verifications
 
 1. **E2E-2 S1.1 apply gate (supervisor.ts:332-335) — CLEARS, with a new prerequisite.** The gate is exactly `nodeState !== 'in-tree' → no-usable-state` (supervisor.ts:332-335), and family-in-tree via a `'contentNodes'`-token parent DOES clear it (node.ts:213 `if (target === 'contentNodes') return 'in-tree'`). So the gate itself needs NO change (contra round-1 §10.6/10.2-:332-335 and the round-2 "re-key to path-viability" option). **BUT**: no code anywhere mints a `'contentNodes'` parent anchor — the token is classification/serialize-only (node.ts:52,178,213; resolve.ts:47,80; serialize.ts:11; registry.ts:19-30 is a node SET, not the token). Translated content roots are created with `asContentRoot = noSeed` only (translate.ts:430, 507, 520-521) — no child anchor ⇒ `state === 'unplaced'` (node.ts:200-204) ⇒ the gate REJECTS a static-envelope prototype today. §10.aa's "23 nodes are all in-tree (contentNodes-owned)" therefore requires a NEW minting/assembly surface (translate content-root handling or the static builder attaches the 22 prototypes under a contentNodes-owned node) — unlisted in §6 until now. The remaining E2E-2 blocker is that minting surface, not the gate.
-2. **DEFECT #1 — NOT moot; fix is simpler, still required.** `minimalFromState` forwards `cs.forkKey` (render-helpers.ts:37); `emitOne` drops it in all three return branches (:335, :347, :350) and the types don't declare it at all (`emitElements` actionable param render-helpers.ts:192-201; `EmitState` :257-265). The `#<i>`-masking reason for the defect disappears under pathKey wires, but the FORWARDING hole remains: with identity = pathKey alone (§10.aa/ab), every path-state needs `cs.forkKey = cs.pathKey` — today only set when `arm.keys.length > 0` (node.ts:699-706) — forwarded onto every create/set/remove op (treeSig dimension render-helpers.ts:127-138, wireKey composite :22-25, adapters forkKey-keyed maps). So the fix shape (test-findings.md:456-460) stands, now UNCONDITIONAL: EmitState/emitElements gain `forkKey`, `emitOne` forwards in every branch, node.ts:699-706 sets forkKey always. The red→green unit stays the §6.5 prerequisite.
+2. **DEFECT #1 — NOT moot; fix is simpler, still required.** `minimalFromState` forwards `cs.forkKey` (render-helpers.ts:37); `emitOne` drops it in all three return branches (:335, :347, :350) and the types don't declare it at all (`emitElements` actionable param render-helpers.ts:192-201; `EmitState` :257-265). The `#<i>`-masking reason for the defect disappears under pathKey wires, but the FORWARDING hole remains: with identity = pathKey alone (§10.aa/ab), every path-state needs `cs.forkKey = cs.pathKey` — today only set when `arm.keys.length > 0` (node.ts:699-706) — forwarded onto every create/set/remove op (treeSig dimension render-helpers.ts:127-138, wireKey composite :22-25, adapters forkKey-keyed maps). So the fix shape (archive/findings/2026-08-15/2026-08-15-test-findings.md:456-460) stands, now UNCONDITIONAL: EmitState/emitElements gain `forkKey`, `emitOne` forwards in every branch, node.ts:699-706 sets forkKey always. The red→green unit stays the §6.5 prerequisite.
 3. **Feature-matrix `panel` fork — anti-pattern confirmed at FOUR sites; the "two provider NODES" re-expression is mechanically impossible.** Current state: two same-name source anchors on ONE node via `addComponentSource` — `'theme'` ×2 (feature-matrix-fixture.js:206-207, round-trip feature-matrix-tests.js:471-483: every theme consumer asserts 2 arms, distinct pathKeys, both values in DOM) and `'panel'` ×2 (component-fixture.js:82-83, round-trips components.js:353-367 + 404-406 `panelArms === 2`, wires `${panelId}#0/#1`, and the BUILDER scripts/build-demo.mjs:76-81 `panelArms.length !== 2` throw). Also pane-fixture.js:13-14 (`'feed'` ×2 — unmentioned by §10.ab). The runtime fork-stress pages are NOT affected (fork-stress.js:174-175 and fork-stress-fixture.js:185-186 add `.a`/`.b` — DISTINCT names — no duplicate). The "two provider NODES" option cannot produce a fork: the walk is own→descendants→ancestors, first-with-providers wins (resolve.ts:140-160, §10.aa verification) and a consumer has ONE ancestor chain — two provider NODES ⇒ one nearest binding ⇒ one arm. The only coherent re-expression is **DROP the fork claim**: fixtures single-source, the four round-trips re-asserted as single-resolution, DOM text asserts trimmed. Touches: component-fixture.js:82-83, components.js:353-367/404-406, feature-matrix-fixture.js:206-207, feature-matrix-tests.js:470-483, feature-matrix.js DOM assert, build-demo.mjs:76-81, and the smoke run of all of them (demo-smoke.mjs:123, :133, :146 mode-toggle).
 4. **`component-source-duplicate` guard — placement verified; one wrinkle.** The imperative choke point is `Node.addAnchor` (node.ts:413) — `demo-fixtures.addComponentSource` (demo-fixtures.js:67-72) calls it directly (a NEW per-call Link, so the guard must match role+target across ALL of the node's anchors, not per-link). materializeAnchors dedup (node.ts:783-786: same role+target ⇒ skip, BEFORE addAnchor) is confirmed correct and NOT relied on — decl-path duplicates never reach the guard. **Wrinkle**: the constructor seed path (node.ts:164-192, serialize round-trip) also calls `addAnchor` directly with no dedup — serialized multi-source anchors (tests construct forks this way: node.test.ts:475/615/957, graph.test.ts:433, render.test.ts:579, cited in §10.y.1) would trip a warn/block on re-seed; the guard needs an explicit seed-path policy (dedup at seed like materializeAnchors, or warn-only) and the warn must be checked against warn-count assertions in those tests.
 5. **Census/profile — runtime asserts stay; the static page needs new ones; the ratio guard has a baseline gap.** The round-1 census asserts (fork-stress-data.js:407-425 `in-tree = 2^depth − 1` / `unplaced = prototypes.length`; demo-smoke.mjs:196-223 `inTree/unplaced/cloneOps` arithmetic, run over the RUNTIME depth loop :224-256 and the method loop :260-282) are all RUNTIME-page checks on RUNTIME pages — KEEP unchanged. The STATIC page needs NEW fields: in-tree=23, path-viable=4095, unplaced=0 (prototypes never 'unplaced' once contentNodes-owned), destroyed=0, cloneOps=0, states=elements=4095 — new profile census fields (fork-stress-data.js:610-619 pattern) and a new smoke assert block. **Gap**: the d12 ratio guard (demo-smoke.mjs:284-295) compares placement/values/link TOTALS of the three runtime method-variants; the static page is a single page with no method variants — "re-baseline the ratio against the static page's placement d12" (AGENTS item 4) needs a defined baseline (static-page variant set, or a documented single-total baseline), and the AGENTS ~1.5× vs demo-smoke 2.5× reconciliation (10.1 row) remains.
@@ -1455,7 +1480,7 @@ surface work remains), **SUPERSEDED** (decision is the fix verbatim),
 | N-4 | **Spec-internal contradiction: §5.2 census row still says `unplaced = 22`** (line 436) vs §10.aa (in-tree=23, prototypes never unplaced). Also §6.4 demo-smoke row frames the round-1 census guard as "replaced" — it is KEPT for the runtime pages; a NEW assert block is added. | spec §5.2 vs §10.aa; demo-smoke.mjs:196-223 | HIGH (spec text) |
 | N-5 | **Ratio guard baseline gap.** AGENTS item-4/demo-smoke.mjs:284-295 compares runtime placement/values/link d12 totals; the static page has no method variants — the "re-baseline" has no defined baseline. Plus the still-unreconciled 2.5× (demo-smoke.mjs:291) vs ~1.5× (AGENTS.md:29-35) bound. | demo-smoke.mjs:284-295; AGENTS.md:29-35 | MEDIUM |
 | N-6 | **`#`-freedom remains unvalidated (C-5/R2-Q2).** No name/id validation exists (translate.ts:459, 136-144; node.ts:143); `placement-name-invalid` warn placement now verified (§10.ac.2 #6) — decision still pending. | translate.ts:459/479-495; node.ts:143 | MEDIUM |
-| N-7 | **DEFECT #1 cite drift.** test-findings.md:441-442 cites `dist/core/render-helpers.js:212-273`; current source is render-helpers.ts:292-351 (line drift only — no behavioral conflict; the fix shape is confirmed correct). | test-findings.md:441 vs render-helpers.ts:292-351 | LOW (record-keeping) |
+| N-7 | **DEFECT #1 cite drift.** archive/findings/2026-08-15/2026-08-15-test-findings.md:441-442 cites `dist/core/render-helpers.js:212-273`; current source is render-helpers.ts:292-351 (line drift only — no behavioral conflict; the fix shape is confirmed correct). | archive/findings/2026-08-15/2026-08-15-test-findings.md:441 vs render-helpers.ts:292-351 | LOW (record-keeping) |
 | N-8 | **C-4 stale bullet still live (R2-Q7 unanswered).** §1.2 lines 128-133 ("a name that matches NO zone … the node's OTHER names still fork") still contradicts first-match (no-match names skipped; whole-array miss ⇒ nothing forks). | spec §1.2 lines 128-133 | LOW-MEDIUM |
 
 #### 10.ac.4 FINAL still-open update list (actionable set for the implementation pass)
@@ -1470,7 +1495,7 @@ surface work remains), **SUPERSEDED** (decision is the fix verbatim),
 - derived-state.md:97-100, 98/225-261. ops.md:13/72-76/89-90/154 (+ trigger identity), 128/198. contract.md:39/148. graph.md:29-32/40, 105. validation.md:56/50/132. payload.md:64, 16-18/75.
 - RENDER_PROCESS_NOTES.md:534, 548, 565, 464, 466/501, 476, 619-630, 694-702.
 - designing-pages.md:52-55, 91-114, 162-180, 246-249, 309-317/349-351. fork-stress.md:163-188. fork-stress-data.md:7-36.
-- test-findings.md:422, 432-460 (severity/status bump — now the blocking prerequisite), 34, 41-42, 209-211/299-311. session-defect-review.md:440-444, 486-495. legacy-component-ref-only-review.md:433, 494-495, 531. path-fork-review.md:222-228/272-277 (banner). state-first-analysis.md:134-138, 177-197, 266/280/303. FRESH-CONTEXT-SUMMARY.md; AGENTS.md:29-35 (2.5× vs ~1.5×); framework-feature-summary.md:42.
+- archive/findings/2026-08-15/2026-08-15-test-findings.md:422, 432-460 (severity/status bump — now the blocking prerequisite), 34, 41-42, 209-211/299-311. archive/reviews/2026-08-15/2026-08-15-session-defect-review.md:440-444, 486-495. archive/reviews/2026-08-15/2026-08-15-legacy-component-ref-only-review.md:433, 494-495, 531. archive/reviews/2026-08-15/2026-08-15-path-fork-review.md:222-228/272-277 (banner). archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:134-138, 177-197, 266/280/303. archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY.md; AGENTS.md:29-35 (2.5× vs ~1.5×); framework-feature-summary.md:42.
 - NEW: §5.2 census row (unplaced=22 → in-tree=23/unplaced=0/path-viable=4095/states=elements=4095/cloneOps=0); §6.4 demo-smoke framing (runtime asserts KEPT, static block added); §1.2 lines 128-133 stale bullet (C-4/R2-Q7); §10.aa contentNodes-ownership mechanism pin + §10.z R2-Q4 "pathKey + `#f:…#i`" text superseded by §10.ab pathKey-alone.
 
 **CODE — 39 rows** (28 STILL-OPEN, 7 PARTIALLY-RESOLVED, 1 SUPERSEDED, 3 new):
@@ -1587,7 +1612,7 @@ census asserts). All §10.y/§10.ac citations re-confirmed.
 | F-10 | §6.2 node.ts row: no duplicate-source guard entry | §10.ab/ad/ae (guard at addAnchor, UNCONDITIONAL) | add the node.ts:413 row (warn `component-source-duplicate`, keep-first, skip-second) + seed-path policy (§10.ae) |
 | F-11 | §6 tables omit the surfaces §10.ac.4 marks NEW | §10.ac.4 / §10.ad | add: translate.ts contentNodes-ownership minting; supervisor apply trigger identity; client.ts trigger carry; `#` validation (`placement-name-invalid`); serialize roleOrder + content-anchor order preservation; events.ts "no code change" note |
 | F-12 | §2.4 cross-reference "(§10.10.4 precedent…)" — consistent, but §2.4/§2.1 non-viable-termination wording ("'contentNodes' / no edge ⇒ non-viable") must be re-expressed once content roots carry a contentNodes edge | §10.ad minting (F-13) | state that the contentNodes TOKEN terminates the walk as non-viable (no path past it) — in-tree label ≠ compiled viability (10.y.1 #1, C-7) |
-| F-13 | **(NEW — found by this review)** §10.ad minting is translate-global ("each content payload root (and template.children root)") but §10.ac.2 #5/§10.ac.4 declare the RUNTIME page's census asserts KEPT (`fork-stress-data.js:407-425`: inTree = 2^depth − 1, unplaced = prototypes.length) — the runtime page's 22 prototypes ARE content payload roots, so global minting flips them in-tree and breaks those asserts (plus `state-first-analysis.md:177-197` §4.1 record, the legacy-bootstrap attach-into-zone e2e semantics, and reverse round-trip: `nodeToLegacy` must strip the minted contentNodes anchor) | §10.aa's "the prototypes are never 'unplaced' — family-wise they live under contentNodes" is stated GLOBALLY | **Chosen reading:** minting is translate-global per §10.ad's letter; runtime census asserts re-pinned (inTree = 2^depth − 1 + prototypes, unplaced = 0); state-first-analysis §4.1 annotated as the pre-minting runtime record; e2e legacy-bootstrap "attach makes unplaced content render" re-verified as "attach adds a placement path to an already-in-tree content root"; nodeToLegacy strips the minted anchor |
+| F-13 | **(NEW — found by this review)** §10.ad minting is translate-global ("each content payload root (and template.children root)") but §10.ac.2 #5/§10.ac.4 declare the RUNTIME page's census asserts KEPT (`fork-stress-data.js:407-425`: inTree = 2^depth − 1, unplaced = prototypes.length) — the runtime page's 22 prototypes ARE content payload roots, so global minting flips them in-tree and breaks those asserts (plus `archive/analysis/2026-08-15/2026-08-15-state-first-analysis.md:177-197` §4.1 record, the legacy-bootstrap attach-into-zone e2e semantics, and reverse round-trip: `nodeToLegacy` must strip the minted contentNodes anchor) | §10.aa's "the prototypes are never 'unplaced' — family-wise they live under contentNodes" is stated GLOBALLY | **Chosen reading:** minting is translate-global per §10.ad's letter; runtime census asserts re-pinned (inTree = 2^depth − 1 + prototypes, unplaced = 0); archive/analysis/2026-08-15/2026-08-15-state-first-analysis §4.1 annotated as the pre-minting runtime record; e2e legacy-bootstrap "attach makes unplaced content render" re-verified as "attach adds a placement path to an already-in-tree content root"; nodeToLegacy strips the minted anchor |
 
 **(b) E2E-encoding check — each constraint encoded once, unambiguously:**
 
@@ -1639,7 +1664,7 @@ Dependency notation: → = requires.
   §4.2 fork-identity bullet; §6.3/§6.4 rows; §3.3 + §8 ledger + status
   header; §1.2 stale bullet; §6.2 additions (guard, placement-attach kind,
   minting, trigger identity, `#` validation, serialize order); §2.1/§2.4
-  token-termination wording; runtime census re-pin + state-first-analysis
+  token-termination wording; runtime census re-pin + archive/analysis/2026-08-15/2026-08-15-state-first-analysis
   §4.1 annotation; nodeToLegacy strip note.
 - **Unit 1 — DEFECT #1 red→green** (§6.5 prerequisite): red test
   compile → emitElements → diffMinimal (create AND set ops carry forkKey);
@@ -1705,7 +1730,7 @@ Dependency notation: → = requires.
   Risk R-2); trigger-identity/silent-abort; order preservation; `#` warn;
   the 26-row §10.3 updates. Requires 2, 4, 5, 6, 8, 11.
 - **Unit 13 — docs sweep (46 spec rows):** all §10.ac.4 SPEC rows +
-  F-13 annotations + FRESH-CONTEXT-SUMMARY + AGENTS.md item-4 wording +
+  F-13 annotations + archive/analysis/2026-08-15/2026-08-15-FRESH-CONTEXT-SUMMARY + AGENTS.md item-4 wording +
   designing-pages.md §3/§5/§8/§11/§12 + §14 lessons. Parallel; final.
 
 Critical path: 0 → 1 → 4 → 5 → 6 → 12; 2 → 11 → 8 → 12. Units 1/2/3
@@ -1715,7 +1740,7 @@ independent in parallel.
 
 | # | Risk | Mitigation / owner |
 | --- | --- | --- |
-| R-1 | **F-13 ripple** (translate-global minting): runtime census re-pin, state-first-analysis §4.1 annotation, legacy-bootstrap attach semantics, reverse strip — if any is missed, e2e/smoke go red in a way the 126-row set does not name explicitly | Unit 0 pins the chosen reading; Unit 2 includes the strip; Unit 12 includes the re-pinned runtime asserts |
+| R-1 | **F-13 ripple** (translate-global minting): runtime census re-pin, archive/analysis/2026-08-15/2026-08-15-state-first-analysis §4.1 annotation, legacy-bootstrap attach semantics, reverse strip — if any is missed, e2e/smoke go red in a way the 126-row set does not name explicitly | Unit 0 pins the chosen reading; Unit 2 includes the strip; Unit 12 includes the re-pinned runtime asserts |
 | R-2 | **Unconditional guard vs seeded fork-construction tests** (N-3): node.test.ts:475/615/957, graph.test.ts:433, render.test.ts:579 build forks via constructor seed — keep-first now drops the second anchor; warn-count assertions at risk; re-expression is not itemized in the 126 rows | Unit 8 includes the seed-path policy test; Unit 12 re-expresses the five sites |
 | R-3 | **forkKey = pathKey on EVERY state** changes wire keys / serialized output / prevMap reuse for all existing pages and ssr fixtures (not just path-states) | Unit 1's red test asserts forwarding; ssr-render fixtures regenerated in Unit 3/12 |
 | R-4 | **Preference-order preservation** — serialize sort is the known order-killer; other order-breaking paths (ops-time anchor insertion, materializeAnchors dedup, `makeCs` copy) are unverified | Unit 9 includes the round-trip order test; Unit 4 asserts mint-order first-match |
@@ -1730,7 +1755,7 @@ then Units 1-13 in the ordered plan; the only open reading (F-13) is pinned
 above. The validation trio (npm test / typecheck / demo:smoke + profile
 ratio watch) gates each unit per AGENTS.md item 4/7.
 
-### 10.ag Anchor-layer seam vs placement links (D7, live-prod disposition 2026-08-14; Step-3 rulings F18 applied — SPEC-ENCODED, fix pass PENDING)
+### 10.ag Anchor-layer seam vs placement links (D7, live-prod disposition 2026-08-14; Step-3 rulings F18 applied — LANDED)
 
 From `live-prod/placeholderLanding/FINDINGS.md` disposition D7 (the
 component-assembly anchor-layer seam for `target: 'type' | 'content' |

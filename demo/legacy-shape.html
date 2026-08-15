@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — legacy-shape: the REAL-LEGACY-SHAPE regression page (D1–D8)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    #app, .side-card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .side-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.75rem 0; background: #f8fafc; }
+    .warnings { white-space: pre-wrap; background: #fff7ed; border: 1px solid #f0c36d; border-radius: 6px; padding: 0.5rem; font-size: 12px; }
+    #expected { white-space: pre-wrap; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem; font-size: 11px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <!--
+    ============================================================================
+    LEGACY-SHAPE DEMO — the REAL-LEGACY-SHAPE regression page (fix-pass plan
+    item 5; the D1–D8 live-prod legacy-shape dispositions, designing-pages.md
+    §11/§12 + translate.md). The main envelope is the blind-test
+    translate-stack fixture (tests/blind/translate-stack-fixture.json) adapted
+    with authored `props.id` (deterministic PAR-5 signature) + a nested
+    media-query cssDef rule.
+
+      • `preempt-initial-data` carries the LEGACY envelope (translateLegacy
+        input — NOT a serialized anchor document):
+          - cssDef StyleNodes with BOTH a class selector (.blind-card) and an
+            element/tag selector (nav) → REAL deduped stylesheet rules from
+            ACTIONABLE states only (D4/STL-1..4), incl. the nested media-query
+            rule nav{@media (max-width: 600px){flex-direction:column;}};
+          - the three seam targets (D7/SED-1..3): the h1's
+            {target: 'content', reference: titleDef} delivers the def's TEXT
+            only (F13); the span's {target: 'type', reference: badgeDef}
+            SHELL-COLLAPSES into the def button (def type + css + def child
+            strong, NO def content text); the div.blind-shell's
+            {target: 'children', reference: menuDef} keeps its OWN element +
+            text + authored children and GAINS the def-root nav.blind-menu as
+            an ADDITIONAL seam-wired child (div > nav.nav-bar > [logo, links]
+            shape — delivery-shape ruling SED-2);
+          - def roots + children stay OUT-OF-TREE pre-minted prototypes
+            (F16/D8 — never emitted by the host, no count-mismatch clobber);
+          - multi-zone placement: `placement` ARRAY entries; the item's
+            targetPlacement ['no-such-zone', 'side-zone'] first-match fan-out
+            into BOTH side-zone asides (§1.2/§2.5 — activePlacement =
+            'side-zone', the first choice skipped, not fatal);
+          - EMPTY-OWNER visibility: both asides keep authored text + inline
+            css.style → stay VISIBLE (no display:none);
+          - css.style authored as OBJECTS, serialized to kebab-case `k: v;`
+            strings by translate (D3); doc.content as a ContentPayload[]
+            ARRAY (D2); ZERO K4 warnings on the main envelope.
+      • Two K4 side cards (PURE DATA envelopes in `server-data`):
+          - placement-entry-invalid — `placement: [42]` (non-object entry)
+            warns + skips on the K4 channel; the node still renders;
+          - payload-shape-obsolete — the obsolete `{content, metadata}` object
+            form for doc.content warns + skips (D2/F5); the envelope's own
+            root children still render.
+      • The page pipeline is translateLegacy → Supervisor register → ONE
+        per-node compilePath bootstrap (the placement-path pipeline — the
+        fixture is placement-routed) → emitElements / diffMinimal / applyOps
+        (DomAdapter) → render. CORE ONLY (dist/core/*) + the shared runner.
+      • `server-data` embeds the expected census + the PAR-5 shape signature +
+        the builder's SSRFragmentAdapter fragments (main envelope + side
+        cards); the expected-output page (legacy-shape.expected.html) is the
+        SAME envelope through the real SSRFragmentAdapter.
+  ============================================================================
+  -->
+
+  <main>
+    <h1>legacy-shape — the REAL-LEGACY-SHAPE regression page (D1–D8)</h1>
+    <p class="goals">
+      One production-shaped legacy envelope (the blind-test translate-stack
+      fixture) rendered through the core pipeline: cssDef StyleNodes with class
+      AND tag selectors emitted as deduped stylesheet rules (incl. a nested
+      media query), the three seam delivery shapes (content = TEXT only,
+      type = shell collapse, children = shell + gained def-root), out-of-tree
+      def prototypes never emitted by the host, multi-zone placement with the
+      first choice missing (fan-out into both side-zones), EMPTY-OWNER
+      visibility for the styled asides, css.style OBJECTS, a ContentPayload[]
+      array, and ZERO K4 warnings. Two side cards exercise the
+      <code>placement-entry-invalid</code> and <code>payload-shape-obsolete</code>
+      guard channels with pure DATA envelopes. PAR-5 parity against the
+      builder's SSRFragmentAdapter output (shape signature + embedded
+      fragments).
+    </p>
+
+    <!-- Framework input: the LEGACY envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">{"template":{"root":{"type":"div","css":{"id":"blind-app"},"props":{"id":"blind-app"},"children":[{"type":"section","props":{"id":"blind-card"},"css":{"classes":["blind-card"],"cssDef":[{"selector":".blind-card","styles":{"border":"1px solid #ccc","padding":"16px"}}]},"content":"class-selector cssDef"},{"type":"nav","props":{"id":"blind-nav"},"css":{"cssDef":[{"selector":"nav","styles":{"display":"flex","gap":"8px","alignItems":"center"}},{"selector":"nav","styles":{"@media (max-width: 600px)":{"flexDirection":"column"}}}]},"content":"element-selector cssDef"},{"type":"h1","props":{"id":"blind-heading"},"css":{"classes":["blind-heading"]},"component":{"reference":"titleDef","target":"content"}},{"type":"div","props":{"id":"blind-shell"},"css":{"classes":["blind-shell"],"style":{"padding":"8px"}},"content":"shell text","children":[{"type":"p","props":{"id":"blind-shell-p"},"content":"authored paragraph"}],"component":{"reference":"menuDef","target":"children"}},{"type":"span","props":{"id":"blind-badge-slot"},"component":{"reference":"badgeDef","target":"type"}},{"type":"div","props":{"id":"blind-page","data-role":"page"},"children":[{"type":"aside","props":{"id":"side-a"},"css":{"classes":["side-a"],"style":{"width":"200px"}},"content":"zone A","placement":[{"placementName":"side-zone"}]},{"type":"aside","props":{"id":"side-b"},"css":{"classes":["side-b"],"style":{"width":"200px"}},"content":"zone B","placement":[{"placementName":"side-zone"}]}]}]},"component":[{"reference":"titleDef","value":{"type":"span","props":{"id":"blind-title-def"},"css":{"classes":["blind-title"]},"content":"The def's text content"}},{"reference":"badgeDef","value":{"type":"button","props":{"id":"blind-badge-def"},"css":{"classes":["blind-badge"],"style":{"border":"1px solid #333","borderRadius":"4px"},"cssDef":[{"selector":".blind-badge","styles":{"backgroundColor":"#ffe08a"}}]},"children":[{"type":"strong","props":{"id":"blind-badge-strong"},"content":"new"}]}},{"reference":"menuDef","value":{"type":"nav","props":{"id":"blind-menu-def"},"css":{"classes":["blind-menu"],"cssDef":[{"selector":".blind-menu","styles":{"backgroundColor":"#222","color":"#fff"}}]},"children":[{"type":"span","props":{"id":"blind-logo"},"content":"logo"},{"type":"span","props":{"id":"blind-links"},"content":"links"}]}}]},"content":[{"metadata":{"blindTest":"translate-stack","demo":"legacy-shape"},"userData":{"writer":"blind-test-writer"},"content":[{"type":"div","props":{"id":"blind-item"},"css":{"classes":["blind-item"],"style":{"padding":"4px"},"cssDef":[{"selector":".blind-item","styles":{"borderLeft":"3px solid #2a7"}}]},"content":"placed item","placement":[{"targetPlacement":["no-such-zone","side-zone"]}]}]}],"clientConfig":{"runInstantiation":true,"runRendering":true}}</script>
+    <script id="server-data" type="application/json">{"expected":{"nodes":17,"states":12,"elements":16,"stylesRules":6},"serverTreeSig":"2535fc891aabdd69","expectedHtml":"<style id=\"preempt-dynamic-styles\">\n.blind-card{border: 1px solid #ccc;padding: 16px;}\nnav{display: flex;gap: 8px;align-items: center;}\nnav{@media (max-width: 600px){flex-direction:column;}}\n.blind-menu{background-color: #222;color: #fff;}\n.blind-badge{background-color: #ffe08a;}\n.blind-item{border-left: 3px solid #2a7;}</style><div id=\"blind-app\"><section id=\"blind-card\" class=\"blind-card\">class-selector cssDef</section><nav id=\"blind-nav\">element-selector cssDef</nav><h1 id=\"blind-heading\" class=\"blind-heading\">The def's text content</h1><div id=\"blind-shell\" class=\"blind-shell\" style=\"padding: 8px;\">shell text<p id=\"blind-shell-p\">authored paragraph</p><nav class=\"blind-menu\"><span id=\"blind-logo\">logo</span><span id=\"blind-links\">links</span></nav></div><button id=\"blind-badge-slot\" class=\"blind-badge\" style=\"border: 1px solid #333; border-radius: 4px;\"><strong id=\"blind-badge-strong\">new</strong></button><div id=\"blind-page\" data-role=\"page\"><aside id=\"side-a\" class=\"side-a\" style=\"width: 200px;\">zone A<div id=\"blind-item\" class=\"blind-item\" style=\"padding: 4px;\">placed item</div></aside><aside id=\"side-b\" class=\"side-b\" style=\"width: 200px;\">zone B<div id=\"blind-item\" class=\"blind-item\" style=\"padding: 4px;\">placed item</div></aside></div></div>","sideCards":{"entryInvalid":{"template":{"root":{"type":"div","props":{"id":"entry-invalid-root"},"children":[{"type":"p","props":{"id":"entry-invalid-card"},"content":"invalid-entry card renders (placement entry skipped)","placement":[42]}]}},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"payloadObsolete":{"template":{"root":{"type":"div","props":{"id":"obsolete-payload-root"},"children":[{"type":"p","props":{"id":"obsolete-payload-card"},"content":"obsolete-payload card renders (payload skipped)"}]}},"content":{"content":[{"type":"div","content":"obsolete payload content"}],"metadata":{}},"clientConfig":{"runInstantiation":true,"runRendering":true}},"expectedEntryInvalid":"<div id=\"entry-invalid-root\"><p id=\"entry-invalid-card\">invalid-entry card renders (placement entry skipped)</p></div>","expectedPayloadObsolete":"<div id=\"obsolete-payload-root\"><p id=\"obsolete-payload-card\">obsolete-payload card renders (payload skipped)</p></div>"}}</script>
+
+    <section>
+      <h2>Main envelope — the blind-test translate-stack fixture (live DOM)</h2>
+      <p class="expect">
+        Every element below is framework-rendered: the section + nav carry the
+        cssDef rules (class + tag selectors), the h1 holds the def's TEXT only,
+        the button is the shell-collapsed def (type + css + strong child), the
+        shell div keeps its own text + authored p and GAINS the def-root
+        nav.blind-menu, and the placed item fans out into BOTH side-zone
+        asides (first targetPlacement choice missing). Warnings channel
+        (K4): the main envelope must stay empty.
+      </p>
+      <div id="app"></div>
+      <h3>Translate warnings (K4 channel — main envelope)</h3>
+      <pre class="warnings" id="main-warnings"></pre>
+    </section>
+
+    <section>
+      <h2>K4 guard side cards (pure DATA envelopes)</h2>
+      <div class="side-card">
+        <h3>placement-entry-invalid — a non-object placement ARRAY entry</h3>
+        <p class="expect">
+          <code>placement: [42]</code> is not a PlacementConfig object: the
+          entry warns <code>placement-entry-invalid</code> and is skipped (D1 —
+          an array never silently no-ops); the node still renders its own
+          content.
+        </p>
+        <div class="side-card-mount" id="invalid-entry-mount"></div>
+        <pre class="warnings" id="invalid-entry-mount-warnings"></pre>
+      </div>
+      <div class="side-card">
+        <h3>payload-shape-obsolete — the obsolete single-payload object form</h3>
+        <p class="expect">
+          <code>doc.content</code> as the obsolete <code>{content, metadata}</code>
+          OBJECT (not a ContentPayload[] array) warns
+          <code>payload-shape-obsolete</code> and is skipped (D2/F5 — never
+          silently dropped); the envelope's own root children still render.
+        </p>
+        <div class="side-card-mount" id="obsolete-payload-mount"></div>
+        <pre class="warnings" id="obsolete-payload-mount-warnings"></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Expected server fragment (SSRFragmentAdapter — PAR-5)</h2>
+      <p class="expect">
+        The builder renders the same envelope through the real
+        <code>SSRFragmentAdapter</code>; the live DOM must produce the same
+        structural shape signature (wire-agnostic — the page re-translates the
+        legacy envelope, so parity is key-free: type + props + children
+        structure).
+      </p>
+      <div class="frame" id="expected">&lt;style id="preempt-dynamic-styles"&gt;
+.blind-card{border: 1px solid #ccc;padding: 16px;}
+nav{display: flex;gap: 8px;align-items: center;}
+nav{@media (max-width: 600px){flex-direction:column;}}
+.blind-menu{background-color: #222;color: #fff;}
+.blind-badge{background-color: #ffe08a;}
+.blind-item{border-left: 3px solid #2a7;}&lt;/style&gt;&lt;div id="blind-app"&gt;&lt;section id="blind-card" class="blind-card"&gt;class-selector cssDef&lt;/section&gt;&lt;nav id="blind-nav"&gt;element-selector cssDef&lt;/nav&gt;&lt;h1 id="blind-heading" class="blind-heading"&gt;The def's text content&lt;/h1&gt;&lt;div id="blind-shell" class="blind-shell" style="padding: 8px;"&gt;shell text&lt;p id="blind-shell-p"&gt;authored paragraph&lt;/p&gt;&lt;nav class="blind-menu"&gt;&lt;span id="blind-logo"&gt;logo&lt;/span&gt;&lt;span id="blind-links"&gt;links&lt;/span&gt;&lt;/nav&gt;&lt;/div&gt;&lt;button id="blind-badge-slot" class="blind-badge" style="border: 1px solid #333; border-radius: 4px;"&gt;&lt;strong id="blind-badge-strong"&gt;new&lt;/strong&gt;&lt;/button&gt;&lt;div id="blind-page" data-role="page"&gt;&lt;aside id="side-a" class="side-a" style="width: 200px;"&gt;zone A&lt;div id="blind-item" class="blind-item" style="padding: 4px;"&gt;placed item&lt;/div&gt;&lt;/aside&gt;&lt;aside id="side-b" class="side-b" style="width: 200px;"&gt;zone B&lt;div id="blind-item" class="blind-item" style="padding: 4px;"&gt;placed item&lt;/div&gt;&lt;/aside&gt;&lt;/div&gt;&lt;/div&gt;</div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="legacy-shape.js"></script>
+</body>
+</html>

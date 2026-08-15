@@ -606,3 +606,48 @@ describe('EMPTY-OWNER refinement — hide only containers with NO renderable inf
     expect(String(el.props['css:style'] ?? '')).not.toContain('display: none')
   })
 })
+
+describe('S17/DEFECT-4 — the nested seam shell keeps its OWN text (B1, categorical)', () => {
+  // A seam 'children' consumer nested INSIDE a def's subtree must preserve
+  // its authored text like the top-level SED-2 branch — the nested
+  // emitDefChildTree branch deleted it (render-helpers.ts:654 pre-fix).
+  it('a def child that is a children-seam consumer with authored text keeps it + gains the def-root', () => {
+    const env = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            {
+              reference: 'outer',
+              value: {
+                type: 'div',
+                children: [
+                  { type: 'div', content: 'nested shell text', component: [{ target: 'children', reference: 'inner' }] },
+                ],
+              },
+            },
+            { reference: 'inner', value: { type: 'aside', css: { classes: ['inner-panel'] }, children: [{ type: 'strong', content: 'inner child' }] } },
+          ],
+          children: [
+            { type: 'section', component: [{ target: 'children', reference: 'outer' }] },
+          ],
+        },
+      },
+      content: [],
+    }
+    const t = translateLegacy(env as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const cr = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els = emitElements(cr.actionable, byNode)
+    const ops = diffMinimal(null, els)
+    const adapter = new SSRFragmentAdapter()
+    applyOps(adapter as never, ops)
+    const html = adapter.toString()
+    // the nested shell keeps its OWN text and gains the aside def-root
+    expect(html).toContain('nested shell text')
+    expect(html).toContain('class="inner-panel"')
+    expect(html).toContain('inner child')
+  })
+})

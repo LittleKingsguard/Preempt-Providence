@@ -506,6 +506,33 @@ function linkChainAllowed(s: EmitState, def: LinkDefSpec, name: string): boolean
   return def.children.length >= childWires.length
 }
 
+/** SED-2/B1 — seam-'children' SHELL element construction: the
+ *  ALWAYS-PERFORMED per-node operations for a children-target consumer's
+ *  OWN element, shared by the TOP-LEVEL branch (emitOne) and the NESTED
+ *  branch (emitDefChildTree) so neither can drift (DEFECT #4 — the nested
+ *  branch deleted the shell's authored text while the top-level preserved
+ *  it):
+ *  1. own-text preservation — the shell keeps its OWN authored content
+ *     (B1: node data as-is — never deleted, never replaced by the def's);
+ *  2. styles forwarding — the shell's cssDef rules ride its `styles` field;
+ *  3. forkKey forwarding — path-states carry forkKey = pathKey.
+ *  The def-root joins as an ADDITIONAL child (the caller appends its wire). */
+function makeSeamShellEl(
+  wire: string,
+  type: string,
+  props: Record<string, unknown>,
+  ownText: unknown,
+  childOrder: string[],
+  styles: string[],
+  forkKey: ForkPathKey | undefined,
+): MinimalElement {
+  if (ownText !== undefined) props['text'] = ownText
+  const el: MinimalElement = { wire, type, props, childOrder }
+  if (styles.length > 0) el.styles = styles
+  if (forkKey !== undefined) el.forkKey = forkKey
+  return el
+}
+
 /** One def-child spec tree node: the deliverable spec data (type/content/
  *  css/props/children — the authored def value) or a bind-spec re-type
  *  target. */
@@ -525,7 +552,7 @@ function findDefBinding(
     const d = v as { type?: unknown; children?: unknown }
     if (typeof d.type !== 'string') continue
     const seamAnchor = (s.anchors ?? []).find(
-      (a) => a.role === 'target' && typeof a.target === 'string' && a.target === name && a.options.seam !== undefined,
+      (a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string' && a.target === name && a.options.seam !== undefined,
     )
     const seam = seamAnchor ? (seamAnchor.options.seam as 'type' | 'content' | 'children') : undefined
     if (seam !== undefined || Array.isArray(d.children)) {
@@ -623,7 +650,7 @@ function emitDefChildTree(
   // (the element keeps its own shell).
   if (childSpecs.length === 0 && proto && Array.isArray(proto.anchors)) {
     const seamTarget = proto.anchors.find(
-      (a) => a.role === 'target' && typeof a.target === 'string' && a.options.seam !== undefined,
+      (a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string' && a.options.seam !== undefined,
     )
     if (seamTarget) {
       const value = seamTarget.link.anchorsOf('source').find((p) => p.value !== undefined)?.value
@@ -651,10 +678,12 @@ function emitDefChildTree(
             }
           }
         } else {
-          // SED-2 — the nested DEF-ROOT element becomes this element's child
-          // (this element keeps its own shell; its own text is dropped — the
-          // def-root is the content carrier)
-          delete cprops['text']
+          // SED-2 — the nested DEF-ROOT element becomes this element's
+          // child (B1: the shell NEVER collapses and KEEPS its own authored
+          // text — the def-root joins as an ADDITIONAL child). The shell
+          // element goes through the SHARED finalizer (makeSeamShellEl,
+          // also used by the top-level branch) — DEFECT #4 deleted the
+          // shell's text here while the top-level branch preserved it.
           const nestedRoot = defRootPrototypeFor(seamTarget.link)
           const nestedProtos = defPrototypesFor(seamTarget.link)
           const rootTree = emitDefRootElement(
@@ -667,7 +696,9 @@ function emitDefChildTree(
             pathCtx,
           )
           flat.push(...rootTree.flat)
-          children.push(rootTree.el)
+          const shellEl = makeSeamShellEl(wire, type, cprops, spec.content, [rootTree.el.wire], styles, undefined)
+          flat.unshift(shellEl)
+          return { el: shellEl, flat }
         }
       }
     }
@@ -750,24 +781,24 @@ function emitOne(
         const layersSuffix =
           def.childLayersSuffix && parentLayers ? `${parentLayers}|${def.childLayersSuffix}` : undefined
         const seamTarget = (s.anchors ?? []).find(
-          (a) => a.role === 'target' && typeof a.target === 'string' && a.target === defEntry!.name,
+          (a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string' && a.target === defEntry!.name,
         )
         const protos = seamTarget ? defPrototypesFor(seamTarget.link) : []
         const defRootProto = seamTarget ? defRootPrototypeFor(seamTarget.link) : undefined
         if (seam === 'children') {
-          // SED-2 — SHELL + DEF-ROOT CHILD (B1 clarification 2026-08-14): the
-          // consumer NEVER collapses — it keeps its OWN element, its OWN
+          // SED-2 — SHELL + DEF-ROOT CHILD (B1 clarification 2026-08-14):
+          // the consumer NEVER collapses — it keeps its OWN element, its OWN
           // authored text and its OWN authored children UNTOUCHED; the
           // anchor layer's DEF-ROOT element (def type + css incl. cssDef
           // rules) joins as an ADDITIONAL child. `div(shell text) >
           // [p(authored), nav.nav-bar > logo]` — the component rule for a
           // children-target: original node data as-is, prototype node added.
+          // The shell element goes through the SHARED finalizer
+          // (makeSeamShellEl — also used by the nested branch) so the
+          // always-performed operations cannot drift (DEFECT #4).
           const rootWire = `${wire}:0`
           const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx)
-          if (s.content !== undefined) props['text'] = s.content
-          const el: MinimalElement = { wire, type: s.type, props, childOrder: [...childWires, rootWire] }
-          if (styles.length > 0) el.styles = styles
-          if (s.forkKey !== undefined) el.forkKey = s.forkKey
+          const el = makeSeamShellEl(wire, s.type, props, s.content, [...childWires, rootWire], styles, s.forkKey)
           return { el, defChildren: rootTree.flat }
         }
       if (seam === 'type') {

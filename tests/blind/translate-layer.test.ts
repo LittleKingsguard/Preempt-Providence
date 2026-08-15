@@ -389,7 +389,7 @@ describe('translate layer — K4 channel + envelope guards (§3, TR-H10, TR-F1/T
 /* ------------------------------------------------------------------ */
 
 describe('translate layer — ancestor-name veto (T28)', () => {
-  // ENGINE DEFECT #1 (reported in docs/test-findings.md §"Blind test #3",
+  // ENGINE DEFECT #1 (reported in archive/findings/2026-08-15/2026-08-15-test-findings.md §"Blind test #3",
   // NOT fixed by the reviewer — reviewer never edits engine code): the
   // translate-time half of the §1.3 ancestor-name veto is MISSING in
   // src/core/translate.ts. placement-path-spec §1.3 + §6 CODE translate row +

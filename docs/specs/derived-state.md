@@ -1,7 +1,7 @@
 # Derived State — Spec (variant D: data-carried, single-pass, parity-safe derivation)
 
 Status: spec for variant D of the "mid-process handlers" proposal — the
-three-agent review (`docs/specs/mid-process-handler-review.md`) verdict.
+three-agent review (`archive/reviews/2026-08-15/2026-08-15-mid-process-handler-review.md`) verdict.
 Reviewer loop (subagents.md Step 3): 3 passes, clean — findings 1-17 (pass
 1) resolved or parked as DECIDED (§3 syntax adaptation, §7 direct
 `layers.push` constraint, §8 legacy flattening); pass 2 (must-fix §9.2
@@ -17,7 +17,7 @@ per-dispatch context enrichment) + D (this spec). D is the durable, safe form
 of "bake derived values into the compiled state without a second pass":
 a data-carried `derived` declaration evaluated inside the existing compile
 path — no dispatch, no handler, no journal, no eval. Companion:
-`docs/specs/mid-process-handler-review.md` §5D, `docs/specs/render.md` §5
+`archive/reviews/2026-08-15/2026-08-15-mid-process-handler-review.md` §5D, `docs/specs/render.md` §5
 (SER-R1), `docs/specs/node.md` (two-pass compile).
 
 ## 1. Purpose
@@ -303,7 +303,7 @@ Validation at declaration means compile never throws for derived data
 
 ## 12. Companion docs to update
 
-`docs/specs/mid-process-handler-review.md` (status: D spec exists),
+`archive/reviews/2026-08-15/2026-08-15-mid-process-handler-review.md` (status: D spec exists),
 `docs/specs/node.md` (makeCs/compileLocal surface), `docs/specs/render.md`
 (§5 SER-R1 note + the RenderNodeState.derived field),
 `RENDER_PROCESS_NOTES.md` §10.10 (DECIDED entry), `docs/skills/designing-pages.md`

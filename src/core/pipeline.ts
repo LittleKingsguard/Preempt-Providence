@@ -76,7 +76,7 @@ export interface PhaseRegistry {
 const CANON_STAGES: ReadonlyArray<{ stage: PipelineStage; summary: string }> = [
   { stage: 'instantiation', summary: 'Rebuild manager: regenerates/restructures existing nodes via graph ops; owns pipeline-internal mutations.' },
   { stage: 'targetPlacementResolution', summary: 'Matches content targetPlacement requests to registered drop-zones; resolution expressed as placement-role anchors.' },
-  { stage: 'placementAssembly', summary: 'Populates zones: decomposes into attach + clone-instance on parent-child Links.' },
+  { stage: 'placementAssembly', summary: 'Populates zones WITHOUT clone-instance decomposition (P3 §6.1): placement multiplicity is path-multiplicative — the §2 path-enumeration forks one state per zone of the chosen name; no attach + clone-instance on parent-child Links. The clone-instance op remains for RUNTIME/HANDLER-logic instantiation only (the fork-stress expansion bodies) — never the placement mechanism, never required by translate or the base engine.' },
   { stage: 'componentRouting', summary: 'Routes component emissions by resolution kind; cascades source updates to dependents.' },
   { stage: 'componentAssembly', summary: 'Resolves type components: structural sub-tree injection.' },
   { stage: 'slotAssembly', summary: 'Applies every non-type binding (content/handlers/props.*/css.*) as layers; never children.' },

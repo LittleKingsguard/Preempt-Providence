@@ -1,0 +1,128 @@
+{
+  "template": {
+    "root": {
+      "type": "div",
+      "css": { "id": "blind-app" },
+      "children": [
+        {
+          "type": "section",
+          "css": {
+            "classes": ["blind-card"],
+            "cssDef": [
+              { "selector": ".blind-card", "styles": { "border": "1px solid #ccc", "padding": "16px" } }
+            ]
+          },
+          "content": "class-selector cssDef"
+        },
+        {
+          "type": "nav",
+          "css": {
+            "cssDef": [
+              { "selector": "nav", "styles": { "display": "flex", "gap": "8px", "alignItems": "center" } }
+            ]
+          },
+          "content": "element-selector cssDef"
+        },
+        {
+          "type": "h1",
+          "css": { "classes": ["blind-heading"] },
+          "component": { "reference": "titleDef", "target": "content" }
+        },
+        {
+          "type": "div",
+          "css": { "classes": ["blind-shell"], "style": { "padding": "8px" } },
+          "content": "shell text",
+          "children": [
+            { "type": "p", "content": "authored paragraph" }
+          ],
+          "component": { "reference": "menuDef", "target": "children" }
+        },
+        {
+          "type": "span",
+          "component": { "reference": "badgeDef", "target": "type" }
+        },
+        {
+          "type": "div",
+          "props": { "data-role": "page" },
+          "children": [
+            {
+              "type": "aside",
+              "css": { "classes": ["side-a"], "style": { "width": "200px" } },
+              "content": "zone A",
+              "placement": [ { "placementName": "side-zone" } ]
+            },
+            {
+              "type": "aside",
+              "css": { "classes": ["side-b"], "style": { "width": "200px" } },
+              "content": "zone B",
+              "placement": [ { "placementName": "side-zone" } ]
+            }
+          ]
+        }
+      ]
+    },
+    "component": [
+      {
+        "reference": "titleDef",
+        "value": {
+          "type": "span",
+          "css": { "classes": ["blind-title"] },
+          "content": "The def's text content"
+        }
+      },
+      {
+        "reference": "badgeDef",
+        "value": {
+          "type": "button",
+          "css": {
+            "classes": ["blind-badge"],
+            "style": { "border": "1px solid #333", "borderRadius": "4px" },
+            "cssDef": [
+              { "selector": ".blind-badge", "styles": { "backgroundColor": "#ffe08a" } }
+            ]
+          },
+          "children": [
+            { "type": "strong", "content": "new" }
+          ]
+        }
+      },
+      {
+        "reference": "menuDef",
+        "value": {
+          "type": "nav",
+          "css": {
+            "classes": ["blind-menu"],
+            "cssDef": [
+              { "selector": ".blind-menu", "styles": { "backgroundColor": "#222", "color": "#fff" } }
+            ]
+          },
+          "children": [
+            { "type": "span", "content": "logo" },
+            { "type": "span", "content": "links" }
+          ]
+        }
+      }
+    ]
+  },
+  "content": [
+    {
+      "metadata": { "blindTest": "translate-stack" },
+      "userData": { "writer": "blind-test-writer" },
+      "content": [
+        {
+          "type": "div",
+          "css": {
+            "classes": ["blind-item"],
+            "style": { "padding": "4px" },
+            "cssDef": [
+              { "selector": ".blind-item", "styles": { "borderLeft": "3px solid #2a7" } }
+            ]
+          },
+          "content": "placed item",
+          "placement": [ { "targetPlacement": [ "no-such-zone", "side-zone" ] } ]
+        }
+      ]
+    }
+  ],
+  "clientConfig": { "runInstantiation": true, "runRendering": true }
+}

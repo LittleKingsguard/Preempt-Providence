@@ -866,7 +866,7 @@ describe('emitElements — component-link (prototype-as-child) def chains', () =
 
 // ---------------------------------------------------------------------------
 // DEFECT #1 — emitElements/emitOne drop cs.forkKey (placement-path-spec §4.3,
-// test-findings §"Stress-test review loop #1" DEFECT #1; fix shape: forward
+// archive/findings/2026-08-15/2026-08-15-test-findings §"Stress-test review loop #1" DEFECT #1; fix shape: forward
 // s.forkKey in every emitOne return branch, mirror minimalFromState)
 // ---------------------------------------------------------------------------
 

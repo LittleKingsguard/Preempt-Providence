@@ -536,7 +536,7 @@ describe('Clone participation (validation.md §7.3)', () => {
     expect(clone.layers[0]?.props).toEqual({ extra: true })
   })
 
-  it('cloned anchors point to cloned links, not the originals', () => {
+  it('cloned NAME-KEYED anchors REUSE the shared per-name link (DEFECT #9 directive 2026-08-15: components/placements are name-keyed — the registry IS the connection)', () => {
     const src = makeNode({ type: 'leaf' })
     const srcLink = new Link({ name: 'component' })
     src.addAnchor('source', 'slotA', {}, srcLink)
@@ -545,9 +545,12 @@ describe('Clone participation (validation.md §7.3)', () => {
     const srcAnchor = src.anchors.find((a) => a.role === 'source')
     expect(cloneAnchor).toBeDefined()
     expect(srcAnchor).toBeDefined()
-    expect(cloneAnchor!.link).not.toBe(srcAnchor!.link)
-    expect(cloneAnchor!.link.id).not.toBe(srcAnchor!.link.id)
+    // the name-keyed link is SHARED (providers/resolution/seam key on it) —
+    // a fresh link would orphan the clone from the registry
+    expect(cloneAnchor!.link).toBe(srcAnchor!.link)
     expect(srcAnchor!.link).toBe(srcLink)
+    // the clone is runtime-minted (reverseTranslate excludes it)
+    expect(clone.runtimeMinted).toBe(true)
   })
 
   it('cloning a destroyed source is rejected', () => {

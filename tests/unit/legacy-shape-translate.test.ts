@@ -67,6 +67,9 @@
  */
 import { describe, it, expect } from 'vitest'
 import { translateLegacy, reverseTranslate, type LegacyInitialData } from '../../src/core/translate.js'
+import { Supervisor } from '../../src/core/supervisor.js'
+import { EventBridge } from '../../src/core/events.js'
+import { emitElements } from '../../src/core/render-helpers.js'
 import { Node, type Node as NodeType } from '../../src/core/node.js'
 import { hub } from '../helpers/fixtures.js'
 
@@ -389,7 +392,7 @@ describe('D7 — seam targets plan at translate WITHOUT component-target-gap (F1
     }
   })
 
-  it('[26] provider form {reference, value, target} persists options.seam on the source anchor too', () => {
+  it('[26] provider form {reference, value, target} persists options.seam on the DUPLEX anchor (S19 ruling 2026-08-15: value+target ⇒ duplex, not source)', () => {
     for (const target of ['type', 'content', 'children']) {
       const t = translateLegacy({
         template: {
@@ -401,9 +404,10 @@ describe('D7 — seam targets plan at translate WITHOUT component-target-gap (F1
         content: [],
       })
       expect(t.warnings).toEqual([])
-      const anchor = t.root.anchors.find((a) => a.role === 'source' && a.target === 'd')
+      const anchor = t.root.anchors.find((a) => a.role === 'duplex' && a.target === 'd')
       expect(anchor).toBeDefined()
       expect((anchor!.options as { seam?: string }).seam).toBe(target)
+      expect(anchor!.value).toBeDefined()
     }
   })
 
@@ -442,5 +446,128 @@ describe('D8 — def children are PRE-MINTED as out-of-tree "component"-token pr
     // never attached to the HOST node by translate, never content, never in-tree
     expect(t.root.children).toEqual([])
     expect(t.content).toEqual([])
+  })
+})
+
+describe('D7/DEFECT-5/6 — self-provider duplex seams + reverse seam persistence (user directives 2026-08-15)', () => {
+  // DEFECT #5 (S19): a legacy binding with BOTH value and target is a DUPLEX
+  // (provider + consumer on one anchor), not a source — the seam flag
+  // persists on the duplex anchor and the seam DETECTION must read it
+  // (materializeSeam/findDefBinding/isSeamDefBinding keyed on target only).
+  // DEFECT #6 (S26): nodeToLegacy must reverse seam anchors with their
+  // target (`target: <seam>` — apply path OR seam target, never a second
+  // name) so a re-translate reproduces the SAME seam plan.
+  it('[28] a value+target binding plans a DUPLEX anchor carrying options.seam (not a source)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'self', value: { type: 'section', content: 'def text', css: { classes: ['self-panel'] } }, target: 'children' },
+          ],
+          children: [
+            { type: 'div', content: 'wrapper text', component: [{ reference: 'self', target: 'children' }] },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const root = t.root
+    const selfAnchor = root.anchors.find((a) => a.target === 'self')!
+    // value+target ⇒ duplex, NOT source — with the seam persisted
+    expect(selfAnchor.role).toBe('duplex')
+    expect(selfAnchor.options.seam).toBe('children')
+    expect(selfAnchor.value).toBeDefined()
+  })
+
+  it('[29] a SELF-PROVIDER children-seam materializes: the host keeps its own text + authored children and gains the def-root (SED-2)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'menu', value: { type: 'nav', css: { classes: ['menu-def'] }, children: [{ type: 'span', content: 'logo' }] }, target: 'children' },
+          ],
+          children: [
+            { type: 'div', content: 'wrapper text', component: [{ reference: 'menu', target: 'children' }], children: [{ type: 'p', content: 'authored' }] },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const cr = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els = emitElements(cr.actionable, byNode)
+    const wrapper = els.find((e) => e.type === 'div' && e.props['text'] !== undefined)!
+    // B1: shell keeps its own text + authored child; the def-root joins
+    expect(wrapper.props['text']).toBe('wrapper text')
+    expect(wrapper.childOrder.length).toBe(2)
+    const nav = els.find((e) => e.wire === wrapper.childOrder[1])!
+    expect(nav.type).toBe('nav')
+    expect(nav.props['css:classes']).toEqual(['menu-def'])
+  })
+
+  it('[30] reverseTranslate emits `target: <seam>` for seam anchors; re-translate reproduces the seam plan (TR-H16/R-H8)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'menu', value: { type: 'nav', css: { classes: ['menu-def'] }, children: [{ type: 'span', content: 'logo' }] } },
+          ],
+          children: [
+            { type: 'div', content: 'wrapper text', component: [{ reference: 'menu', target: 'children' }] },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const outRoot = reverseTranslate(t.root).template.root
+    const outChild = outRoot.children![0]!
+    const binding = (Array.isArray(outChild.component) ? outChild.component[0] : outChild.component) as { reference?: string; target?: string }
+    expect(binding.reference).toBe('menu')
+    expect(binding.target).toBe('children')
+    // re-translate reproduces the seam plan (options.seam on the consumer anchor)
+    const t2 = translateLegacy({ template: { root: outRoot } } as never)
+    const consumer = t2.root.children[0]!
+    const seamAnchor = consumer.anchors.find((a) => a.target === 'menu')!
+    expect(seamAnchor.options.seam).toBe('children')
+  })
+})
+
+describe('DEFECT-7/8 — translate fail-safe (stress loop round 3 findings, 2026-08-15)', () => {
+  // DEFECT #7: children:[null] crashed translate (uncaught TypeError on null
+  // data.component, translate.ts:692 — whole-doc abort). Pinned contract:
+  // a non-object ENTRY inside a valid children array warns
+  // `children-entry-invalid` + skips THAT entry only; the rest translates.
+  it('[31] a null / primitive children ENTRY warns children-entry-invalid and is skipped — no crash, rest renders', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [null, { type: 'div', content: 'ok' }, 42, 'x' as never],
+        },
+      },
+      content: [],
+    } as never)
+    expect(t.warnings.filter((w) => w.code === 'children-entry-invalid').length).toBe(3)
+    expect(t.root.children.map((c) => c.type)).toEqual(['div'])
+    expect(t.root.children[0]!.content).toBe('ok')
+  })
+
+  // DEFECT #8: a TRUTHY NON-OBJECT template.root (42 / array) silently minted
+  // a default div with ZERO warns. Pinned contract: non-object roots are
+  // malformed envelopes → legacy-envelope-mismatch (same as falsy roots).
+  it('[32] a truthy non-object template.root throws legacy-envelope-mismatch (42 and array)', () => {
+    for (const root of [42, ['div']]) {
+      expect(() =>
+        translateLegacy({ template: { root: root as never } } as never),
+      ).toThrow('legacy-envelope-mismatch')
+    }
+    // the object root still translates
+    const t = translateLegacy({ template: { root: { type: 'app' } }, content: [] })
+    expect(t.root.type).toBe('app')
   })
 })
