@@ -70,7 +70,7 @@ const badge = childOf(panel, makeNode({ type: 'span', content: 'hi' }), 0)
   `#`-name, a duplicate, a non-object entry → `placement-entry-invalid`)
   warns on the K4 channel; `placement: []` is a legal empty list (no warn).
   The §1.3 ancestor veto fires at BOTH phases since 2026-08-14 (DEFECT #3-1
-  fixed — child-side family attach + the shared `ancestorServesZone`
+  fixed — child-side family attach + the shared `ancestorConsumesZone`
   predicate, §14.6
   #11).
 - **Anchor-layer seam (D7, 2026-08-14 — SPEC-ENCODED, fix pass PENDING)**:
@@ -799,12 +799,19 @@ From the post-implementation layered blind loop (`docs/test-findings.md`
 11. **The translate-time §1.3 ancestor veto IS implemented (2026-08-14,
     DEFECT #3-1 fixed)** — family attach is CHILD-SIDE in translate (the
     child attaches itself to its family parent before its own placement
-    minting), so the shared `ancestorServesZone` predicate (node.ts, used by
-    both the op-time and translate-time halves) walks a live parent chain at
-    translate. A producer whose family ancestor already offers the same
-    `placementName` is NOT minted and warns `placement-name-vetoed` (K4).
-    Authoring note: nested producers with the SAME name are vetoed — the
-    ancestor's container wins.
+    minting), so the shared `ancestorConsumesZone` predicate (node.ts, used
+    by both the op-time and translate-time halves) walks a live parent chain
+    at translate. A producer whose family ancestor WOULD ATTEMPT TO PLACE
+    INTO the zone (a `content`-role anchor for it) is NOT minted and warns
+    `placement-name-vetoed` (K4) — LOOP-PREVENTION ONLY (the ancestor's
+    content anchor → the per-name Link → the descendant's container → family
+    up → the ancestor → path-walk revisit). Authoring note: DUPLICATE
+    PRESENTATION is LEGAL — a descendant may present a zone its ancestor
+    also OFFERS — placement resolution never shadows (nearest-shadows-far
+    is component resolution): a consumer fans into ALL zones of its
+    best-fit targetPlacement, so a duplicate presentation is just another
+    zone of the multiplicity; the veto fires only when an
+    ancestor CONSUMES the zone.
 
 ### 14.7 Live-prod legacy-shape lessons (placeholderLanding loop, 2026-08-14; Step-3 rulings F13 applied)
 

@@ -122,6 +122,17 @@ A user node's `content` anchors are a **preference-ordered request list**
 (legacy basis: `PlacementWorker.ts:29-37` +
 `TargetPlacementResolverWorker.ts:28-35`; Q5 resolved — §8 ledger):
 
+- **RESOLUTION SEMANTICS vs COMPONENT RESOLUTION (clarification
+  2026-08-14)**: placement resolution is NOT nearest-shadows-far — that is
+  COMPONENT resolution (one nearest provider per name, depth-0, root
+  fallback; api.md §4). Placements resolve by **best-fit `targetPlacement` +
+  consume-ALL-zones**: the MOST PREFERRED name with a known container is
+  chosen, and the consumer fans into EVERY zone (container anchor) of that
+  name — path-multiplicative. There is no shadowing concept in placement
+  resolution; a duplicate presentation (two containers of the same name on
+  one ancestor chain) is simply additional multiplicity, not an override
+  (§1.3 veto — loop-prevention only). The walk algorithms are shared
+  (api.md P1/S-R2.8); the role semantics are not.
 - **First-match-with-known-container wins**: the compile walks the array in
   order and stops at the MOST PREFERRED name that has at least one known
   container (a `container` anchor on the per-name Link with a path to
@@ -167,17 +178,31 @@ Legacy nulls out a `placementName` when an ancestor already offers the same
 name — the anti-loop guard (`Preempt/src/core/Placement.ts:44-57`). The
 rebuild carries the guard as a **translate-time veto**:
 
-- When translating a producer (`placementName`) whose ancestor chain
-  already carries a `'container'` anchor with the same name, the anchor is
-  NOT minted and a K4 warning (`placement-name-vetoed`, new code) fires —
+- When translating a producer (`placementName`) whose family ancestor chain
+  WOULD ATTEMPT TO PLACE INTO the zone — i.e., an ancestor carries a
+  `'content'`-role anchor targeting the same name — the anchor is NOT
+  minted and a K4 warning (`placement-name-vetoed`, new code) fires —
   warn+skip, never a throw (TR-F2; `src/core/translate.ts:176-180` warn
-  channel). **IMPLEMENTATION STATUS (2026-08-14):** IMPLEMENTED — DEFECT #3-1 fixed.
-  Family attach is CHILD-SIDE in translate (the child attaches itself to its
-  family parent before its own placement minting), so the shared
-  `ancestorServesZone` predicate (node.ts; ops.ts + translate.ts import it)
-  walks a live parent chain at translate; the producer mint vetoes with
-  `placement-name-vetoed` (K4, warn+skip, never a throw — TR-F2). The veto
-  now fires at BOTH phases (translate minting + `placement-attach`).
+  channel). **RATIONALE (user correction 2026-08-14): the veto is
+  LOOP-PREVENTION ONLY.** A descendant presenting a zone that an ancestor
+  would attempt to place into creates a placement-path loop: the ancestor's
+  `content` anchor → the per-name placement Link → the descendant's
+  `container` → family edges up → the ancestor → revisit (the walk's
+  per-walk `seen` set trips — loop-terminated arms dropped). **DUPLICATE
+  PRESENTATION is LEGAL**: an ancestor merely OFFERING the same zone (a
+  `container`-role anchor) does NOT veto. Placement resolution NEVER
+  shadows (correction 2026-08-14: nearest-shadows-far is COMPONENT
+  resolution, not placement): a consumer fans into ALL zones of its
+  best-fit `targetPlacement` (path-multiplicative fan-out, §1.2), so a
+  descendant presentation is simply an additional zone of the multiplicity
+  and each of its path-walk branches terminates at 'rootNode' (no revisit). **IMPLEMENTATION STATUS
+  (2026-08-14):** IMPLEMENTED — DEFECT #3-1 fixed. Family attach is
+  CHILD-SIDE in translate (the child attaches itself to its family parent
+  before its own placement minting), so the shared `ancestorConsumesZone`
+  predicate (node.ts; ops.ts + translate.ts import it) walks a live parent
+  chain at translate; the producer mint vetoes with `placement-name-vetoed`
+  (K4, warn+skip, never a throw — TR-F2). The veto fires at BOTH phases
+  (translate minting + `placement-attach`).
 - Runtime minting (a `placement-attach` op, §3.3) applies the same veto
   against the attach target's ancestor chain before committing the op.
 - **Name validation (`#`-freedom)**: placement names are minted verbatim
@@ -1725,7 +1750,7 @@ component-assembly anchor-layer seam for `target: 'type' | 'content' |
   (translate minting, `placement-attach` ops), never re-applied by the layer
   pass. (The §1.3 VETO is implemented at BOTH phases since 2026-08-14 —
   DEFECT #3-1 fixed via child-side family attach + the shared
-  `ancestorServesZone` predicate, §1.3 status note.)
+  `ancestorConsumesZone` predicate, §1.3 status note.)
   Layer-passed `'content'` anchors participate in the consumer's
   preference-ordered request list exactly like authored ones.
 - **The multi-parent case is legal for placement links too**: a def

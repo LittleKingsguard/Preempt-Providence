@@ -41,16 +41,24 @@ function linkOf(a: Anchor): Link {
 
 /** P3 §1.3 ancestor-name veto predicate — shared by the op-time half
  *  (placement-attach, ops.ts) and the translate-time half (producer
- *  minting, translate.ts DEFECT #3-1 fix): does any FAMILY ancestor of
- *  `node` already carry a `container`-role anchor offering `zone`? The walk
- *  follows the live parent chain; string-token parents (rootNode /
- *  component / contentNodes) terminate it (no family ancestor — no veto).
- *  At translate the child's family parent edge is minted CHILD-SIDE (the
- *  child attaches itself before its own placement minting), so the same
- *  predicate is live in both phases. */
-export function ancestorServesZone(node: Node, zone: string): boolean {
+ *  minting, translate.ts): does any FAMILY ancestor of `node` carry a
+ *  `content`-role anchor targeting `zone` — i.e., WOULD attempt to place
+ *  content INTO the zone? User correction 2026-08-14: the veto is
+ *  LOOP-PREVENTION only — a descendant presenting a zone that an ancestor
+ *  would attempt to place into creates a placement-path loop (the
+ *  ancestor's content anchor → the per-name Link → the descendant's
+ *  container → family edges up → the ancestor → revisit). DUPLICATE
+ *  PRESENTATION (an ancestor merely OFFERS the same zone via a
+ *  `container`-role anchor) is LEGAL — overriding an ancestor's zone is a
+ *  component feature (nearest-shadows-far). The walk follows the live
+ *  parent chain; string-token parents (rootNode / component /
+ *  contentNodes) terminate it (no family ancestor — no veto). At translate
+ *  the child's family parent edge is minted CHILD-SIDE (the child attaches
+ *  itself before its own placement minting), so the same predicate is live
+ *  in both phases. */
+export function ancestorConsumesZone(node: Node, zone: string): boolean {
   for (let cur: Node | null = node.parent; cur; cur = cur.parent) {
-    if (cur.anchors.some(a => a.role === 'container' && typeof a.target === 'string' && a.target === zone)) return true
+    if (cur.anchors.some(a => a.role === 'content' && typeof a.target === 'string' && a.target === zone)) return true
   }
   return false
 }

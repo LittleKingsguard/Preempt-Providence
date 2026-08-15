@@ -392,13 +392,40 @@ describe('translate layer — ancestor-name veto (T28)', () => {
   // ENGINE DEFECT #1 (reported in docs/test-findings.md §"Blind test #3",
   // NOT fixed by the reviewer — reviewer never edits engine code): the
   // translate-time half of the §1.3 ancestor-name veto is MISSING in
-  // src/core/translate.ts (only the op-time half exists, ops.ts:88-117).
-  // placement-path-spec §1.3 + §6 CODE translate row + api.md T28 are
-  // unambiguous: the producer's container anchor must NOT be minted when a
-  // family ancestor already carries the same name, with a K4
-  // placement-name-vetoed warn. The implementation mints verbatim (no warn).
-  it('does NOT mint a container anchor when a family ancestor already offers the same name; warns placement-name-vetoed', () => {
-    // input: root offers zone-0; its family child also offers zone-0
+  // src/core/translate.ts. placement-path-spec §1.3 + §6 CODE translate row +
+  // api.md T28: the producer's container anchor must NOT be minted when a
+  // family ancestor WOULD ATTEMPT TO PLACE INTO the zone (has a 'content'
+  // anchor for it) — the presentation would create a placement-path loop
+  // (the ancestor's content anchor → the per-name Link → the descendant's
+  // container → family up → the ancestor → revisit). User correction
+  // 2026-08-14: DUPLICATE PRESENTATION (an ancestor merely OFFERS the same
+  // zone) is LEGAL — overriding an ancestor's zone is a feature
+  // (nearest-shadows-far); the veto is loop-prevention ONLY.
+  it('does NOT mint a container anchor when a family ancestor would attempt to place into the zone; warns placement-name-vetoed', () => {
+    // root CONSUMES zone-0 (content anchor — would attempt to place into it);
+    // its family child PRESENTS zone-0 → veto (loop-prevention)
+    const t = view(
+      translateLegacy({
+        template: {
+          root: {
+            type: 'app',
+            placement: { targetPlacement: ['zone-0'] },
+            children: [{ type: 'section', placement: { placementName: 'zone-0' } }],
+          },
+        },
+      }),
+    )
+    const child = t.root.children[0]!
+    expect(anchorsOfRole(child, 'container')).toHaveLength(0)
+    expect(t.warnings.map((w) => w.code)).toContain('placement-name-vetoed')
+    // the root's own consumer anchor is untouched
+    expect(anchorsOfRole(t.root, 'content').map((a) => a.target)).toEqual(['zone-0'])
+  })
+
+  it('DUPLICATE PRESENTATION is LEGAL: a descendant may present a zone its ancestor also OFFERS (override — no veto)', () => {
+    // root offers zone-0 (container); its family child ALSO offers zone-0 —
+    // no ancestor CONSUMES zone-0 → the child's presentation is a legal
+    // override (nearest-shadows-far is a component feature)
     const t = view(
       translateLegacy({
         template: {
@@ -411,10 +438,8 @@ describe('translate layer — ancestor-name veto (T28)', () => {
       }),
     )
     const child = t.root.children[0]!
-    expect(anchorsOfRole(child, 'container')).toHaveLength(0)
-    expect(t.warnings.map((w) => w.code)).toContain('placement-name-vetoed')
-    // the root's own anchor is untouched
-    expect(anchorsOfRole(t.root, 'container').map((a) => a.target)).toEqual(['zone-0'])
+    expect(anchorsOfRole(child, 'container').map((a) => a.target)).toEqual(['zone-0'])
+    expect(t.warnings).toEqual([])
   })
 
   it('does not veto a DIFFERENT name on the same ancestor chain', () => {

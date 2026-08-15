@@ -30,7 +30,7 @@
 // Children arrays attach via parent-child anchors (single-parent enforced);
 // component references become `target` anchors resolved by the existing
 // compile walk; placements become `placement` anchors.
-import { Node, mintNodeId, ancestorServesZone } from './node.js'
+import { Node, mintNodeId, ancestorConsumesZone } from './node.js'
 import { Link } from './link.js'
 import { registerContentNode, registerDefPrototypes, registerDefRootPrototype, defRootPrototypeFor } from './registry.js'
 import { validateDerived } from './derived.js'
@@ -663,7 +663,7 @@ function collectSeamRefs(doc: LegacyInitialData): Set<string> {
  * passes itself + the child index down; the CHILD attaches itself to its
  * family parent EARLY in its own translate (right after construction) —
  * BEFORE its own placement minting — so the P3 §1.3 ancestor-name veto
- * predicate (`ancestorServesZone`, shared with the op-time half) walks a
+ * predicate (`ancestorConsumesZone`, shared with the op-time half) walks a
  * LIVE parent chain at translate and the producer mint can veto. Content
  * roots (`opts.asContentRoot`) never take a family parent — the contentNodes
  * permanent-owner token is their only edge (F-13).
@@ -724,13 +724,13 @@ function translateNodeData(
       const placement = entry as LegacyPlacementConfig
       // producer side: placementName → 'container' anchor (P3 §1.3 ancestor
       // veto — DEFECT #3-1 fix: the child-side family attach above makes the
-      // shared `ancestorServesZone` predicate live at translate; a producer
-      // whose family ancestor already offers the same name is NOT minted and
+      // shared `ancestorConsumesZone` predicate live at translate; a producer
+      // whose family ancestor would attempt to place into the zone (a `content`-role anchor for it) is NOT minted and
       // warns `placement-name-vetoed` — same semantics as the op-time half)
       if (typeof placement.placementName === 'string' && placement.placementName.length > 0) {
         if (placement.placementName.includes('#')) {
           warn(warnings, 'placement-name-invalid', path, `placementName "${placement.placementName}" contains '#': container anchor skipped (P3 §1.3)`)
-        } else if (ancestorServesZone(node, placement.placementName)) {
+        } else if (ancestorConsumesZone(node, placement.placementName)) {
           warn(warnings, 'placement-name-vetoed', path, `placementName "${placement.placementName}" is already offered by a family ancestor; container anchor skipped (P3 §1.3)`)
         } else {
           const plink = hub.linkFor(placement.placementName, 'placement')

@@ -414,20 +414,39 @@ describe('placement-attach op (P3 §3.3, E2E-4) — Unit 6', () => {
     expect(ofRole(A, 'container')).toHaveLength(1)
   })
 
-  it('P-A3 the §1.3 ancestor-name veto skips the container anchor mint with a placement-name-vetoed warn', () => {
+  it('P-A3 the §1.3 ancestor-name veto skips the container anchor mint with a placement-name-vetoed warn (loop-prevention: an ancestor would attempt to place into the zone)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const root = makeRoot()
     const P = childOf(root, makeNode({}, 'P'))
     const A = childOf(P, makeNode({}, 'A'))
     const D = makeNode({}, 'D')
     const ctx = opCtx(root, P, A, D)
-    P.addAnchor('container', 'zone-1', {}, ctx.hub.linkFor('zone-1', 'placement'))
+    // P CONSUMES zone-1 (would attempt to place into it) — the attach would
+    // mint a container on its descendant A → placement-path loop → veto
+    P.addAnchor('content', 'zone-1', {}, ctx.hub.linkFor('zone-1', 'placement'))
 
     execute({ kind: 'placement-attach', node: D, container: A, names: ['zone-1'] }, ctx)
 
     expect(ofRole(A, 'container')).toHaveLength(0)
     expect(ofRole(D, 'content')).toHaveLength(1)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('placement-name-vetoed'))
+  })
+
+  it('P-A3b DUPLICATE PRESENTATION is LEGAL at op-time: an ancestor OFFERING the zone does not veto the attach container mint (override)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const root = makeRoot()
+    const P = childOf(root, makeNode({}, 'P'))
+    const A = childOf(P, makeNode({}, 'A'))
+    const D = makeNode({}, 'D')
+    const ctx = opCtx(root, P, A, D)
+    // P OFFERS zone-1 (container only — no consumer on the chain)
+    P.addAnchor('container', 'zone-1', {}, ctx.hub.linkFor('zone-1', 'placement'))
+
+    execute({ kind: 'placement-attach', node: D, container: A, names: ['zone-1'] }, ctx)
+
+    expect(ofRole(A, 'container').map((a) => a.target)).toEqual(['zone-1'])
+    expect(ofRole(D, 'content')).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('placement-name-vetoed'))
   })
 
   it('P-A4 derivePlacementTrigger: a freshly minted container → container-added; an ensured one → content-added', () => {

@@ -271,7 +271,7 @@ pass in `tests/blind/e2e-layer.test.ts`:
   anchor with the same name, the anchor is NOT minted and a K4 warning
   (`placement-name-vetoed`) fires". The implementation minted the anchor
   verbatim at translate (only the `#`-check existed); the veto existed ONLY
-  on the op-time half (`ancestorServesZone`, ops.ts). **Fix (user-directed):
+  on the op-time half (`ancestorServesZone`). **Fix (user-directed):
   family attach is now CHILD-SIDE in translate** — the parent passes itself +
   the child index down the recursion; the child attaches itself to its family
   parent BEFORE its own placement minting, so the shared
@@ -279,6 +279,15 @@ pass in `tests/blind/e2e-layer.test.ts`:
   walks a LIVE parent chain at translate; the producer mint now vetoes with
   `placement-name-vetoed` (translate.ts producer side). The T28 blind test
   was un-skipped and is green (the suite now has ZERO skipped tests).
+  **CONDITION CORRECTED (user 2026-08-14):** the veto is LOOP-PREVENTION
+  ONLY — it fires when a family ancestor WOULD ATTEMPT TO PLACE INTO the
+  zone (a `content`-role anchor for it); DUPLICATE PRESENTATION (an
+  ancestor merely OFFERS the zone) is LEGAL — placement resolution never
+  shadows (nearest-shadows-far is component resolution): a consumer fans
+  into ALL zones of its best-fit targetPlacement. The predicate is now
+  `ancestorConsumesZone` (checks `content` anchors, not `container`);
+  T28/P-A3 re-pinned to the loop condition + a legal-override pin added
+  (T28b/P-A3b).
 
 ### Spec contradictions (recorded for the spec ledger)
 
@@ -303,7 +312,7 @@ pass in `tests/blind/e2e-layer.test.ts`:
 | --- | --- | --- | --- |
 | A1 | `reverseTranslate(translated, {})` takes the whole TranslatedTree | **CORRECTED** — takes the ROOT Node + opts (`reverseTranslate(root, { content })`); engine pattern reverse.test.ts:57 | translate.md §8 names it without a signature; the engine's `nodeToLegacy(root, …)` contract is the sane reading |
 | A2 | K4 `path` format: assert code + string-ness only | **CONFIRMED** | translate.ts warn channel |
-| A3 | The §1.3 veto walks the FAMILY chain | **CONFIRMED** (for the implemented op-time half: `ancestorServesZone` walks `node.parent`) — the translate-time half is DEFECT #3-1 | ops.ts:88-117 |
+| A3 | The §1.3 veto walks the FAMILY chain | **CONFIRMED** — `ancestorConsumesZone` walks `node.parent` for `content` anchors (loop-prevention; duplicate presentation legal per user 2026-08-14); both phases implemented | node.ts, ops.ts, translate.ts |
 | A4 | `activePlacement` reverse emission = derived read (first requested name with any containers) | **CONFIRMED** | nodeToLegacy emits `placement.activePlacement` from the first content anchor whose link has containers (translate.ts:686-693) |
 | B1 | `compilePath(node)` free function, whole-graph states | **CORRECTED** — per-node METHOD (`Node#compilePath`, types.ts:45, node.ts:947); census = per-node aggregate (compileAll pattern) | §2.1 pseudo-code is the ambiguous bit; §6 supervisor mode switch + node-local E2E-2 make the method the sane reading |
 | B2 | Level-1 MUST consume zone-0 for the R2.2 census | **CONFIRMED as one valid shape** — the writer's fixture (level-1 consumes the root's zone-0) yields 4095 ✓; the engine's fixture (level-1 = family children, producers only) yields the same census with different keys | §5.1 arithmetic holds under both |

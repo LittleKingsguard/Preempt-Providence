@@ -1,6 +1,6 @@
 import type { LayerMutationList, LinkConfigNameHub, MutationOp, NodeId, PlacementAttachOp, PlacementTrigger, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
-import { Node, findCycle, ancestorServesZone } from './node.js'
+import { Node, findCycle, ancestorConsumesZone } from './node.js'
 import { Link } from './link.js'
 
 export interface OpContext {
@@ -106,7 +106,7 @@ export function placementAttach(node: Node, container: Node, names: string[], hu
   let containerAnchorMinted = false
   const existing = container.anchors.find(a => a.role === 'container' && a.target === attachZone)
   if (!existing) {
-    if (ancestorServesZone(container, attachZone)) {
+    if (ancestorConsumesZone(container, attachZone)) {
       console.warn(`[placement-attach] placement-name-vetoed: an ancestor of ${container.id} already offers zone "${attachZone}"; container anchor skipped (P3 §1.3)`)
     } else {
       container.addAnchor('container', attachZone, {}, hub.linkFor(attachZone, 'placement'))

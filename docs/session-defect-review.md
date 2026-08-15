@@ -116,7 +116,7 @@ happens when the fixture's `css.classes` names match a demo.css selector.
 first, then the fixture. Unstyled-but-styled-in-CSS is an authoring bug, not a
 renderer bug. (Same class of oversight hit twice: user-pane and fork-demo.)
 
-### A-5 (D8) — content + children both render (no shadowing)
+### A-5 (D8) — content + children both render (text and child elements concatenate)
 
 **Assumption**: putting a base `content: 'Type **bold** here'` on `md-display`
 *alongside* prefix/bold/suffix children would be replaced by the parsed parts.
