@@ -147,3 +147,21 @@ applied as a layer like any other value.
 | H-H10 | ordering in one apply+flush cycle | `before-compile → after-compile → state-event → after-render` |
 | H-H11 | before-compile observes pre-op state | handler sees the value BEFORE the op |
 | H-H12 | rejected op | before-compile ran; no after-compile/after-render |
+
+## 6. Known gaps (PARKED / TODO)
+
+- **TODO (D6 — live-prod disposition 2026-08-14, `live-prod/placeholderLanding/
+  FINDINGS.md`):** legacy handler DEFS stored as `template.component` values
+  (`{name, body}` — e.g. `AuthInitHandler`, `LogoutHandler`,
+  `ToggleUserDropdown`, `enterEditMode`, `showComments`,
+  `toggleCommentsButton` in the placeholderLanding envelope) are misparsed as
+  component SOURCE anchors: the K7 source-anchor plan makes them value-carrying
+  providers, nothing wires them to phases/events, and the `handler-phase-unknown`
+  guard never fires (they never become HandlerDefs) — the defs die SILENTLY.
+  The legacy system wired them through `handlers.afterAssembly`-style targets +
+  HandlerDef phases (old `core/Handler.ts:13`). Handler implementation changed
+  for understood reasons; the misparse gap is **accepted and parked as a TODO —
+  no fix**. Bodies of such defs use the legacy context API
+  (`receiveNextState`/`findNode`/`supervisor.userData`) and would need the
+  documented re-authoring carve-out if a fix ever lands. No new warn code is
+  introduced for this gap.

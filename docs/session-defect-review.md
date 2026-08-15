@@ -542,3 +542,100 @@ are `pass2Ms` (compile-side, already added to the data page) and the
 **append-op count per render** (diffMinimal ops) — the DOM-churn proxy the
 shim can measure. The imperative page's profile line needs the same
 `pass2`/`covered` instrumentation to stop hiding its own gap.
+
+---
+
+# RCA — B1 children-target collapse miscommunication + the deliverable-spec chain clobber (2026-08-14)
+
+Session: live-prod legacy-shape fix pass (D1-D8 + SED delivery shapes). Two
+interlocked defects: (1) the SED-2 "children-target keeps the wrapper shell"
+contract silently narrowed to EMPTY hosts (the wrapper's own children/text
+were dropped and the wrapper collapsed into the def element whenever it had
+authored children) — survived every prior clarification; (2) the underlying
+emit-time def-chain re-typed a host's REAL children whenever the def's
+children count happened to fit (`>=`), regardless of whether the def was a
+re-typing spec or a deliverable subtree. Both FIXED (2026-08-14, tests
+761+1, typecheck, smoke green).
+
+## Timeline (evidence trail)
+
+| Step | Artifact | What it said / did | Gap introduced |
+| --- | --- | --- | --- |
+| 1 | FINDINGS D5 correction (my write-up) | "wrapper div persists as a SHELL and the def subtree (def's type + cssDef + children + nested bindings) is layered INTO it as content" | "as-is" property of the wrapper's OWN children/text never stated — the live wrappers were bare, so the question never arose |
+| 2 | D7 disposition (user) | "pass the links to the prototype's children and placement links as an anchor layer, without affecting the node's own parent" | anchors described; emission interaction with authored children unpinned |
+| 3 | Delivery-shape ruling (user) | "collapse = type-target; children-target stays a distinct element that contains the referred node(s)" | framed as a shape binary; the authored-children state not in the frame |
+| 4 | SpecDoc SED-2 / SED-H1 | "consumer emits its OWN element (wrapper shell, authored type/css) containing the DEF-ROOT element" | "authored type/css" — content and children never mentioned; the FAIL row pins only the wrapper-survival |
+| 5 | Implementer SED-2 branch | nested INSIDE the pre-existing `if (allowed && childWires.length === 0)` def-fill block; comment: "the shell's own text is dropped — the def-root is the content carrier" | the empty-host gate inherited from the fork-stress P-EMIT-3 def-fill; the text-drop was an implementer invention (fork-stress hosts are leaves); the seam's "adds a child" semantics were conflated with the def-fill's "fills an empty host" semantics |
+| 6 | TestWriter SED envelope | wrappers A/B bare (no authored children/text) | the empty-host state was the ONLY tested state; the state enumeration mirrored the spec's example instead of the state space |
+| 7 | Reviewer round 2, F23 | "is length-equality the only gate, or must the def also originate from the link method (not a seam-target def)? A values-method def with 1:1 children on a node that ALSO carries a seam binding would double-materialize" | ASKED the right discrimination question — but the answer scoped provenance to the seam FLAG on the emitting node's anchors (isSeamDefBinding) |
+| 8 | Implementer linkChainAllowed | `linkMethod(bind-specs) → 1:1`; **deliverable (non-bind) → `def.children.length >= childWires.length`** | the `>=` for deliverable defs generalized the blind emit-layer pin (TYPE-ONLY re-typing specs, 2-vs-1) to FULL deliverable defs — the defect's entry point |
+| 9 | Live acceptance | navBar def 3 children vs root 5 → `3 >= 5` false → blocked BY COUNT LUCK; wrappers bare → SED-2 empty-host shape matched | both latent defects invisible to the strongest available signal |
+| 10 | B1 probe (children-target + authored p, 1-vs-1) | counts fit → the `>=` chain fired → root's own source binding re-typed its child → wrapper collapsed | DISCOVERED here, via the edge probe |
+
+## RCA — why the miscommunication survived
+
+1. **Two mechanisms conflated.** The seam (graph-time anchor layer: adds a
+   child) and the def-fill (emit-time P-EMIT-3: fills an EMPTY host) are
+   different contracts; the implementer nested SED-2 inside the def-fill
+   branch, silently inheriting the empty-host gate. The spec pinned the
+   SHAPE (shell + def-root) but never the interaction with the shell's own
+   content — "leaves the original node data as-is" was stated only by the
+   user AFTER the fact (B1 clarification), because every earlier statement
+   was about anchors (graph) or shape (empty case).
+2. **Example-driven test enumeration.** The TestWriter's SED envelope
+   mirrored the spec's/live page's examples (bare wrappers) — the authored-
+   children state was never enumerated. The 69-test suite exercised one
+   state of a two-state contract.
+3. **The reviewer asked the right question, scoped to the wrong surface.**
+   F23's "must the def originate from the link method" was answered with the
+   seam flag on the CONSUMER's anchor — but the clobber fires on the HOST's
+   OWN source binding (seedOwnBindings publishes the host's own def values;
+   findDefBinding picks the FIRST def-valued binding — the host's own). The
+   provenance check keyed on the wrong side of the binding.
+4. **The acceptance signal was count-luck-blind.** The live envelope's
+   counts (3 def children vs 5 root children) blocked the chain by the `>=`
+   rule — the page rendered correctly and every pipeline gate passed while
+   the defect was live.
+
+## RCA — where the clobber defect got in
+
+1. **Origin: the blind emit-layer C2 pin** (def-retyping semantics: "the def
+   re-types the def-carrying consumer's children" — prototype-as-child
+   reading, legitimate for the fork-stress link method).
+2. **Entry: the `>=` generalization.** D8's gate (count equality) was
+   extended to "deliverable defs chain when they COVER the real children" to
+   keep the blind pin green — the spec-kind dimension (re-typing spec vs
+   deliverable subtree) was never part of the gate. The F23 review named the
+   dimension but the fix keyed it to the seam flag only.
+3. **Masking: live acceptance by count luck** (step 9 above) — the page that
+   would have exposed it never triggered the branch.
+4. **Fix:** linkChainAllowed now discriminates RE-TYPING-SPEC defs
+   (bind-keyed or type-only children) from DELIVERABLE-spec defs (children
+   carrying content/css/props/children/component) — deliverable defs NEVER
+   chain; their subtree materializes via the seam. Plus SED-2 now fires for
+   ALL children-targets (not just empty hosts), keeping the shell's authored
+   text/children and appending the def-root.
+
+## Rules produced (for the fix-pass docs and future sessions)
+
+- **R1 — Seam ≠ def-fill.** A seam children-target NEVER collapses and NEVER
+  drops the host's authored content: it is "original node data as-is +
+  prototype node added as a child". The emit-time def-fill (empty-host) is a
+  separate mechanism for the fork-stress/link-method pattern.
+- **R2 — The def-chain gate discriminates SPEC KIND, not just count.** A
+  chain may only re-type real children with RE-TYPING specs (bind-keyed or
+  type-only); a deliverable-spec def (any child carrying
+  content/css/props/children/component) never drives a chain — count-fit is
+  never sufficient.
+- **R3 — Provenance checks must cover the HOST's OWN bindings.** A gate
+  scoped to the consumer's seam flag misses the host's own source-binding
+  path (seedOwnBindings → findDefBinding first-wins). Discrimination
+  questions must be answered over the full binding surface, not the anchor
+  surface.
+- **R4 — Enumerate the full state space in tests, not the examples.** When a
+  contract has an unstated dimension (e.g. the wrapper's own children),
+  enumerate BOTH states (empty + populated) in the state list before
+  writing tests — example-shaped envelopes hide half the contract.
+- **R5 — Acceptance green ≠ contract green when a gate is count-dependent.**
+  A page that only passes because the numbers don't fit is a masked defect,
+  not a validation — count-sensitive gates need a count-fitting probe.

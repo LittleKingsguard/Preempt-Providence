@@ -3,3 +3,7 @@ dist/
 coverage/
 *.log
 .DS_Store
+
+# live production example payloads — data stays local, README is tracked
+live-prod/*
+!live-prod/README.md

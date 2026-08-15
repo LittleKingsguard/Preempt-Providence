@@ -6,8 +6,10 @@ anchors-first (`id` + `anchors[]`, children derived); original `/Preempt`
 backend JSON is translated AT THE BOUNDARY so trees build out completely from
 original-format data. This file is the behavior contract for the TestWriter.
 
-> **STATUS (K1–K8 landed; reverse unit shipped; P3 placement minting landed —
-> read this first):** the
+> **STATUS (K1–K8 landed; reverse unit shipped; P3 placement minting landed;
+> live-prod legacy-shape decisions D1–D8 **SPEC-ENCODED** 2026-08-14 (fix
+> pass PENDING — engine-side work not yet landed; a TestWriter's D1–D8
+> pins expect RED until the fix pass ships) — read this first):** the
 > kernel landed in two units — the translate half (K1–K4, K6–K8, K5
 > persistence: `options.applyPath` on anchors, `src/core/translate.ts`) and
 > the reverse half (K5 emission + N1 strip-on-reverse: `nodeToLegacy` emits
@@ -29,10 +31,29 @@ original-format data. This file is the behavior contract for the TestWriter.
 > anchor at translate (family-'in-tree', P3 §10.ad/F-13) and `nodeToLegacy`
 > STRIPS it on reverse; the reverse emits `content` anchors back as
 > `targetPlacement: string[]` in mint order + the derived `activePlacement:
-> string` read. Sentences below tagged "(post-K1–K8)"/"(post-K5)"/"(P3)"
+> string` read. The live-prod legacy-shape pass (2026-08-14, dispositions
+> D1–D8 — `live-prod/placeholderLanding/FINDINGS.md`; Step-3 review round
+> applied 2026-08-14) encodes these translate-side contracts below —
+> **SPEC-ENCODED, NOT YET LANDED** (the engine fix pass is pending; the
+> tagged sentences describe the target contract, not current behavior):
+> placement is ARRAY-canonical (D1, each entry mapped through the
+> single-entry logic; reverse merges to one object per node, array only
+> for multi-producer nodes); `doc.content` is array-only with ANY non-array
+> shape warned `payload-shape-obsolete` (D2); `css.style` OBJECTS serialize
+> to kebab-case `k: v;` CSS strings and reverse ALWAYS parses style strings
+> back to objects, no provenance tracking (D3/F7); `nodeData.content` is
+> TEXT-ONLY — the dual-parse is discontinued and must not be reimplemented
+> (D5); the `type`/`content`/`children` target bindings plan the D7
+> anchor-layer seam — `content` delivers the def's TEXT only (F13),
+> `children`/`type` deliver subtree links through the seam, def children
+> are PRE-MINTED at translate as out-of-tree `'component'`-token prototype
+> nodes (F16), and the seam target string persists on the anchor options
+> (`options.seam`) (F17); def children are never emitted by the host (D8).
+> Sentences below tagged
+> "(post-K1–K8)"/"(post-K5)"/"(P3)"/"(D1)"/"(D2)"/"(D3)"/"(D5)"/"(D7)"/"(D8)"
 > describe THIS
 > landed contract, not a future one. Everything untagged describes current
-> behavior. Behavioral pins: `tests/unit/translate.test.ts` (64) +
+> behavior (D1–D8-tagged sentences: SPEC-ENCODED target contract). Behavioral pins: `tests/unit/translate.test.ts` (64) +
 > `tests/unit/reverse.test.ts` (15). The PRE-KERNEL contract
 > (`docs/specs/legacy-component-ref-only-review.md` Appendix B/D, kept for
 > history) read `component.target` as a SECOND COMPONENT NAME (duplex), never
@@ -65,6 +86,32 @@ interface LegacyPlacementConfig {
                               // nodeToLegacy emits the derived read on reverse
 }
 
+// ARRAY form is CANONICAL (D1 — live-prod disposition 2026-08-14): the legacy
+// `NodeData.placement` is `PlacementConfig[]` (old Preempt
+// `types/NodeSchema.ts:84`, old `core/Node.ts:614-616` iterates it; the
+// single-object form is the legacy convenience, `:617-619`). `placement` is
+// declared `LegacyPlacementConfig | LegacyPlacementConfig[]`: EVERY ARRAY
+// ENTRY maps through the single-entry logic below (container minting from
+// placementName, ordered content anchors from targetPlacement, `#`-validation,
+// string coercion) — a node may carry producer + consumer (or several
+// consumers) via multiple entries; the single-object form stays accepted as a
+// convenience. An array must NEVER silently no-op (the original defect: the
+// array passed the truthy gate and minted nothing). Shape pins (D1,
+// SPEC-ENCODED): `placement: []` is a VALID empty multi-entry list — zero
+// anchors, no warn (mirror of the `component: []` K3 carve-out); a
+// NON-OBJECT entry (`[null]`, `["x"]`, `[42]`) warns the new K4 code
+// `placement-entry-invalid` + skips that entry only (the rest of the array
+// still maps); a non-array, non-object `placement` value (string/number) is
+// treated as an invalid entry — same `placement-entry-invalid` warn + no
+// anchors. ANCESTOR VETO (F3 — IMPLEMENTED 2026-08-14, DEFECT #3-1 fixed):
+// the §1.3 ancestor veto fires at BOTH phases. Translate: family attach is
+// CHILD-SIDE (the child attaches itself to its family parent before its own
+// placement minting), so the shared `ancestorServesZone` predicate (node.ts,
+// imported by ops.ts and translate.ts) walks a live parent chain at
+// translate — a producer whose family ancestor already carries a 'container'
+// anchor with the same name is NOT minted and warns `placement-name-vetoed`
+// (K4).
+
 interface LegacyComponentBinding {
   reference: string
   target?: string      // LOCAL injection path on the host node — legacy target
@@ -74,13 +121,25 @@ interface LegacyComponentBinding {
 
 interface LegacyNodeData {
   type?: string
-  placement?: LegacyPlacementConfig
+  placement?: LegacyPlacementConfig | LegacyPlacementConfig[]  // D1 — ARRAY canonical, object = convenience
   component?: LegacyComponentBinding | LegacyComponentBinding[]  // K7: single OR array
-  content?: unknown
-  children?: LegacyNodeData[]
+  content?: string          // TEXT ONLY (D5) — matches ONLY the text field. The legacy dual-parse
+                            // (content EITHER text OR children when the value is NodeData — old
+                            // `core/Node.ts` dynamic parse) was a confusion hazard, DISCONTINUED,
+                            // and MUST NOT be reimplemented. Children live ONLY in `children`.
+  children?: LegacyNodeData[]   // D5 — ONLY child nodes. A non-ARRAY children value (single
+                                // NodeData OBJECT, string, …) warns `children-shape-invalid`
+                                // (new K4 code) + the field is SKIPPED (no children attached) —
+                                // never dual-parsed into content, never wrapped
   props?: Record<string, unknown>
   handlers?: LegacyHandlerDef[]
-  css?: { id?: string; classes?: string[]; style?: string; cssDef?: unknown }
+  css?: { id?: string; classes?: string[]; style?: string | Record<string, string>; cssDef?: unknown }
+  // `css.style` may be the legacy `Record<string,string>` OBJECT (old `core/Css.ts:18`) —
+  // translate SERIALIZES it to a kebab-case `k: v;` CSS string (D3); reverseTranslate
+  // ALWAYS parses style strings back to objects — NO provenance tracking (F7: a
+  // pre-serialized string-authored style becomes an object on save; the legacy format is
+  // object-native, accepted). The object must never reach the adapters'
+  // `String(val)` (`[object Object]` was the defect).
   versions?: unknown
   derived?: DerivedDecl  // the derived RULE, never the baked values (derived-state.md §2/§8)
 }
@@ -89,6 +148,16 @@ interface LegacyTemplateData { root: LegacyNodeData; children?: LegacyNodeData[]
 interface LegacyContentPayload { metadata?: unknown; userData?: unknown; component?: LegacyComponentBinding; content: LegacyNodeData[] }
 interface LegacyClientConfig { runInstantiation?: boolean; runAssembly?: boolean; runPreprocessing?: boolean; runValidation?: boolean; runRendering?: boolean; runPostprocessing?: boolean; runMonitoring?: boolean }
 interface LegacyInitialData { template: LegacyTemplateData; content?: LegacyContentPayload[]; clientConfig?: LegacyClientConfig }
+// `doc.content` is ARRAY-ONLY — `ContentPayload[]` (D2 — live-prod disposition
+// 2026-08-14). The obsolete single-payload-object form `{ content: NodeData[],
+// metadata }` (old `core/Supervisor.ts:428` accepted array OR object) is
+// outdated legacy: translate must WARN (new code `payload-shape-obsolete`) on
+// it instead of silently dropping the whole payload (the defect), and the
+// payload is SKIPPED — never half-translated. **The never-silent rule extends
+// to ANY non-array `doc.content`** (F5): a string / null / number / boolean
+// `content` value ALSO warns `payload-shape-obsolete` (same code, same skip)
+// — the array is the only supported shape, any other shape is a
+// well-formed-but-invalid document (warn + skip, never a throw, TR-F2).
 
 interface TranslatedTree {
   root: Node            // in-tree ('rootNode' owner)
@@ -162,12 +231,18 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 | nested `NodeData.children` | recursively translated + attached under their parent (same priority rule) | §10.8 |
 | `template.children` | contentNodes-owned content roots — translated + attached to the **`contentNodes` permanent-owner token** (family-'in-tree', node.ts:213; P3 §10.ad/F-13), returned in `TranslatedTree.content`; **registered as payload-owned content** (persist in the background while unplaced; dropped with their payload — see payload.md §1/§3). A real parent edge SUPERSEDES the token edge on attach ("attach adds a placement path to an already-in-tree content root", F-13) | user decision, §10.10.1, §10.10.4; placement-path-spec §10.ad/F-13 |
 | `ContentPayload.content[]` | contentNodes-owned content roots (same as above) | user decision, §10.10.1; placement-path-spec §10.ad/F-13 |
-| `NodeData.placement.placementName` | `container` anchor (`{role:'container', target: name}`) on the shared per-name placement Link (P3 §1.1 — the producer role, renamed from `'placement'`). A name containing `#` warns `placement-name-invalid` and the anchor is SKIPPED (P3 §1.3) | §10.8.3; placement-path-spec §1.1/§1.3 |
-| `NodeData.placement.targetPlacement` (string[]) | ONE `content` anchor per requested name, in preference order, on the shared per-name placement Link (P3 §1.1/§1.2 — the consumer role; first-match-with-known-container wins at compile). Names containing `#` warn `placement-name-invalid` and are skipped; duplicate names warn `placement-duplicate-reference` (keep-first — K8-class guard); a bare STRING (old mis-typed shape) is coerced to `[string]` with `placement-string-coerced` (back-compat). The old `component-target-placement` ignore-warn (NP13/AP5) is REMOVED — the feed is implemented | placement-path-spec §1.2/§6.2 |
+| `doc.content` shape (D2/F5) | **ARRAY-ONLY** (`ContentPayload[]`, each `{metadata?, userData?, content: NodeData[]}`). ANY non-array shape warns `payload-shape-obsolete` (new K4 code) and the payload is SKIPPED — never silently dropped, never half-translated: the obsolete single-payload OBJECT `{content: NodeData[], metadata}` (old `core/Supervisor.ts:428` array-or-object), AND a string/null/number/boolean `content` value (the never-silent rule extends to every non-array). `doc.content` absent/undefined stays legal (no payloads) | live-prod/placeholderLanding/FINDINGS.md D2; old `core/Supervisor.ts:428` |
+| `NodeData.placement.placementName` | `container` anchor (`{role:'container', target: name}`) on the shared per-name placement Link (P3 §1.1 — the producer role, renamed from `'placement'`). A name containing `#` warns `placement-name-invalid` and the anchor is SKIPPED (P3 §1.3). **(D1)** Also mapped PER ENTRY inside a `placement: [...]` ARRAY — the array is canonical, each entry goes through this row's logic (and the `targetPlacement` row's) | §10.8.3; placement-path-spec §1.1/§1.3 |
+| `NodeData.placement.targetPlacement` (string[]) | ONE `content` anchor per requested name, in preference order, on the shared per-name placement Link (P3 §1.1/§1.2 — the consumer role; first-match-with-known-container wins at compile). Names containing `#` warn `placement-name-invalid` and are skipped; duplicate names warn `placement-duplicate-reference` (keep-first — K8-class guard); a bare STRING (old mis-typed shape) is coerced to `[string]` with `placement-string-coerced` (back-compat). The old `component-target-placement` ignore-warn (NP13/AP5) is REMOVED — the feed is implemented. **(D1)** The same per-entry mapping applies inside a `placement: [...]` ARRAY (multiple consumers, or producer + consumer on ONE node, are only expressible via the array) | placement-path-spec §1.2/§6.2 |
+| `NodeData.placement` as an ARRAY (D1) | **canonical legacy form** — each entry mapped through the two rows above independently (mint order = array order; per-entry `#`-validation, string coercion, duplicates); the single-OBJECT form stays accepted as a convenience (mapped once). Never a silent no-op: an array entry that mints nothing MUST warn (a `#`-name, a duplicate, or a non-string/empty targetPlacement entry each warns via its own code above). **Shape pins (SPEC-ENCODED):** `placement: []` = valid empty multi-entry list, zero anchors, NO warn (mirror of `component: []`); a NON-OBJECT entry (`[null]`, `["x"]`, `[42]`) → new warn `placement-entry-invalid`, skip THAT entry only; a non-array non-object `placement` (string/number) → same `placement-entry-invalid`, no anchors. **Ancestor veto (F3 — IMPLEMENTED 2026-08-14, DEFECT #3-1 fixed):** the §1.3 veto fires at translate AND op-time (child-side family attach + the shared `ancestorServesZone` predicate — translate.md producer row). **REVERSE CONTRACT (F2, SPEC-ENCODED):** `nodeToLegacy` emits ONE flat placement object per node, MERGING the node's placement anchors — `placementName` = the container anchor name, `targetPlacement: string[]` = the content anchors' names in MINT order (order preserved); a node with TWO OR MORE container anchors (multi-producer — only expressible via the array) emits the canonical `placement` ARRAY, one entry per container anchor in mint order, the node's content-anchor names in the first entry (`targetPlacement` mint order). Re-translate of either emission is ANCHOR-IDENTICAL (per-name anchors; the `placement-duplicate-reference` keep-first guard dedups re-expressed name lists) | live-prod/placeholderLanding/FINDINGS.md D1; old Preempt `types/NodeSchema.ts:84`, `core/Node.ts:614-619` |
 | `NodeData.placement.activePlacement` | **never minted** — derived read (P3 §2.5: the first `targetPlacement` name with any containers); `nodeToLegacy` emits it on reverse | placement-path-spec §2.5 |
+| `NodeData.css.style` as an OBJECT (D3) | serialized AT TRANSLATE into a CSS string the adapters/parser can interpret: kebab-case keys (`backgroundColor` → `background-color`; VENDOR-prefixed keys too — `WebkitTransform` → `-webkit-transform`, `msTransition` → `-ms-transition`), `k: v;` form. **SERIALIZE GRAMMAR (F8, pinned):** split each entry on the FIRST `:` (values may contain `:` — e.g. `content: "a:b"`); `;` splits entries EXCEPT inside `url(...)` (data URIs — `background: url(data:image/png;base64,…)` is one entry); numeric values are stringified (`opacity: 1`); the empty object `{}` serializes to `''` (no style attr at the adapter). **REVERSE (F7, pinned):** `nodeToLegacy` ALWAYS parses the serialized string back to the `Record<string,string>` object — NO provenance tracking: a pre-serialized STRING-authored style becomes an OBJECT on save (legacy format is object-native — accepted, documented); the string form is never re-emitted. The raw object must never flow to the adapters (`String(obj)` → `[object Object]` was the defect) | live-prod/placeholderLanding/FINDINGS.md D3; old `core/Css.ts:18` |
+| `NodeData.content` (D5) | **TEXT ONLY** — matches ONLY the text field; `nodeData.children` (and component links targeting `children`) contain ONLY child nodes. The legacy dual-parse (content as EITHER text OR `node.children` when the value was NodeData — old `core/Node.ts` dynamic parse) is DISCONTINUED and MUST NOT be reimplemented. **Children shape (F14, SPEC-ENCODED):** a non-ARRAY `children` value (a single NodeData OBJECT, string, …) warns the new K4 code `children-shape-invalid` and the field is SKIPPED (no children attached) — never dual-parsed into content, never wrapped. **Content-target delivery (F13, pinned):** a `target: 'content'` binding delivers the def's TEXT content — the def's `content` FIELD VALUE lands in the consumer's content slot via the content-target seam (NOT `scalarBinding`, NOT the def's children); subtree delivery happens only via `target: 'children'` / `target: 'type'` (the D7 anchor-layer seam) | live-prod/placeholderLanding/FINDINGS.md D5 |
 | `NodeData.component.reference` | `target` anchor on a shared per-name component Link (consumer) | §10.8.2 |
 | `NodeData.component.reference` + `value` (no `target`) | **`source` anchor** on the shared per-name component Link — the node PROVIDES `value` for `reference` (legacy source attachment) | §10.8.2 |
 | `NodeData.component.reference` + `value` + `target` | provider + LOCAL APPLY shape: `source` anchor for `reference` (provides `value`) + the resolved value is applied to the host's `<target>` path (§2.1 — legacy "provide and self-apply"; at a self-provider the applied value IS its own `value`). NOT a two-name duplex: `target` is an injection path, never a component name (§2.1, `docs/specs/legacy-component-ref-only-review.md`). The runtime duplex anchor shape (source + target for a second NAME) is rebuild-internal and legacy-unexpressible — the reverse NEVER emits it: any applyPath-less non-provider (consumer) anchor coexisting with a provider anchor on the same node is DROPPED on reverse (K5, landed; the old `{reference, value, target: <name>}` emission is gone). The drop is shape-based — a legacy-data plain consumer `{reference}` next to a provider has the SAME graph shape as the runtime duplex and is dropped too (payload.md R-2 broadened, stress scenario 10) | §10.8.2 corrected by §2.1 |
+| `component.target: 'type' | 'content' | 'children'` + `reference` (D7) | **anchor-layer seam candidates** — translate PLANS the binding (recognition; no `component-target-gap` warn for these three targets) and **PERSISTS the seam target** (F17, SPEC-ENCODED — the seam field is a TARGET LOCATION for the pending fix, not current behavior: `BindingPlan` (translate.ts:263-269, today `{ reference, role, value?, applyPath?, synthesized? }`) gains `seam: 'type' | 'content' | 'children'`, and `applyPlans` (translate.ts:405-414, today `options: { applyPath? }` only) stores it on the anchor options as `options.seam` — the same persistence channel as K5) so assembly can distinguish seam candidates from plain consumers. At compile/assembly the binding RESOLVES the def (value-carrying source anchor) and materializes the def's CHILDREN links + PLACEMENT links onto the consumer node as an ANCHOR LAYER (node.ts `addLayer`/`reconcileAnchors`, same as clone-instance inherits prototype anchors); the parent anchor of each passed child link sits ON THE RESOLVED NODE (`resolvedNode.addAnchor('parent', resolvedNode, { seam: true }, link)` — target = self, the standard familyLinkFor/attach pattern, marked with the SAME seam flag as the child decls, ops.md ALS-2/ALS-4), never on the def/prototype side; the consumer's OWN family parent anchor is untouched. **DELIVERY SHAPES (user ruling 2026-08-14, SPEC-ENCODED — ops.md ALS-1, render.md SED-1..3):** `content` = TEXT delivery ONLY (the def's `content` field value → the consumer's content slot, unchanged); `children` = SHELL + DEF-ROOT CHILD — the consumer STAYS a distinct element (the wrapper shell div) that CONTAINS the referred node(s): the DEF-ROOT element materializes as a seam-wired child of the wrapper (`div > nav.nav-bar > [logo, links, auth]`), carrying the def's type + css (classes + cssDef rules); `type` = SHELL COLLAPSE — the consumer's element BECOMES the def's element (the type-target is the legacy form of the fork-suite values method; the consumer's element takes the def's type AND the def's css (classes + cssDef rules); the current empty-host def-fill behavior is correct for type-targets). The re-expressed placeholderLanding envelope uses `target: 'children'` on the four subtree wrappers (root.children[0]/[1]/[3] → navBar/header/footer, and the header-def p → articleSubtitle — each renders as its own shell element containing the def-root element); the h1's `target: 'content'` articleTitle tag stays content (text-delivery test feature with no def). `target: 'type'` is the legacy form of the fork-suite 'values' method (provider-side `{reference, value}` is the new-system twin) | live-prod/placeholderLanding/FINDINGS.md D7; F13/F17 rulings + delivery-shape ruling 2026-08-14 |
+| def children / `template.component` def values (D8/F16) | **OUT-OF-TREE prototypes, PRE-MINTED at translate** (F16 + delivery-shape ruling, SPEC-ENCODED): a value-carrying def binding's `value.children` — and, per the delivery-shape ruling, the DEF-ROOT (the def's own root element: type + css incl. cssDef + the child links to the def-children prototypes) — are minted as out-of-tree prototype NODES at the def's own translate site — attached to the **`'component'` permanent-owner token** (chain kind `'token'/'component'` → derived state `'prototype'`, node.ts:51/392 — the prototype-terminated disposition: registered via `registerNode` (registry.ts:41, census-visible), id-minted by the normal `mintNodeId()` path, family-'in-tree'-NEVER (a prototype is never compiled/renderable on its own — FRK-F1 silent-drop disposition). The D7 seam's anchor layer materializes the child links FROM these pre-minted nodes at `reconcileAnchors`. Def root + children are NEVER attached to the HOST node by translate and NEVER emitted by the host (the emit-time def-chain is scoped to the fork-stress 1:1 link method — render.md §3.4.2; the seam `type`-target's element-level def-fill is the sanctioned exception, SED-1). Everything else materializes through the D7 anchor-layer seam when wired by component assembly | live-prod/placeholderLanding/FINDINGS.md D8; F16 + delivery-shape rulings 2026-08-14 |
 | `NodeData.handlers` | carried on the node's base data → compiled `handlers`. A `body` shipped as a STRING (function source) is INSTANTIATED into a live function at translate (`new Function` — legacy loadable handlers; **security: `new Function` executes arbitrary code — the backend/DB layer that stores loadable handlers must gate writes to admin/trusted-developer only; the renderer performs no authorization of its own**). `reverseTranslate` ships live bodies back as their source string (native/bound code omitted) | §10.10.2 |
 | `ContentPayload.metadata/userData` | surfaced on `TranslatedTree` (first payload wins) | §10.10.1 |
 | `clientConfig.runInstantiation` | `adapter: 'ssr'` when `true`, else `'dom'` | §10.10.1 |
@@ -197,9 +272,9 @@ targets.
 
 | Target path | Category | Legacy payload / value type | Injection behavior | Translator status |
 | :--- | :--- | :--- | :--- | :--- |
-| `type` | Structural | single `NodeData` prototype sub-tree (never an array) | deep-merge prototype: replaces host `type`; injects layers for `props.*`, `css.id`, `css.classes`, `css.style.*`, `css.styleNodes`, `content`, `children`, `handlers`, `placement`, `component` | NOT implemented (gap). Value-shape-driven half realized: a def-shaped resolved value re-types the consumer via the def→re-type emission seam (`render-helpers.ts` `isLinkDef`); **path-level injection not implemented** |
-| `content` | Slot | scalar string, or `NodeData`/`NodeData[]` (`_instantiatedNodes` ⇒ children) | injects scalar into `content` layer; instantiated nodes into `children` layer | NOT implemented (gap). Value-shape-driven half realized: a scalar resolved value binds to element text via the scalar→text seam (`render-helpers.ts` `scalarBinding`); **path-level injection not implemented** |
-| `children` | Children slot | `NodeData`/`NodeData[]` child sub-trees | injects virtual child sub-trees into `children` layer; loop-guarded (`Component.isAppliedInAncestors()`) | NOT implemented (gap) |
+| `type` | Structural | single `NodeData` prototype sub-tree (never an array) | deep-merge prototype: replaces host `type`; injects layers for `props.*`, `css.id`, `css.classes`, `css.style.*`, `css.styleNodes`, `content`, `children`, `handlers`, `placement`, `component` | **ANCHOR-LAYER SEAM (D7, SPEC-ENCODED 2026-08-14)** — translate plans the binding with `options.seam = 'type'` (F17) and no `component-target-gap` warn; at assembly the resolved def's CHILDREN links + PLACEMENT links pass to the consumer node as an ANCHOR LAYER (parent anchor ON the resolved node, §2 mapping row). `target: 'type'` is the legacy form of the fork-suite 'values' method (provider-side `{reference, value}` is the new-system twin). The old def→re-type emission seam (`isLinkDef`) survives ONLY for the 1:1 fork-stress link method (render.md §3.4.2) |
+| `content` | Slot | scalar string, or `NodeData`/`NodeData[]` (`_instantiatedNodes` ⇒ children) | injects scalar into `content` layer; instantiated nodes into `children` layer | **D5 + D7, SPEC-ENCODED (F13):** a `target: 'content'` binding delivers the def's TEXT CONTENT ONLY — the def's `content` FIELD VALUE lands in the consumer's content slot via the content-target seam (NOT `scalarBinding`, NOT the def's children — no subtree, no dual-parse). Subtree delivery happens ONLY via `target: 'children'` / `target: 'type'` (the anchor-layer seam). The legacy scalar-vs-NodeData dual form is discontinued (D5) |
+| `children` | Children slot | `NodeData`/`NodeData[]` child sub-trees | injects virtual child sub-trees into `children` layer; loop-guarded (`Component.isAppliedInAncestors()`) | **ANCHOR-LAYER SEAM (D7, SPEC-ENCODED)** — translate plans the binding with `options.seam = 'children'` (F17) and no `component-target-gap` warn; the resolved def's children (PRE-MINTED out-of-tree `'component'`-token prototypes, F16) materialize on the consumer as an anchor layer (D8: never emitted by the host, never attached by translate) |
 | `props` | Properties | object dict (`Record<string, any>`) | injects/overwrites the host's whole `props` dict | NOT implemented (gap) |
 | `props.<propertyName>` | Property key | any primitive or object value | deep-injects onto one host `props` key (`props.disabled`, `props.placeholder`, …) | **IMPLEMENTED (flat `props.<key>` only — kernel K1/K2, landed)**: the anchor carries `options.applyPath` (K5 persistence) and the node gains the synthesized `derived.props.<key> = { $: 'bindings.<ref>' }` read (apply of the RESOLVED value; at a self-provider that is its own `value`). Carve-outs warn `component-target-skipped` with no synthesis: dotted keys, dotted references, `props.id` (reserved derived key), authored-derived keys (no warn — authored wins), and the D7 syntax edges (`props.`, `props:name`, `props.name.`, bare `props`) |
 | `css` | Style object | dict `{ id, classes, style, cssDef }` | injects into host `css` object | NOT implemented (gap) |
@@ -257,7 +332,10 @@ targets.
   `reference` within one node's binding array (post-K8: warn + skip, code
   `component-duplicate-reference`); array payloads targeting `type` —
   recognition-only (nothing rejects arrays; `isLinkDef` renders nothing for
-  array values — folds into the `component-target-gap` warn); self-referential
+  array values — folds into the `component-target-gap` warn; note the D7
+  seam target set `type`/`content`/`children` is NO LONGER gap-warned —
+  array VALUES for these targets are still vacuous at the seam and carry no
+  explicit warn, they simply materialize nothing); self-referential
   component loops (`Component.isAppliedInAncestors()` → engine
   circular-source); unresolved bindings reset the target path back to the
   original `node.data` (never crash). **Emission first-wins (post-K7):** with
@@ -266,13 +344,15 @@ targets.
   emission-time warn (`component-multiple-definitions`, >1 def); scalar text
   is first-wins by design (`scalarBinding`, render-helpers.ts:270-277) —
   documented, no warn.
-- **Warn coverage (D2 — the full guard set, landed with K1–K8 + P3):** all
+- **Warn coverage (the full guard set, landed with K1–K8 + P3; D1–D8
+  additions SPEC-ENCODED 2026-08-14):** all
   translate-time guards ride the K4 additive channel and are warn+skip, never
   a throw (TR-F2). The translate-time code set is:
   `component-binding-empty` (K3, vacuous bindings),
   `component-target-skipped` (K2, synthesis carve-outs + D7 target-syntax
   edges), `component-target-gap` (K8 pre-anchor vocabulary pass — unknown
-  target paths, NP1/N2 code, DECIDED), `component-duplicate-reference` +
+  target paths, NP1/N2 code, DECIDED; the D7 seam set `type`/`content`/
+  `children` is EXCLUDED from this gap), `component-duplicate-reference` +
   `component-duplicate-target` (K8, pre-anchor), `placement-name-invalid`
   (P3 §1.3 — a `#` in a placementName/targetPlacement name, or a
   non-string/empty targetPlacement entry: warn + skip that binding),
@@ -280,11 +360,20 @@ targets.
   targetPlacement shape is coerced to `[string]`), `placement-target-invalid`
   (targetPlacement is neither string nor string[]), `placement-duplicate-reference`
   (K8-class keep-first guard across the targetPlacement list),
+  `placement-entry-invalid` (D1, SPEC-ENCODED — a non-object `placement`
+  array entry, or a non-array non-object `placement` value: warn + skip that
+  entry; `placement: []` stays a legal empty list, no warn),
   `handler-phase-unknown` (AP13, closed 3-set at
   translate.ts:177 — raw legacy names never dispatch, guard lives at
   translate), `handler-body-invalid` (NP11 — the pre-kernel non-function-body
   THROW is downgraded to warn+skip per TR-F2; a body STRING that fails to
-  compile or evaluate to a function also warns + skips).
+  compile or evaluate to a function also warns + skips),
+  `payload-shape-obsolete` (D2/F5, SPEC-ENCODED — ANY non-array `doc.content`
+  (obsolete single-payload OBJECT, string, null, number, boolean) warns +
+  the payload is SKIPPED, never silently dropped; the array form is the only
+  supported shape), `children-shape-invalid` (D5/F14, SPEC-ENCODED — a
+  non-array `nodeData.children` (single NodeData OBJECT, string, …) warns +
+  the field is SKIPPED, never dual-parsed, never wrapped).
   Emission-time: `component-multiple-definitions` (post-K7, >1 def-shaped
   binding, first-def wins). Full guard table: review doc Appendix E.2.
   The interim `component-target-placement` warn (AP5/NP13 —
@@ -333,16 +422,18 @@ an EARLIER binding's `component-duplicate-target` warn precedes a LATER
 binding's `component-duplicate-reference` warn (per-binding sequence is
 subordinate to element order).
 
-**Parity scope (post-clarification):** full 13-path parity is NOT claimed.
-`type` / `content` / `handlers.<event>` are PARTIAL — their value-shape-driven
-halves exist (def→re-type via `isLinkDef`, scalar→text via `scalarBinding`),
-path-level injection does not; `handlers.<event>` has NO engine seam at all —
-the component-handler e2e wires the resolved handler MANUALLY
-(`tests/e2e/component-handler.test.ts:101`, `panel.addLayer`; no engine code
-moves a binding value into `node.handlers`) — full parity there is not
-claimable. `css.*` family paths are excluded from the parity claim (legal
-legacy, no seam). Array-form parity is scoped to graph-level N bindings +
-`props.<key>` apply paths only.
+**Parity scope (post-clarification; D7-amended 2026-08-14):** full 13-path
+parity is NOT claimed. `type` / `content` / `children` are now the D7
+ANCHOR-LAYER SEAM (planned at translate, materialized by assembly — §2
+mapping rows; the old value-shape-driven halves remain only as the 1:1
+fork-stress link-method emit path, render.md §3.4); `handlers.<event>` has
+NO engine seam at all — the component-handler e2e wires the resolved
+handler MANUALLY (`tests/e2e/component-handler.test.ts:101`,
+`panel.addLayer`; no engine code moves a binding value into
+`node.handlers`) — full parity there is not claimable. `css.*` family
+paths are excluded from the parity claim (legal legacy, no seam).
+Array-form parity is scoped to graph-level N bindings + `props.<key>`
+apply paths only.
 
 **Accepted emission-layer gaps (parity, known):** object values bake
 `[object Object]` via `String()` coercion in both adapters (NP5/NP9 — no
@@ -417,6 +508,7 @@ value-carrying root bindings become SOURCE providers (K6).
 | --- | --- |
 | `doc` null / non-object / missing `template.root` | throws `legacy-envelope-mismatch` |
 | payload without `content: NodeData[]` | throws `legacy-payload-mismatch` |
+| `doc.content` is ANY non-array (D2/F5) — the obsolete single-payload OBJECT `{content, metadata}`, a string, null, number, boolean | well-formed-but-invalid — **warn + skip**, never a throw: K4 code `payload-shape-obsolete` fires (path `content`), the payload contributes nothing (no roots, no metadata/userData), and translation of the rest of the document continues normally (TR-F2). `doc.content` absent/undefined stays legal (no payloads) |
 
 ## 4. Post-translation invariants (TestWriter targets)
 
@@ -436,6 +528,12 @@ value-carrying root bindings become SOURCE providers (K6).
 | TR-H1 | template root + its own nested children | root in-tree; default children attached, array-order priorities |
 | TR-H2 | component binding (reference + value) on node/template | value-bearing binding → `source` anchor (provider); + a `target` path → source + LOCAL APPLY of the resolved value to the host path (§2.1 — legacy "provide and self-apply"; the applied value at a self-provider is its own `value`); plain reference → `target` anchor (consumer — legacy empty-placeholder pattern, §2.1). Cloned providers keep their value. `component` accepts a single binding OR the K7 array form (N bindings per node — distinct reference + distinct target paths; duplicates blocked, §2.1 legality matrix) |
 | TR-H3 | placement config | `placementName` → `container` anchor on the per-name placement Link (P3 §1.1); `targetPlacement: string[]` → one ORDERED `content` anchor per name (preference order — serialization preserves it); `activePlacement` never minted (derived, P3 §2.5); `#`-names warn `placement-name-invalid` + skip; duplicates warn `placement-duplicate-reference` keep-first; string coercion warns `placement-string-coerced` |
+| TR-H11 | placement ARRAY form (D1) | `placement: [{...}, {...}]` maps EVERY entry through the TR-H3 single-entry logic (mint order = array order; producer + consumer on ONE node expressible; per-entry `#`-validation / string coercion / duplicates fire with their codes); the single-OBJECT form maps exactly once (convenience); an array NEVER silently no-ops — every skipped entry has a warn. **Shape pins (SPEC-ENCODED):** `placement: []` → zero anchors, NO warn; non-object entries (`[null]`, `["x"]`) → `placement-entry-invalid`, skip that entry only; non-array non-object `placement` → `placement-entry-invalid`, no anchors. **Ancestor veto (F3 — IMPLEMENTED 2026-08-14, DEFECT #3-1 fixed):** the §1.3 veto fires at translate AND op-time (child-side family attach + the shared `ancestorServesZone` predicate — the producer row above). **Reverse (F2):** one flat merged object per node (`placementName` + `targetPlacement: string[]` mint order); multi-producer nodes (>1 container anchor) → `placement` ARRAY, one entry per container anchor, content names in the first entry; re-translate anchor-identical |
+| TR-H12 | `css.style` OBJECT (D3) | serialized at translate to a kebab-case `k: v;` CSS string in the compiled state (never an object at the adapter boundary); reverseTranslate ALWAYS parses style strings back to the `Record<string,string>` object — no provenance (F7: a string-authored style becomes an object on save; legacy format is object-native, accepted). **Grammar (F8):** split on FIRST `:` (values may contain `:`); `;` splits entries except inside `url(...)`; vendor keys kebab-cased; numbers stringified; `{}` → `''` (no style attr) |
+| TR-H13 | `doc.content` non-array shape (D2/F5) | K4 warn `payload-shape-obsolete` (obsolete OBJECT or any other non-array), payload skipped, no throw; array form is the only supported shape; absent `content` stays legal |
+| TR-H14 | `nodeData.content` (D5) | text-only — carried as the text field; a NodeData/NodeData[] value is NOT dual-parsed into children (discontinued legacy; never reimplemented); children come only from `nodeData.children`. **Children shape (F14):** a non-array `children` value warns `children-shape-invalid` + the field is skipped (never wrapped, never dual-parsed). **Content-target (F13):** `target: 'content'` delivers the def's `content` FIELD value into the consumer's content slot (NOT `scalarBinding`, NOT subtree); `target: 'children'` / `target: 'type'` deliver subtree links via the seam |
+| TR-H15 | seam-target bindings (D7, translate side) | `component.target` in `type`/`content`/`children` is PLANNED (recognition) — NO `component-target-gap` warn for these three targets; the seam target persists on the anchor options (`options.seam = 'type' | 'content' | 'children'`, via `BindingPlan` → `applyPlans`, F17); resolution + layer materialization happen at assembly (ops.md §2.7); def children AND the DEF-ROOT are PRE-MINTED out-of-tree `'component'`-token prototypes at translate (registered, census-visible, minted ids — F16 + delivery-shape ruling: the def-root carries the def's type + css incl. cssDef + the child links to the def-children prototypes) — never attached to the host by translate |
+| TR-H16 | seam reverse (D7/F20) | seam-wired def children are NOT emitted as the consumer's authored `data.children` on reverse — they stay in the def's JSON home (the def value keeps its own `children`); the consumer reverses with its authored children ONLY. Re-translate of the reversed document reproduces the same seam plan (`options.seam`) |
 | TR-H4 | handlers on legacy nodes | carried to compiled `handlers`; STRING bodies instantiated into functions at translate; reverse emits live bodies as source strings (round-trips) |
 | TR-H5 | template.children + content payloads | contentNodes-owned content roots in `TranslatedTree.content` (family-'in-tree', token edge — P3 §10.ad/F-13); metadata/userData surfaced |
 | TR-H6 | run* gates | adapter/persistence mapping; defaults when absent; preserved by serializeSlice |
@@ -444,4 +542,4 @@ value-carrying root bindings become SOURCE providers (K6).
 | TR-H9 | contentNodes-owned content roots | family-'in-tree' (node.ts:213) but the token terminates the compile walk — dropped from compile (P3 §2.4: in-tree is a family fact, not compiled viability); a real parent edge supersedes the token on attach |
 | TR-H10 | K4 warnings channel + guards | `translated.warnings` is always present (empty for a clean doc); each entry `{ code, path }` fires a focused `console.warn`; every guard code (§2.1 list) warns + skips its binding/handler def, never throws (TR-F2); vacuous bindings (`{}`, non-string/empty reference) → `component-binding-empty`, zero anchors, while `component: []` stays a legal empty multi-binding list (no warning) |
 | TR-F1 | malformed envelope / payload | throws (guards §3) |
-| TR-F2 | legacy-only fields (`versions`, …) and malformed binding/handler content | ignored, never a throw — well-formed-but-invalid content surfaces on the K4 warnings channel (`placement-name-invalid`, `placement-string-coerced`, `placement-duplicate-reference`, `handler-phase-unknown`, `handler-body-invalid`, duplicate/vacuous/gap guards); only malformed envelopes/payloads throw (§3). The old `component-target-placement` code is REMOVED (the targetPlacement feed is implemented) |
+| TR-F2 | legacy-only fields (`versions`, …) and malformed binding/handler content | ignored, never a throw — well-formed-but-invalid content surfaces on the K4 warnings channel (`placement-name-invalid`, `placement-string-coerced`, `placement-duplicate-reference`, `placement-entry-invalid`, `handler-phase-unknown`, `handler-body-invalid`, `payload-shape-obsolete`, `children-shape-invalid`, duplicate/vacuous/gap guards); only malformed envelopes/payloads throw (§3). The old `component-target-placement` code is REMOVED (the targetPlacement feed is implemented). The D7 seam targets `type`/`content`/`children` are planned (with `options.seam`), NOT gap-warned |

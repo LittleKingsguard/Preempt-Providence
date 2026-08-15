@@ -30,9 +30,9 @@
 // Children arrays attach via parent-child anchors (single-parent enforced);
 // component references become `target` anchors resolved by the existing
 // compile walk; placements become `placement` anchors.
-import { Node, mintNodeId } from './node.js'
+import { Node, mintNodeId, ancestorServesZone } from './node.js'
 import { Link } from './link.js'
-import { registerContentNode } from './registry.js'
+import { registerContentNode, registerDefPrototypes, registerDefRootPrototype, defRootPrototypeFor } from './registry.js'
 import { validateDerived } from './derived.js'
 import type { Anchor, DerivedDecl, DerivedExpr, LinkConfigNameHub, NodeBaseData } from './types.js'
 export type LegacyHandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
@@ -79,14 +79,20 @@ export interface TranslatedWarning {
 
 export interface LegacyNodeData {
   type?: string
-  placement?: LegacyPlacementConfig
+  /** D1 — ARRAY canonical (each entry maps through the single-entry logic),
+   *  single-object convenience kept */
+  placement?: LegacyPlacementConfig | LegacyPlacementConfig[]
   /** single binding OR the K7 array form (multiple bindings per node) */
   component?: LegacyComponentBinding | LegacyComponentBinding[]
   content?: unknown
+  /** D5 — ONLY child nodes; a non-ARRAY value (single NodeData OBJECT, string,
+   *  …) warns `children-shape-invalid` + the field is skipped */
   children?: LegacyNodeData[]
   props?: Record<string, unknown>
   handlers?: LegacyHandlerDef[]
-  css?: { id?: string; classes?: string[]; style?: string; cssDef?: unknown }
+  /** D3 — css.style may be the legacy Record<string,string> OBJECT; translate
+   *  serializes it to a kebab-case `k: v;` CSS string */
+  css?: { id?: string; classes?: string[]; style?: string | Record<string, string>; cssDef?: unknown }
   versions?: unknown
   /** the derived RULE (never the baked values) — flat legacy home for the
    *  merged declaration (derived-state.md §2/§8: layers have no legacy
@@ -119,6 +125,8 @@ export interface LegacyClientConfig {
 
 export interface LegacyInitialData {
   template: LegacyTemplateData
+  /** D2 — ARRAY-ONLY (ContentPayload[]); ANY other shape warns
+   *  `payload-shape-obsolete` + is skipped, never silent */
   content?: LegacyContentPayload[]
   clientConfig?: LegacyClientConfig
 }
@@ -183,6 +191,82 @@ function warn(warnings: TranslatedWarning[], code: string, path: string | undefi
  *  excluded (no mapping), guarded at translate with `handler-phase-unknown`. */
 const LEGACY_HANDLER_PHASES: ReadonlySet<string> = new Set(['before-compile', 'after-compile', 'after-render'])
 
+/** D3/F8 — camelCase key → kebab-case; vendor-prefixed heads get the leading
+ *  dash (`WebkitTransform` → `-webkit-transform`, `msTransition` →
+ *  `-ms-transition`). Exported for the emit-side cssDef rule serializer
+ *  (render-helpers) — one canonical kebab implementation. */
+export function kebabKey(key: string): string {
+  const dashed = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+  return dashed.startsWith('ms-') && key.startsWith('ms') ? `-${dashed}` : dashed
+}
+
+/** D3/F8 (reverse half) — kebab-case key back to the camelCase object key;
+ *  a vendor-prefixed key (leading dash) capitalizes its first segment too
+ *  (`-webkit-transform` → `WebkitTransform`). */
+function camelKey(key: string): string {
+  const parts = key.split('-').filter((p) => p.length > 0)
+  if (parts.length === 0) return ''
+  const start = key.startsWith('-') ? 1 : 0
+  let out = parts[0]!
+  for (let i = 1; i < parts.length; i++) {
+    out += parts[i]![0]!.toUpperCase() + parts[i]!.slice(1)
+  }
+  if (start === 1) out = out[0]!.toUpperCase() + out.slice(1)
+  return out
+}
+
+/** D3/F8 — serialize a `Record<string,string>` style OBJECT into the
+ *  kebab-case `k: v;` CSS string the adapters/parser can interpret. The empty
+ *  object serializes to `''`. Exported for the emit/ops units to reuse — the
+ *  adapters never see the raw object. */
+export function serializeStyle(style: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(style)) {
+    parts.push(`${kebabKey(key)}: ${String(value)};`)
+  }
+  return parts.join(' ')
+}
+
+/** D3/F7 — parse a serialized style STRING back to the object; `;` splits
+ *  entries EXCEPT inside `url(...)`; each entry splits on the FIRST `:` so
+ *  values containing `:` survive. */
+export function parseStyle(str: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  const parts: string[] = []
+  let buf = ''
+  let urlDepth = 0
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i]!
+    if (urlDepth === 0) {
+      if (str.startsWith('url(', i)) {
+        urlDepth = 1
+        buf += 'url('
+        i += 3
+        continue
+      }
+      if (ch === ';') {
+        parts.push(buf)
+        buf = ''
+        continue
+      }
+    } else if (ch === '(') {
+      urlDepth++
+    } else if (ch === ')') {
+      urlDepth--
+    }
+    buf += ch
+  }
+  if (buf.trim() !== '') parts.push(buf)
+  for (const part of parts) {
+    const idx = part.indexOf(':')
+    if (idx <= 0) continue
+    const key = camelKey(part.slice(0, idx).trim())
+    if (key.length === 0) continue
+    out[key] = part.slice(idx + 1).trim()
+  }
+  return out
+}
+
 function baseFrom(
   nodeData: LegacyNodeData,
   derived: DerivedDecl | undefined,
@@ -193,7 +277,15 @@ function baseFrom(
   if (typeof nodeData.type === 'string') base.type = nodeData.type
   if (nodeData.content !== undefined) base.content = nodeData.content
   if (nodeData.props !== undefined) base.props = nodeData.props
-  if (nodeData.css !== undefined) base.css = nodeData.css
+  if (nodeData.css !== undefined) {
+    // D3 — a css.style OBJECT is serialized AT TRANSLATE into the kebab-case
+    // `k: v;` CSS string (F8); the raw object must never reach the adapters.
+    const css = { ...nodeData.css }
+    if (typeof css.style === 'object' && css.style !== null) {
+      css.style = serializeStyle(css.style as Record<string, string>)
+    }
+    base.css = css
+  }
   if (nodeData.handlers !== undefined) {
     // legacy handler bodies may arrive as FUNCTION SOURCE (a string) — the
     // backend stores loadable handler definitions as text and the render
@@ -259,13 +351,18 @@ function instantiateHandlerBody(src: string): (...args: unknown[]) => unknown {
 }
 
 /** One planned component binding: the anchor to create + the (optional)
- *  local-apply synthesis + the persisted apply path (K5 translate half). */
+ *  local-apply synthesis + the persisted apply path (K5 translate half) +
+ *  the D7 anchor-layer seam target (F17). */
 interface BindingPlan {
   reference: string
   role: 'source' | 'target'
   value?: unknown
   applyPath?: string | undefined
   synthesized?: DerivedDecl | undefined
+  /** D7/F17 — `type`/`content`/`children` seam targets: planned WITHOUT the
+   *  component-target-gap warn; the seam target persists on the anchor
+   *  options (`options.seam`) so assembly can distinguish seam candidates. */
+  seam?: 'type' | 'content' | 'children' | undefined
 }
 
 /** K8 NP1/D7 — target-syntax edges (component-target-skipped): `props.`,
@@ -273,13 +370,16 @@ interface BindingPlan {
 
 /** K8 NP1 — flat known-vocabulary targets (recognition-only gap,
  *  component-target-gap): every §2.1 vocabulary path EXCEPT `props.<key>`.
- *  `css.style.<key>` / `handlers.<event>` add the dotted member rows. */
+ *  `css.style.<key>` / `handlers.<event>` add the dotted member rows.
+ *  The D7 seam set `type`/`content`/`children` is EXCLUDED from the gap
+ *  (they plan as seam candidates instead, F17). */
 const KNOWN_GAP_TARGETS: ReadonlySet<string> = new Set([
-  'type', 'content', 'children', 'props', 'css', 'css.id', 'css.classes', 'css.style', 'handlers', 'component',
+  'props', 'css', 'css.id', 'css.classes', 'css.style', 'handlers', 'component',
 ])
 
 /** K1/K2 — classify one `target` string: returns the apply path + synthesized
- *  derived declaration for the flat `props.<key>` seam, or an empty apply for
+ *  derived declaration for the flat `props.<key>` seam, the D7 anchor-layer
+ *  seam target for `type`/`content`/`children`, or an empty apply for
  *  a warn+skip / recognition-only gap (the anchor is ALWAYS kept). */
 function classifyTarget(
   target: string,
@@ -287,7 +387,11 @@ function classifyTarget(
   authoredDerived: DerivedDecl | undefined,
   warnings: TranslatedWarning[],
   path: string,
-): { applyPath?: string; synthesized?: DerivedDecl } {
+): { applyPath?: string; synthesized?: DerivedDecl; seam?: 'type' | 'content' | 'children' } {
+  if (target === 'type' || target === 'content' || target === 'children') {
+    // D7/F17 — anchor-layer seam candidate: no gap warn, seam persisted
+    return { seam: target }
+  }
   if (target.startsWith('props.')) {
     const rest = target.slice('props.'.length)
     if (rest.length === 0) {
@@ -373,6 +477,7 @@ function planBindings(
       const t = classifyTarget(target, reference, authoredDerived, warnings, path)
       plan.applyPath = t.applyPath
       plan.synthesized = t.synthesized
+      plan.seam = t.seam
     }
     plans.push(plan)
   }
@@ -401,11 +506,14 @@ function mergeDecl(base: DerivedDecl | undefined, extra: DerivedDecl): DerivedDe
 }
 
 /** Create the component anchors for the planned bindings (source for a
- *  provider, target for a consumer) and persist the K5 apply path. */
+ *  provider, target for a consumer) and persist the K5 apply path + the D7
+ *  seam target (F17 — `options.seam`, the same persistence channel as K5). */
 function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): void {
   for (const plan of plans) {
     const link = hub.linkFor(plan.reference, 'component')
-    const options = plan.applyPath !== undefined ? { applyPath: plan.applyPath } : {}
+    const options: Record<string, unknown> = {}
+    if (plan.applyPath !== undefined) options.applyPath = plan.applyPath
+    if (plan.seam !== undefined) options.seam = plan.seam
     if (plan.role === 'source') {
       const a = node.addAnchor('source', plan.reference, options, link)
       if (a !== null && plan.value !== undefined) a.value = plan.value
@@ -416,9 +524,149 @@ function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): v
 }
 
 /**
+ * D8/F16 + B2/B3 scoping — PRE-MINT a value-carrying def binding's
+ * `value.children` — and, per the delivery-shape ruling (ALS-1b), the
+ * DEF-ROOT — as out-of-tree prototype nodes under the 'component' permanent-
+ * owner token (chain kind token/'component' → derived state 'prototype').
+ * Minted at the def's own translate site; never attached to the host, never
+ * content, family-'in-tree'-NEVER (a prototype is never compiled/renderable
+ * on its own). The D7 seam's anchor layer materializes the child links from
+ * these nodes at reconcileAnchors (ops-side).
+ *
+ * B2 scoping: ONLY seam-targeted defs and defs whose children are
+ * DELIVERABLE child nodes mint. The fork-stress LINK method's children are
+ * 1:1 re-typing SPECS (each carrying a `bind` key) of the consumer's REAL
+ * children — never deliverable nodes; minting them as prototype nodes
+ * polluted the fork-stress-data census (registered 4161 vs 4117) and broke
+ * demo-smoke. A def name appearing in ANY BindingPlan with a seam target
+ * (`type`/`content`/`children` — the pre-scanned seamRefs set) mints
+ * regardless of child shape (the seam layer materializes those links FROM
+ * the pre-minted prototypes, ops.md ALS-1).
+ *
+ * B3 (ALS-1b): a css-bearing def (classes/cssDef/style) additionally mints
+ * its ROOT element as a 'component'-token prototype (type + css + family
+ * child links to the def-children prototypes) — the element-level carrier of
+ * the def's css (SED-1/SED-2). css-less defs mint no def-root (their seam
+ * wiring passes the def children directly).
+ */
+function mintDefPrototypes(
+  plans: BindingPlan[],
+  hub: LinkConfigNameHub,
+  nodes: Node[],
+  warnings: TranslatedWarning[],
+  path: string,
+  seamRefs: ReadonlySet<string>,
+): void {
+  for (const plan of plans) {
+    if (plan.role !== 'source' || plan.value === undefined) continue
+    const value = plan.value
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const def = value as LegacyNodeData
+    if (typeof def.type !== 'string') continue
+    const hasChildren = Array.isArray(def.children) && def.children.length > 0
+    if (!hasChildren && def.content === undefined && def.css === undefined) continue
+    if (hasChildren) {
+      const linkSpec = def.children!.every(
+        (c) => c !== null && typeof c === 'object' && (c as { bind?: unknown }).bind !== undefined,
+      )
+      if (linkSpec && !seamRefs.has(plan.reference)) continue
+    } else if (def.css === undefined) {
+      // a content-bearing leaf def (no children, no css): nothing to mint —
+      // the emission synthesizes the def-root element from the def data
+      continue
+    }
+    const link = hub.linkFor(plan.reference, 'component')
+    const minted: Node[] = []
+    // B3/ALS-1b — the def-ROOT prototype: minted when the def carries css
+    // (the element-level carrier of the def's css — SED-1/SED-2). Its family
+    // children are the def-children prototypes (their chain still terminates
+    // at the 'component' token via the def-root).
+    if (def.css !== undefined && typeof def.css === 'object' && Object.keys(def.css).length > 0) {
+      const defRoot = translateNodeData({ type: def.type, css: def.css }, hub, nodes, warnings, `${path}.component.value`)
+      attachToPermanentOwner(defRoot, 'component')
+      registerDefRootPrototype(link, defRoot)
+    }
+    if (hasChildren) {
+      const root = defRootPrototypeFor(link)
+      def.children!.forEach((childData, i) => {
+        // child-side attach: the def-children prototypes attach to the
+        // def-root (or the 'component' token when no def-root exists)
+        const child = translateNodeData(childData, hub, nodes, warnings, `${path}.component.value.children[${i}]`, undefined, new Set(), root ? { node: root, index: i } : undefined)
+        if (!root) attachToPermanentOwner(child, 'component')
+        minted.push(child)
+      })
+      // the D7 seam materialization wires these pre-minted prototypes onto the
+      // seam consumers (ops.md ALS-1 — the child links materialize FROM them)
+      if (minted.length > 0) registerDefPrototypes(link, minted)
+    }
+  }
+}
+
+/** D7/F17 (B2) — pre-scan the whole document for seam-targeted binding
+ *  references (`component.target` in `type`/`content`/`children`, single or
+ *  K7 array, node-level + `template.component`), so a def provider translated
+ *  BEFORE its seam consumer still knows its children must be pre-minted. */
+function collectSeamRefs(doc: LegacyInitialData): Set<string> {
+  const refs = new Set<string>()
+  const scanBinding = (b: LegacyComponentBinding | null | undefined): void => {
+    if (b === null || typeof b !== 'object') return
+    if (typeof b.reference !== 'string' || b.reference.length === 0) return
+    if (b.target === 'type' || b.target === 'content' || b.target === 'children') {
+      refs.add(b.reference)
+    }
+  }
+  const scanNode = (data: LegacyNodeData): void => {
+    if (data === null || typeof data !== 'object') return
+    const comp = data.component
+    if (comp !== undefined && comp !== null) {
+      const list: LegacyComponentBinding[] = Array.isArray(comp) ? comp : [comp as LegacyComponentBinding]
+      for (const b of list) scanBinding(b)
+    }
+    if (Array.isArray(data.children)) {
+      for (const c of data.children) {
+        if (c !== null && typeof c === 'object') scanNode(c)
+      }
+    }
+  }
+  const rootData = doc.template?.root
+  if (rootData !== null && typeof rootData === 'object') scanNode(rootData)
+  const templateComp = doc.template?.component
+  if (templateComp !== undefined && templateComp !== null) {
+    const list: LegacyComponentBinding[] = Array.isArray(templateComp) ? templateComp : [templateComp as LegacyComponentBinding]
+    for (const b of list) scanBinding(b)
+  }
+  if (Array.isArray(doc.template?.children)) {
+    for (const c of doc.template.children) {
+      if (c !== null && typeof c === 'object') scanNode(c)
+    }
+  }
+  if (Array.isArray(doc.content)) {
+    for (const p of doc.content) {
+      if (p === null || typeof p !== 'object') continue
+      const payload = p as LegacyContentPayload
+      if (Array.isArray(payload.content)) {
+        for (const c of payload.content) {
+          if (c !== null && typeof c === 'object') scanNode(c)
+        }
+      }
+    }
+  }
+  return refs
+}
+
+/**
  * Translate one legacy NodeData subtree into Nodes, attaching children via
  * parent-child anchors and materializing placement/component anchors.
  * Returns every created node in tree order (parent before children).
+ *
+ * FAMILY ATTACH IS CHILD-SIDE (DEFECT #3-1 fix, 2026-08-14): the parent
+ * passes itself + the child index down; the CHILD attaches itself to its
+ * family parent EARLY in its own translate (right after construction) —
+ * BEFORE its own placement minting — so the P3 §1.3 ancestor-name veto
+ * predicate (`ancestorServesZone`, shared with the op-time half) walks a
+ * LIVE parent chain at translate and the producer mint can veto. Content
+ * roots (`opts.asContentRoot`) never take a family parent — the contentNodes
+ * permanent-owner token is their only edge (F-13).
  */
 function translateNodeData(
   data: LegacyNodeData,
@@ -427,6 +675,8 @@ function translateNodeData(
   warnings: TranslatedWarning[],
   path: string,
   opts: { asContentRoot?: boolean; extraDerived?: DerivedDecl } = {},
+  seamRefs: ReadonlySet<string> = new Set<string>(),
+  parent: { node: Node; index: number } | undefined = undefined,
 ): Node {
   // component bindings (K1–K8): planned BEFORE construction so the
   // synthesized derived merge rides the node's base data ("authored-derived
@@ -444,66 +694,109 @@ function translateNodeData(
   // STRIPS the minted anchor on reverse (legacy round-trips stay clean).
   if (opts.asContentRoot === true) attachToPermanentOwner(node, 'contentNodes')
 
-  // placement (PlacementConfig) → container/content anchors on the shared
-  // per-name placement Link (P3 §1.1 — producer 'container' role from
-  // placementName; consumer 'content' role, one anchor per requested name in
-  // preference order). activePlacement is DERIVED (§2.5) — never minted.
-  const placement = data.placement
-  if (placement) {
-    // producer side: placementName → 'container' anchor
-    if (typeof placement.placementName === 'string' && placement.placementName.length > 0) {
-      if (placement.placementName.includes('#')) {
-        warn(warnings, 'placement-name-invalid', path, `placementName "${placement.placementName}" contains '#': container anchor skipped (P3 §1.3)`)
-      } else {
-        const plink = hub.linkFor(placement.placementName, 'placement')
-        node.addAnchor('container', placement.placementName, {}, plink)
+  // CHILD-SIDE family attach (DEFECT #3-1): the child attaches itself to its
+  // family parent BEFORE its own placement minting, so the ancestor veto
+  // walks a live chain. Content roots never take a family parent (the token
+  // edge above is their only one).
+  if (parent !== undefined && opts.asContentRoot !== true) attachChild(parent.node, node, parent.index)
+
+  // placement (PlacementConfig | PlacementConfig[] — D1 ARRAY canonical) →
+  // container/content anchors on the shared per-name placement Link (P3 §1.1
+  // — producer 'container' role from placementName; consumer 'content' role,
+  // one anchor per requested name in preference order). EVERY ARRAY ENTRY
+  // maps through the single-entry logic independently (mint order = array
+  // order); `placement: []` is a valid empty list (no warn); a NON-OBJECT
+  // entry, or a non-array non-object placement value, warns
+  // `placement-entry-invalid` (once per field) and skips that entry.
+  // activePlacement is DERIVED (§2.5) — never minted.
+  const rawPlacement = data.placement
+  if (rawPlacement !== undefined && rawPlacement !== null) {
+    const entries: unknown[] = Array.isArray(rawPlacement) ? rawPlacement : [rawPlacement]
+    let invalidWarned = false
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) {
+        if (!invalidWarned) {
+          warn(warnings, 'placement-entry-invalid', path, `placement entry "${String(entry)}" is not a PlacementConfig object; entry skipped`)
+          invalidWarned = true
+        }
+        continue
       }
-    }
-    // consumer side: targetPlacement → ordered 'content' anchors (P3 §1.2).
-    // Back-compat: the old mis-typed STRING shape is coerced to [string]
-    // with a warn; anything else is rejected with a warn and skipped.
-    if (placement.targetPlacement !== undefined && placement.targetPlacement !== null) {
-      const raw = placement.targetPlacement
-      let names: string[] = []
-      if (typeof raw === 'string') {
-        warn(warnings, 'placement-string-coerced', path, `targetPlacement "${raw}" is the old string shape; coerced to [string] (legacy type is string[])`)
-        names = [raw]
-      } else if (Array.isArray(raw)) {
-        names = raw
-      } else {
-        warn(warnings, 'placement-target-invalid', path, `targetPlacement must be a string or string[]; field skipped`)
+      const placement = entry as LegacyPlacementConfig
+      // producer side: placementName → 'container' anchor (P3 §1.3 ancestor
+      // veto — DEFECT #3-1 fix: the child-side family attach above makes the
+      // shared `ancestorServesZone` predicate live at translate; a producer
+      // whose family ancestor already offers the same name is NOT minted and
+      // warns `placement-name-vetoed` — same semantics as the op-time half)
+      if (typeof placement.placementName === 'string' && placement.placementName.length > 0) {
+        if (placement.placementName.includes('#')) {
+          warn(warnings, 'placement-name-invalid', path, `placementName "${placement.placementName}" contains '#': container anchor skipped (P3 §1.3)`)
+        } else if (ancestorServesZone(node, placement.placementName)) {
+          warn(warnings, 'placement-name-vetoed', path, `placementName "${placement.placementName}" is already offered by a family ancestor; container anchor skipped (P3 §1.3)`)
+        } else {
+          const plink = hub.linkFor(placement.placementName, 'placement')
+          node.addAnchor('container', placement.placementName, {}, plink)
+        }
       }
-      // K8-class guard across the new minting: duplicate name → warn,
-      // keep-first, skip the rest (consistent with component-duplicate-reference)
-      const seen = new Set<string>()
-      for (const name of names) {
-        if (typeof name !== 'string' || name.length === 0) {
-          warn(warnings, 'placement-name-invalid', path, `targetPlacement entry "${String(name)}" is not a valid placement name; binding skipped (P3 §1.3)`)
-          continue
+      // consumer side: targetPlacement → ordered 'content' anchors (P3 §1.2).
+      // Back-compat: the old mis-typed STRING shape is coerced to [string]
+      // with a warn; anything else is rejected with a warn and skipped.
+      if (placement.targetPlacement !== undefined && placement.targetPlacement !== null) {
+        const raw = placement.targetPlacement
+        let names: string[] = []
+        if (typeof raw === 'string') {
+          warn(warnings, 'placement-string-coerced', path, `targetPlacement "${raw}" is the old string shape; coerced to [string] (legacy type is string[])`)
+          names = [raw]
+        } else if (Array.isArray(raw)) {
+          names = raw
+        } else {
+          warn(warnings, 'placement-target-invalid', path, `targetPlacement must be a string or string[]; field skipped`)
         }
-        if (name.includes('#')) {
-          warn(warnings, 'placement-name-invalid', path, `targetPlacement "${name}" contains '#': binding skipped (P3 §1.3)`)
-          continue
+        // K8-class guard across the new minting: duplicate name → warn,
+        // keep-first, skip the rest (consistent with component-duplicate-reference)
+        const seen = new Set<string>()
+        for (const name of names) {
+          if (typeof name !== 'string' || name.length === 0) {
+            warn(warnings, 'placement-name-invalid', path, `targetPlacement entry "${String(name)}" is not a valid placement name; binding skipped (P3 §1.3)`)
+            continue
+          }
+          if (name.includes('#')) {
+            warn(warnings, 'placement-name-invalid', path, `targetPlacement "${name}" contains '#': binding skipped (P3 §1.3)`)
+            continue
+          }
+          if (seen.has(name)) {
+            warn(warnings, 'placement-duplicate-reference', path, `targetPlacement "${name}" is already requested on this node; duplicate skipped (keep-first)`)
+            continue
+          }
+          seen.add(name)
+          const plink = hub.linkFor(name, 'placement')
+          node.addAnchor('content', name, {}, plink)
         }
-        if (seen.has(name)) {
-          warn(warnings, 'placement-duplicate-reference', path, `targetPlacement "${name}" is already requested on this node; duplicate skipped (keep-first)`)
-          continue
-        }
-        seen.add(name)
-        const plink = hub.linkFor(name, 'placement')
-        node.addAnchor('content', name, {}, plink)
       }
     }
   }
 
   applyPlans(node, plans, hub)
 
-  // children (NodeData[]) → parent-child anchors in array order (priority)
-  if (Array.isArray(data.children)) {
-    data.children.forEach((childData, i) => {
-      const child = translateNodeData(childData, hub, nodes, warnings, `${path}.children[${i}]`)
-      attachChild(node, child, i)
-    })
+  // D8/F16 — def children pre-minted at the def's own translate site
+  // (B2 scoping: link-method bind-spec children never mint unless the def
+  // is seam-targeted — the pre-scanned seamRefs set)
+  mintDefPrototypes(plans, hub, nodes, warnings, path, seamRefs)
+
+  // children (NodeData[]) → parent-child anchors in array order (priority).
+  // D5/F14 — a non-ARRAY children value (single NodeData OBJECT, string, …)
+  // warns `children-shape-invalid` + the field is SKIPPED — never
+  // dual-parsed into content, never wrapped.
+  if (data.children !== undefined) {
+    if (Array.isArray(data.children)) {
+      data.children.forEach((childData, i) => {
+        // CHILD-SIDE family attach (DEFECT #3-1): the child attaches itself
+        // inside its own translate (before its placement minting) — the
+        // parent passes itself + the index down
+        const child = translateNodeData(childData, hub, nodes, warnings, `${path}.children[${i}]`, undefined, seamRefs, { node, index: i })
+      })
+    } else {
+      warn(warnings, 'children-shape-invalid', path, 'children must be an array of NodeData; field skipped (never dual-parsed, never wrapped)')
+    }
   }
   return node
 }
@@ -526,6 +819,11 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   const warnings: TranslatedWarning[] = []
   const template = doc.template
 
+  // D7/F17 (B2) — the seam-reference pre-scan: seam-targeted def names must
+  // be known BEFORE the def provider's own translate site mints (a def
+  // provider may precede its seam consumer in the document)
+  const seamRefs = collectSeamRefs(doc)
+
   // template.component binding on the root itself (K6/K7): planned before the
   // root's construction so its synthesis rides the root's base data
   const rootBinding = template.component
@@ -535,13 +833,17 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   // root with its own default children (stored in the root itself)
   const root = translateNodeData(template.root, hub, nodes, warnings, 'root', {
     ...(rootSynthesis !== undefined ? { extraDerived: rootSynthesis } : {}),
-  })
+  }, seamRefs)
   attachToPermanentOwner(root, 'rootNode')
 
   // K6 — a value-carrying root binding is a SOURCE (provider) anchor; the
   // dead-value target anchor of the pre-kernel translator is gone. A
   // value-less binding stays a target consumer.
   applyPlans(root, rootPlan.plans, hub)
+
+  // D8/F16 — template.component def values pre-mint their children prototypes
+  // at the root's own translate site too (B2 scoping)
+  mintDefPrototypes(rootPlan.plans, hub, nodes, warnings, 'template.component', seamRefs)
 
   // content nodes: template.children + content payloads — contentNodes-owned
   // (family-'in-tree' via the permanent-owner token, P3 §10.ad/F-13; NOT
@@ -554,12 +856,18 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   let userData: unknown
   if (Array.isArray(template.children)) {
     template.children.forEach((childData, i) => {
-      const n = translateNodeData(childData, hub, nodes, warnings, `template.children[${i}]`, { asContentRoot: true })
+      const n = translateNodeData(childData, hub, nodes, warnings, `template.children[${i}]`, { asContentRoot: true }, seamRefs)
       registerContentNode(n)
       content.push(n)
     })
   }
-  if (Array.isArray(doc.content)) {
+  // D2/F5 — doc.content is ARRAY-ONLY: ANY other shape (the obsolete
+  // single-payload OBJECT, string/null/number/boolean) warns
+  // `payload-shape-obsolete` at path 'content' and the payload is SKIPPED —
+  // never silently dropped, never half-translated (TR-F2).
+  if (doc.content !== undefined && !Array.isArray(doc.content)) {
+    warn(warnings, 'payload-shape-obsolete', 'content', 'doc.content must be a ContentPayload[] array; payload skipped')
+  } else if (Array.isArray(doc.content)) {
     doc.content.forEach((payload, p) => {
       if (!payload || typeof payload !== 'object' || !Array.isArray(payload.content)) {
         throw new Error('legacy-payload-mismatch: payload requires content: NodeData[]')
@@ -609,7 +917,17 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   data.type = node.type
   if (node.content !== undefined) data.content = node.content
   if (node.props && Object.keys(node.props).length > 0) data.props = { ...node.props }
-  if (node.css && Object.keys(node.css).length > 0) data.css = { ...node.css }
+  if (node.css && Object.keys(node.css).length > 0) {
+    // D3/F7 — a serialized style STRING ALWAYS parses back to the
+    // Record<string,string> OBJECT (no provenance tracking: a pre-serialized
+    // string-authored style becomes an object on save — the legacy format is
+    // object-native). The string form is never re-emitted.
+    const css = { ...node.css }
+    if (typeof css.style === 'string' && css.style.length > 0) {
+      css.style = parseStyle(css.style)
+    }
+    data.css = css
+  }
   // component anchors FIRST — both the N1 derived strip and the K5 emission
   // key off them (K5: the legacy `target` field is the persisted apply path)
   const compAnchors = node.anchors.filter(
@@ -683,26 +1001,46 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   }
   if (bindings.length === 1) data.component = bindings[0]!
   else if (bindings.length > 1) data.component = bindings
-  // P3 §6.2 — reverse placement emission: the container anchor (placementName)
-  // and the ordered content anchors (targetPlacement: string[] in MINT order —
-  // the node's anchors array preserves the preference order). activePlacement
-  // is the DERIVED read (§2.5): the FIRST name with at least one known
-  // container, emitted only when it exists. The minted contentNodes parent
-  // anchor is never emitted (legacy has no representation for the token).
-  const placement: Record<string, string | string[]> = {}
-  const containerAnchor = node.anchors.find((a) => a.role === 'container' && typeof a.target === 'string')
-  if (containerAnchor) placement.placementName = containerAnchor.target as string
+  // P3 §6.2 + D1/F2 — reverse placement emission: the container anchor
+  // (placementName) and the ordered content anchors (targetPlacement: string[]
+  // in MINT order — the node's anchors array preserves the preference order).
+  // A node with TWO OR MORE container anchors (multi-producer — only
+  // expressible via the D1 array) emits the canonical placement ARRAY, one
+  // entry per container anchor in mint order, the node's content-anchor names
+  // in the FIRST entry; one container (or none) emits the flat merged object.
+  // activePlacement is the DERIVED read (§2.5): the FIRST name with at least
+  // one known container, emitted only when it exists. The minted contentNodes
+  // parent anchor is never emitted (legacy has no representation for the
+  // token).
+  const containerAnchors = node.anchors.filter((a) => a.role === 'container' && typeof a.target === 'string')
   const contentAnchors = node.anchors.filter((a) => a.role === 'content' && typeof a.target === 'string')
-  if (contentAnchors.length > 0) {
-    placement.targetPlacement = contentAnchors.map((a) => a.target as string)
-    for (const a of contentAnchors) {
-      if (a.link.anchorsOf('container').length > 0) {
-        placement.activePlacement = a.target as string
-        break
-      }
+  const contentNames = contentAnchors.map((a) => a.target as string)
+  let activePlacement: string | undefined
+  for (const a of contentAnchors) {
+    if (a.link.anchorsOf('container').length > 0) {
+      activePlacement = a.target as string
+      break
     }
   }
-  if (Object.keys(placement).length > 0) data.placement = placement
+  if (containerAnchors.length > 1) {
+    const entries: Record<string, string | string[]>[] = containerAnchors.map((c, i) => {
+      const e: Record<string, string | string[]> = { placementName: c.target as string }
+      if (i === 0) {
+        if (contentNames.length > 0) e.targetPlacement = contentNames
+        if (activePlacement !== undefined) e.activePlacement = activePlacement
+      }
+      return e
+    })
+    data.placement = entries
+  } else {
+    const placement: Record<string, string | string[]> = {}
+    if (containerAnchors.length === 1) placement.placementName = containerAnchors[0]!.target as string
+    if (contentNames.length > 0) {
+      placement.targetPlacement = contentNames
+      if (activePlacement !== undefined) placement.activePlacement = activePlacement
+    }
+    if (Object.keys(placement).length > 0) data.placement = placement
+  }
   const kids = node.children.filter((c) => !isContentRoot(c))
   if (kids.length > 0) data.children = kids.map((k) => nodeToLegacy(k, isContentRoot))
   return data

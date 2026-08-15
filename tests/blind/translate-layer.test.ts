@@ -397,8 +397,7 @@ describe('translate layer — ancestor-name veto (T28)', () => {
   // unambiguous: the producer's container anchor must NOT be minted when a
   // family ancestor already carries the same name, with a K4
   // placement-name-vetoed warn. The implementation mints verbatim (no warn).
-  // Skipped so the suite stays green; un-skip when the defect is fixed.
-  it.skip('does NOT mint a container anchor when a family ancestor already offers the same name; warns placement-name-vetoed', () => {
+  it('does NOT mint a container anchor when a family ancestor already offers the same name; warns placement-name-vetoed', () => {
     // input: root offers zone-0; its family child also offers zone-0
     const t = view(
       translateLegacy({

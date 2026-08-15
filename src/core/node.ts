@@ -17,7 +17,7 @@ import type {
 import { SingleParentError } from './errors.js'
 import { Link } from './link.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
-import { registerNode, scheduleSweep, markPending, resolveNodeRef } from './registry.js'
+import { registerNode, scheduleSweep, markPending, resolveNodeRef, defPrototypesFor, defRootPrototypeFor } from './registry.js'
 import { resolveArms, resolvePathTargets } from './resolve.js'
 import { logCompilePass, compilePassLogEnabled } from './debug.js'
 import { validateDerived, applyDerived } from './derived.js'
@@ -37,6 +37,22 @@ function effectiveOrder(a: Anchor): number | undefined {
 
 function linkOf(a: Anchor): Link {
   return a.link as unknown as Link
+}
+
+/** P3 §1.3 ancestor-name veto predicate — shared by the op-time half
+ *  (placement-attach, ops.ts) and the translate-time half (producer
+ *  minting, translate.ts DEFECT #3-1 fix): does any FAMILY ancestor of
+ *  `node` already carry a `container`-role anchor offering `zone`? The walk
+ *  follows the live parent chain; string-token parents (rootNode /
+ *  component / contentNodes) terminate it (no family ancestor — no veto).
+ *  At translate the child's family parent edge is minted CHILD-SIDE (the
+ *  child attaches itself before its own placement minting), so the same
+ *  predicate is live in both phases. */
+export function ancestorServesZone(node: Node, zone: string): boolean {
+  for (let cur: Node | null = node.parent; cur; cur = cur.parent) {
+    if (cur.anchors.some(a => a.role === 'container' && typeof a.target === 'string' && a.target === zone)) return true
+  }
+  return false
 }
 
 export type ChainKind =
@@ -422,6 +438,10 @@ export class Node {
     const seen = new Set<NodeId>()
     for (const a of this.anchors) {
       if (a.role !== 'parent') continue
+      // D7/ALS-5 (G26/F19) — seam parent anchors are DISTINCT from the
+      // family parent: the family children walk ignores them (a seam-wired
+      // def child never appears in consumer.children).
+      if ((a.options as { seam?: unknown }).seam !== undefined) continue
       for (const ca of linkOf(a).anchorsOf('child')) {
         if (typeof ca.target === 'object' && ca.target !== null) {
           const n = ca.target as Node
@@ -630,6 +650,14 @@ export class Node {
         // the placeholder edge dissolves as a whole.)
         if (linkOf(existing).anchorsOf('parent')[0]?.target === 'contentNodes') {
           linkOf(existing).destroy()
+        } else if ((options as { seam?: unknown }).seam !== undefined) {
+          // D7/ALS-4 (F15) — role-scoped exemption: a LAYER-MATERIALIZED
+          // 'child' anchor carrying the seam flag (options.seam — the
+          // anchor-layer seam's second-parent admission) bypasses the
+          // single-parent gate. A def referenced more than once gives its
+          // children MULTIPLE LEGAL PARENTS — INTENDED (G24). EVERY other
+          // second 'child' anchor keeps the gate (family attach ops — G25
+          // unchanged).
         } else {
           throw new SingleParentError(this.id)
         }
@@ -649,7 +677,12 @@ export class Node {
   }
 
   familyLinkFor(): Link {
-    const existing = this.anchors.find(a => a.role === 'parent')
+    // D7/ALS-5 (F19) — the seam's 'parent'-role anchors (options.seam) are
+    // NOT family edges: filter them out and return/create the FAMILY link, so
+    // a real attachChild after a seam still grabs the family link.
+    const existing = this.anchors.find(
+      a => a.role === 'parent' && (a.options as { seam?: unknown }).seam === undefined,
+    )
     if (existing) return linkOf(existing)
     const link = new Link({ name: 'parent-child' })
     this.addAnchor('parent', this, {}, link)
@@ -837,6 +870,27 @@ export class Node {
         (a.role === 'source' || a.role === 'duplex') &&
         consumedNames.has(a.target),
       )
+    // F3 discipline: a PURE provider (a source-only node) consumed by name
+    // is dropped from render — it is a value holder, never an element.
+    // EXCEPTION (D7 — the [6] root-clobber pin): a provider whose value is
+    // SEAM-consumed (a seam-target anchor — options.seam — consumes the
+    // name) is a def HOST — the seam wrapper renders the def's children, so
+    // the provider node itself must render its own real children (the root
+    // both provides `auth` and carries its wrapper children).
+    const seamConsumedNames = new Set<string>()
+    for (const n of slice) {
+      for (const a of n.anchors) {
+        if (a.role === 'target' && typeof a.target === 'string' && a.options.seam !== undefined) {
+          seamConsumedNames.add(a.target)
+        }
+      }
+    }
+    const isSeamProvider = (node: Node): boolean =>
+      node.anchors.some(a =>
+        typeof a.target === 'string' &&
+        (a.role === 'source' || a.role === 'duplex') &&
+        seamConsumedNames.has(a.target),
+      )
 
     const makeCs = (node: Node): CompiledState => ({
       nodeId: node.id,
@@ -871,7 +925,7 @@ export class Node {
         .map(a => a.target as string)
 
       if (!hasAnyTarget || targetNames.length === 0) {
-        if (hasAnyTarget && isResolutionParticipant(node)) continue
+        if (hasAnyTarget && isResolutionParticipant(node) && !isSeamProvider(node)) continue
         const cs = makeCs(node)
         publishOwn(node, cs)
         // derived bake (§4): the copy is what lands — the pass-1 canon is
@@ -883,6 +937,15 @@ export class Node {
 
       const arms = resolveArms(node, targetNames, slice, viable, kinds)
       let warnedUnresolved = false
+      // D7/ALS-1..7 (G23-G28) — the seam materialization: a translate-planned
+      // seam binding (`options.seam = 'type'|'content'|'children'`) whose def
+      // resolves delivers — onto the CONSUMER — the def's pre-minted
+      // prototype children as child links (ALS-1/ALS-2/ALS-4), the def's
+      // PLACEMENT links (ALS-6), and the def's TEXT content for `'content'`
+      // targets (ALS-7). Materialized before makeCs so the compiled state
+      // reads the merged slot + the seam anchors. Idempotent across
+      // recompiles (no re-mint, no double-add).
+      node.materializeSeam()
       for (const arm of arms) {
         if (arm.drop) {
           if (arm.drop.reason === 'loop') {
@@ -1109,6 +1172,122 @@ export class Node {
         // already satisfied or unmaterializable
       }
     }
+  }
+
+  /** D7/ALS-7 (G28) — the seam CONTENT layer for translate-planned
+   *  `target: 'content'` bindings: the def's own `content` field (when the
+   *  def has one) lands as a layer `content` VALUE, merged by compileLocal
+   *  into the node's compiled content slot (base seeded, layers override).
+   *  Idempotent across recompiles (the layer replaces itself by id); a def
+   *  WITHOUT a `content` field delivers nothing (the consumer keeps its
+   *  authored content); `'children'`/`'type'` seam targets carry no content.
+   *  The def is resolved off the per-name component Link (the provider
+   *  registry) — never scalarBinding, never the def's children. */
+  private materializeSeam(): void {
+    let contentChanged = false
+    for (const a of this.anchors) {
+      if (a.role !== 'target' || typeof a.target !== 'string') continue
+      const seam = a.options.seam
+      if (seam === undefined) continue
+      const link = linkOf(a)
+      const value = link.anchorsOf('source').find((p) => p.value !== undefined)?.value
+        ?? link.anchorsOf('duplex').find((p) => p.value !== undefined)?.value
+      if (seam === 'content') {
+        // ALS-7 (G28) — content-target text delivery: the def's own `content`
+        // field (when the def has one) lands as a layer `content` VALUE,
+        // merged by compileLocal into the node's compiled content slot (base
+        // seeded, layers override). A def WITHOUT a `content` field delivers
+        // nothing (the consumer keeps its authored content); `'children'`/
+        // `'type'` seam targets carry no content. Never scalarBinding, never
+        // the def's children.
+        if (typeof value !== 'object' || value === null || Array.isArray(value)
+          || (value as { content?: unknown }).content === undefined) {
+          // no def or a def WITHOUT a content field → delivers no content
+          // (stale layers from an earlier resolve are cleared)
+          contentChanged = this.clearSeamContentLayers(a.target) || contentChanged
+          continue
+        }
+        const def = value as { content: unknown }
+        const layer: NodeLayer = { id: `seam-content-${a.target}`, content: def.content }
+        const idx = this.layers.findIndex((l) => l.id === layer.id)
+        if (idx !== -1 && this.layers[idx] !== undefined && (this.layers[idx] as NodeLayer).content === def.content) continue
+        if (idx !== -1) this.layers[idx] = layer
+        else this.layers.push(layer)
+        contentChanged = true
+        continue
+      }
+      // 'children' | 'type' — ALS-1/ALS-1b/ALS-2/ALS-4/ALS-6 (G23-G26, G29):
+      // the seam passes the def's subtree onto the consumer as an anchor
+      // layer. Per the delivery-shape ruling: for `children`-targets the
+      // DEF-ROOT is "the resolved node" — the def-root's CHILDREN links
+      // carry their parent anchors ON the def-root (target = self,
+      // options.seam = true), and the CONSUMER's seam child link points at
+      // the def-root. For `type`-targets (and children-targets whose def
+      // mints no def-root — a css-less def) the consumer is the resolved
+      // node: each passed child link's parent anchor sits ON the consumer.
+      // Either way: the consumer's OWN family parent edge is untouched
+      // (ALS-3 — the seam links are never family attach ops); the child-side
+      // anchors sit on the pre-minted prototypes (admitted by the role-scoped
+      // single-parent exemption — a def referenced twice gives its children
+      // MULTIPLE LEGAL PARENTS, G24). The def's PLACEMENT links ride the
+      // layer onto the resolved node (ALS-6 — the shared per-name placement
+      // Link; never re-minted, never re-vetoed).
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+      const protos = defPrototypesFor(link)
+      const defRoot = defRootPrototypeFor(link)
+      if (seam === 'children' && defRoot !== undefined) {
+        if (!this.hasSeamParentFor(defRoot)) {
+          const seamLink = new Link({ name: 'parent-child' })
+          this.addAnchor('parent', this, { seam: true }, seamLink)
+          defRoot.addAnchor('child', defRoot, { seam: true }, seamLink)
+        }
+        for (const proto of protos) {
+          if (defRoot.hasSeamParentFor(proto)) continue
+          const seamLink = new Link({ name: 'parent-child' })
+          defRoot.addAnchor('parent', defRoot, { seam: true }, seamLink)
+          proto.addAnchor('child', proto, { seam: true }, seamLink)
+          for (const pa of proto.anchors) {
+            if ((pa.role !== 'container' && pa.role !== 'content') || typeof pa.target !== 'string') continue
+            if (defRoot.anchors.some((x) => x.role === pa.role && x.target === pa.target && x.link === pa.link)) continue
+            defRoot.addAnchor(pa.role, pa.target, {}, pa.link)
+          }
+        }
+        continue
+      }
+      for (const proto of protos) {
+        if (this.hasSeamParentFor(proto)) continue
+        const seamLink = new Link({ name: 'parent-child' })
+        this.addAnchor('parent', this, { seam: true }, seamLink)
+        proto.addAnchor('child', proto, { seam: true }, seamLink)
+        for (const pa of proto.anchors) {
+          if ((pa.role !== 'container' && pa.role !== 'content') || typeof pa.target !== 'string') continue
+          if (this.anchors.some((x) => x.role === pa.role && x.target === pa.target && x.link === pa.link)) continue
+          this.addAnchor(pa.role, pa.target, {}, pa.link)
+        }
+      }
+    }
+    if (contentChanged) this.compileLocal()
+  }
+
+  /** ALS-2 idempotency — has the consumer already a seam parent anchor whose
+   *  passed child link's child side sits on `proto`? */
+  private hasSeamParentFor(proto: Node): boolean {
+    return this.anchors.some(
+      (a) => a.role === 'parent' && a.options.seam !== undefined
+        && a.link.anchorsOf('child').some((ca) => ca.target === proto),
+    )
+  }
+
+  private clearSeamContentLayers(target: string): boolean {
+    let removed = false
+    this.layers = this.layers.filter((l) => {
+      if (l.id.startsWith(`seam-content-${target}`)) {
+        removed = true
+        return false
+      }
+      return true
+    })
+    return removed
   }
 
   private ensureWritable(): void {

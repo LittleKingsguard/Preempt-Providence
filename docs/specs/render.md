@@ -69,7 +69,9 @@ type RenderOp =
   | { kind: 'set';    wire: NodeRef; name: string; value: unknown; forkKey?: ForkPathKey }
   | { kind: 'append'; owner: NodeRef; child: NodeRef }                          // reorder = re-append in compiled order
   | { kind: 'remove'; wire: NodeRef; forkKey?: ForkPathKey }
-  | { kind: 'styles'; cssDefs: unknown[] }                                      // one per sweep → preempt-dynamic-styles
+  | { kind: 'styles'; cssDefs: string[] }                                       // one per sweep → preempt-dynamic-styles;
+                                                                                // each entry is a RULE STRING `{selector}{serialized styles}`
+                                                                                // generated from cssDef (D4, §3.4) — never a raw cssDef object
 ```
 
 ### 3.2 MinimalElement — the node-local diff unit
@@ -128,6 +130,109 @@ Every emitted op **forwards the element's `forkKey`** — the DEFECT #1 fix (P3 
 | R-ORD-6 | Within one emit batch: `create(parent)` precedes `append(parent, child)`; `remove(wire)` precedes any re-`create` of the same wire; at most one `styles` op |
 | R-ORD-7 | Nested emission on an active slice chain is **deferred to the microtask queue** (locking Option B); recursion-depth cap is the loop tripwire |
 | R-ORD-8 | The actionable `next` array is **root-first**: every node's `create` precedes its descendants' `create` (adapters derive the SSR root as the first-created wire, adapters.md §4.6) |
+
+---
+
+### 3.4 cssDef → stylesheet rules + def-chain scoping (D4/D8, live-prod disposition 2026-08-14 — SPEC-ENCODED, fix pass PENDING)
+
+#### 3.4.1 Styles-op generation from `css.cssDef` (D4)
+
+`css.cssDef` (legacy `StyleNode[]`: `{selector, styles}`) is emitted as **real
+stylesheet rules** — the emit layer generates one `styles` op per sweep from
+the compiled states' cssDef:
+
+| Rule | Statement |
+| --- | --- |
+| STL-1 | Each cssDef entry serializes to a rule string `{selector}{serialized styles}` — `styles` entries serialized kebab-case `k: v;` (final `;` optional; a NESTED `styles` value — the media-query form `{'.a': {...}}` — serializes recursively as nested `{selector}{…}` blocks inside the outer rule, e.g. `@media (prefers-color-scheme: dark){.a{color:#e0e0e0;background:#121212}}`) |
+| STL-2 | **Rule-signature dedup**: the same rule is NEVER emitted twice across the whole render — the dedup set is keyed by the exact generated rule string (signature = the rule text itself: selector + serialized styles) and persists across sweeps within a render; duplicate cssDefs across nodes produce ONE rule |
+| STL-3 | **Actionable-states-only** (F10): only rules owned by nodes with an ACTIONABLE compiled state emit — actionable root-terminated states and actionable placement-routed path-states (P3 §2.4: "in-tree" is a family fact, not compiled viability — `contentNodes`/`'component'`-token-owned nodes are family-'in-tree' or prototypes yet NEVER render). Rules from dropped, owner-terminated (`contentNodes`/prototype arms), or unplaced arms contribute NOTHING (SER-R4/NVS-2 discipline) — a def-carrying provider that never materializes emits no rule |
+| STL-4 | **Zero-or-one `styles` op per sweep** (F11): the sweep coalescer emits the `styles` op only when the sweep's actionable nodes own ≥1 deduped rule — a cssDef-less render emits NO styles op (no empty `<style>` block, no empty styles prefix at the adapters); ≤1 op per sweep (R-ORD-6), payload entries in deterministic order (first-seen rule order over the actionable node set); the op carries rule STRINGS, never raw cssDef objects (adapters.md §3.3/§4.5 contract) |
+
+The `styles` RenderOp + the adapters' `styles()` channel already exist
+(adapters.md §3.3/§4.5) — D4 supplies the GENERATION side (previously
+nothing produced the op from cssDef; the raw object flowed to
+`String(def)` → `[object Object]`).
+
+#### 3.4.2 Component rules — TWO DISTINCT FAMILIES (clarification 2026-08-14)
+
+**The earlier conflation:** the D7 seam and the D8 def-chain were documented
+side by side and — worse — IMPLEMENTED as one mechanism (the seam's SED-2
+branch was nested inside the def-chain's empty-host branch, which narrowed
+the children-target contract to empty hosts and dropped the wrapper's own
+content; RCA: `docs/session-defect-review.md` "B1 children-target collapse
+miscommunication"). They are different contracts on different layers:
+
+| Family | Mechanism | Layer | Targets | Delivery |
+| --- | --- | --- | --- | --- |
+| **A — the SEAM (D7/ALS-1..7, ops.md §2.7)** | ANCHOR-LAYER materialization (graph-time): the def's pre-minted prototype nodes become seam-linked children of the component-bearing node | graph (anchors), planned at translate (`options.seam`), materialized at compile | `type` / `content` / `children` | children: **node data AS-IS + prototype added as child** (B1); type: shell collapse into the def's element (SED-1); content: text only (SED-3) |
+| **B — the DEF-CHAIN (D8/DFC-1..3, P-EMIT-3)** | EMIT-time re-typing: `def.children` re-type the node's real children | emit (elements) | fork-stress link-method bindings (bind-keyed or type-only re-typing specs) | 1:1 re-typing of covered children (DFC-1); childless-host fill with synthetic `` `${wire}:${bind}` `` wires (P-EMIT-3) |
+
+**Discrimination (which rule applies):** a binding planned with
+`options.seam` (type/content/children targets) is FAMILY A — the seam owns
+it; the emit-time chain NEVER fires for it. A binding WITHOUT a seam flag is
+FAMILY B only if its def children are RE-TYPING SPECS (bind-keyed or
+type-only — no content/css/props/children/component beyond the type);
+a DELIVERABLE-spec def (children carrying content/css/props/children/
+component — the live-prod navBar/header/footer defs) is FAMILY A material —
+it NEVER drives a chain (B1 ruling), even when the counts would fit. A
+def-carrying state with NO children and NO seam flag fires the P-EMIT-3
+empty-host fill (Family B).
+
+**Def-chain emit scoping (D8):**
+
+| Rule | Statement |
+| --- | --- |
+| DFC-1 | The ONLY emit-time def-chain case is the fork-stress link method — and ONLY at `offset`/`childOffset` 0 (F22): `def.children` 1:1 covers the node's real children from the first wire on (prototype-as-child; `def.children.length === childWires.length`). There the def re-types the covered real children, each keeping its OWN authored css/props. **P-EMIT-3 carve-out (the CHILDLESS-host def-fill — pinned, path-emit.test.ts):** a def-carrying state with NO children (`childWires.length === 0`, non-seam, and NOT covered by a family parent's chain — the fork-stress leaves are covered and skipped, which is why the 4095 census holds) re-types the host to `def.type` and emits the def's children as SYNTHETIC `` `${wire}:${bind}` `` elements in order — emit-time only, the graph children stay empty (derived `stress:expanded` unaffected). This is the ONE case synthetic wires exist (the seam SED-2 path uses the def-root wire `` `${wire}:0` ``, never bind-synthetic wires). Every OTHER case (count mismatch, non-zero offset, blocked) emits NO def children: no re-typing, no drops, no synthetic wires |
+| DFC-2 | **Gate = length equality AND link-method provenance** (F23): the emit-time chain applies ONLY when `def.children.length === childWires.length` AND the binding is a link-method def value (the fork-stress-data `link-<layer>` providers) — a SEAM-TARGET def (`options.seam` set, translate.md TR-H15) NEVER drives an emit-time CHILD-WIRE chain. **Ruling carve-out:** a seam `type`-target's ELEMENT-level def-fill (the consumer's element taking the def's type + css — shell collapse, SED-1) is the sanctioned type-target delivery, not a child-wire re-typing. Any other case — count mismatch, non-zero offset, `children`/`content` seam targets — emits NO def children at all: the old clobber (real wires re-typed to def children, id-less orphans at host level, duplicated text) is a defect |
+| DFC-3 | Everything else (component-type/content/children wiring with real sub-trees) materializes through the D7 anchor-layer seam (ops.md §2.7) — the emit layer never invents def-children where the seam is the materialization path. Real children beyond a (never-applicable) covered slice would keep their own order — no drops, no re-typing |
+
+**Seam emission shapes (SED-1..3 — user ruling 2026-08-14; the seam's
+deliverable shape at the adapter boundary — FAMILY A):**
+
+| Rule | Statement |
+| --- | --- |
+| SED-1 | **`type`-target = SHELL COLLAPSE**: the consumer emits as the def's element — the element takes the def's TYPE and the def's CSS (classes + cssDef rules; the empty-host def-fill is correct for type-targets). No separate def-root element renders. The def's children emit as the consumer's seam-wired children (their wires from the seam child links, parent anchors on the consumer — ops.md ALS-2). The def's cssDef rules emit because the consumer has a renderable compiled state (STL-3) — they join the deduped styles block |
+| SED-2 | **`children`-target = ORIGINAL NODE DATA AS-IS + PROTOTYPE ADDED** (B1 clarification 2026-08-14): the consumer NEVER collapses and NEVER loses anything — it keeps its OWN element (authored type), its OWN authored text, and its OWN authored children UNTOUCHED; the anchor layer's DEF-ROOT element (the def's type + css incl. cssDef rules — def-root wire = the consumer's seam child link, `` `${wire}:0` ``) joins as an ADDITIONAL child AFTER the authored children (`div(shell text) > [p(authored), nav.nav-bar > logo]`). The def-root's children emit under it (e.g. `[logo, links, auth]`). The def-root's cssDef rules join the deduped styles block (STL-3/D4) — this is the component rule for children-targets, valid for EMPTY and NON-EMPTY hosts alike |
+| SED-3 | **`content`-target = TEXT ONLY** (unchanged): the consumer's content slot takes the def's `content` field value (ops.md ALS-7); no element-shape change, no children, no def-root element |
+
+Fail-states (TestWriter): a `children`-target consumer asserting NO separate
+def element (or the def's classes landing on the wrapper itself, or the
+wrapper's authored children/text dropped) FAILS (SED-2); a `type`-target
+consumer asserting the wrapper survives as a distinct element FAILS (SED-1);
+a `content`-target consumer asserting subtree delivery FAILS (SED-3).
+
+### 3.4.3 Empty placement-owner rule (user rules 2026-08-14, IMPLEMENTED)
+
+A placement-owner node (a `container`-role anchor — a drop-zone producer)
+with NO children at render time emits with `display: none` appended to its
+serialized style — UNLESS it carries renderable information of its own:
+an authored TEXT content or an authored inline `css.style` ("hide only
+containers with no renderable information" — refinement ruling). Rationale:
+an empty drop-zone must not clutter the page — the live-prod modal overlay
+(position: fixed; z-index: 9999; translucent background from its cssDef)
+grayed out the whole page while the zone was empty; but a styled empty
+container (the path-fork/fork-stress tree leaves with their levelCss
+styling + badge pseudo-elements) is CONTENT, not chrome, and must render.
+The legacy snapshot hides the same unstyled containers (`display: none` on
+the empty sidebar nav and the modal).
+
+| Rule | Contract |
+| --- | --- |
+| EMPTY-OWNER-1 | The state's own `anchors` contain a `container`-role anchor AND `children` is empty AND the state has NO authored `content` AND NO authored `css.style` ⇒ the emitted element's `css:style` gains `; display: none;` (or `display: none;` when the container has no authored style) |
+| EMPTY-OWNER-1a | An empty placement-owner WITH authored TEXT content is NOT hidden (text is renderable information) |
+| EMPTY-OWNER-1b | An empty placement-owner WITH an authored inline `css.style` is NOT hidden (styling is renderable information — the path-fork/fork-stress leaves) |
+| EMPTY-OWNER-2 | An AUTHORED `display` declaration on the container wins — the rule never overrides explicit author intent (a container explicitly styled `display: flex` stays flex) |
+| EMPTY-OWNER-3 | A container WITH children at render time (or a def-supplied subtree) gets no `display: none` |
+| EMPTY-OWNER-4 | The rule re-evaluates per render: a container that gains a child re-emits WITHOUT the hide (diffMinimal emits the `css:style` set op removing it); a container that loses all children re-hides |
+| EMPTY-OWNER-5 | Non-container nodes are never hidden by this rule (scope = placement owners only) |
+
+State/fail-state: container+empty+no-content+no-style → hidden (EMPTY-OWNER-1);
+empty WITH text → visible (1a); empty WITH style → visible (1b);
+container+child → visible (3); authored display → preserved (2);
+non-container empty → visible (5); update path → style set op (4). Applies
+to every emit path that renders the container's own element (plain,
+blocked-def and fork-arm paths — a def-fill renders children, so it is
+non-empty by construction).
 
 ---
 
@@ -379,3 +484,37 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | SCOPE-4 | both scopes | same `compile(slice)` primitive, entry-point parameter only |
 | SCOPE-5 | placement-path bootstrap (P3 §2.1) | `compilePath` path enumeration — third scope; 4095 path-states on pathKey wires from 23 nodes; incremental ops after bootstrap stay node-local (E2E-2/3/4) |
 | NVS-T1..T7 | one assertion test per §9 row NVS-1..NVS-7 | renderer input set contains none of the forbidden forms |
+
+### 10.6 cssDef rules + def-chain scoping (D4/D8, §3.4)
+
+| ID | State / fail-state | Expected |
+| --- | --- | --- |
+| STL-H1 | node with `css.cssDef` (plain rules), actionable state | one `styles` op; entries are rule strings `{selector}{kebab-case k: v; styles}` (STL-1) |
+| STL-H2 | cssDef with a NESTED `styles` value (media-query form) | recursive serialization: `@media …{sel{…}}` nested blocks inside the outer rule (STL-1) |
+| STL-H3 | TWO nodes owning the SAME cssDef rule (same signature) | emitted ONCE — rule-signature dedup across the whole render (STL-2); second occurrence contributes nothing |
+| STL-H4 | cssDef on a node with NO actionable state (dropped arm / owner-terminated `contentNodes`/`'component'`-token / unplaced / never-materialized def provider) | rule NOT emitted (STL-3, F10) — token-owned family-'in-tree' and prototype nodes NEVER emit rules |
+| STL-H5 | cssDef-less render (no actionable node owns any rule) | NO `styles` op at all — no empty `<style>` block, no empty styles prefix (STL-4, F11) |
+| STL-F1 | cssDef node with actionable state, styles op already coalesced | exactly ONE `styles` op per sweep, ≤1 (STL-4, R-ORD-6) |
+| STL-F2 | a `styles` op carrying a raw cssDef OBJECT (not a rule string) | rejected at the emit contract — the op payload is rule strings only (adapters.md boundary) |
+| DFC-H1 | fork-stress link-method node: `def.children` 1:1 covering the node's real children from wire 0 (link-method provenance, offset 0) | def re-types the covered real children (own css/props preserved); NO synthetic wires (DFC-1, F22) |
+| DFC-F1 | def-chain node with MISMATCHED counts (`def.children.length !== childWires.length`) | NO re-typing/aliasing of real child wires; def children NOT emitted by the host (out-of-tree pre-minted prototypes, DFC-2/3) — no id-less orphans, no duplicated text, real wires keep their own types and order |
+| DFC-F2 | component-type/content/children wiring with real sub-trees, OR a SEAM-TARGET def (`options.seam` set), OR a non-zero offset link def | never routed through the emit-time def chain — no def children emitted; materializes via the D7 anchor-layer seam (DFC-2/3, F23); the seam `type`-target's element-level def-fill (SED-1) is the sanctioned exception, NOT a child-wire chain |
+
+### 10.7 Seam emission shapes (SED-1..3, §3.4.2 — delivery-shape ruling 2026-08-14, SPEC-ENCODED)
+
+| ID | State / fail-state | Expected |
+| --- | --- | --- |
+| SED-H1 | `children`-target consumer with a def-root (def type/css + def children) — EMPTY or NON-EMPTY host | the consumer emits its OWN element (wrapper shell — authored type/css/text + authored children UNTOUCHED, B1) containing the DEF-ROOT element (`div > nav.nav-bar`, def-root wire `` `${wire}:0` `` AFTER the authored children); the def-root carries the def's type + classes; the def's cssDef rules appear ONCE in the styles block (D4 dedup); the def children (logo/links/auth) emit under the def-root in order (SED-2) |
+| SED-H2 | `type`-target consumer (def with type/css/children) | SHELL COLLAPSE: the consumer emits AS the def's element (def type + classes + cssDef rules in the styles block); NO separate def-root element; the def's children emit as the consumer's seam-wired children (SED-1) |
+| SED-H3 | `content`-target consumer (def with a `content` field) | the consumer's element renders the def's text in its content slot; no element-shape change, no children, no def-root element (SED-3, ops.md ALS-7) |
+| SED-F1 | `children`-target: wrapper asserted WITHOUT a separate def element (or def classes asserted on the wrapper itself) | FAIL — the wrapper keeps its own element/classes; the def element is its child (SED-2) |
+| SED-F2 | `type`-target: wrapper asserted as a distinct surviving element | FAIL — shell collapse (SED-1) |
+| SED-F3 | `content`-target: subtree delivery asserted | FAIL — text-only (SED-3) |
+| SED-F4 | def-root cssDef emitted twice (same rule signature via two seam consumers) | deduped to ONE rule in the styles block (STL-2/3, D4 interplay) |
+| EMPTY-H1 | placement-owner container, no children at render | element's `css:style` contains `display: none` (EMPTY-OWNER-1) |
+| EMPTY-H2 | placement-owner container WITH a child | NO `display: none` (EMPTY-OWNER-3) |
+| EMPTY-H3 | non-container node with no children | NO `display: none` (EMPTY-OWNER-5) |
+| EMPTY-H4 | empty container with authored `display` | authored display preserved (EMPTY-OWNER-2) |
+| EMPTY-H5 | update path: container gains a child → re-render | `css:style` SET op without `display: none` (EMPTY-OWNER-4) |
+| EMPTY-H6 | empty container WITH authored TEXT | NO `display: none` (EMPTY-OWNER-1a — text is renderable) |
+| EMPTY-H7 | empty container WITH authored `css.style` | NO `display: none` (EMPTY-OWNER-1b — style is renderable; the path-fork/fork-stress leaves) |

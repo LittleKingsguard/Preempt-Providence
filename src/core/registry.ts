@@ -2,9 +2,10 @@
 // (cascade-destroy + coalesced pass-2). Owns the module-level sets so the
 // Node class stays free of global-state bookkeeping.
 //
-// Imports Node only as a TYPE (erased at runtime), so there is no import
-// cycle with node.ts.
+// Imports Node and Link only as TYPES (erased at runtime), so there is no
+// import cycle with node.ts / link.ts.
 import type { Node } from './node.js'
+import type { Link } from './link.js'
 import type { NodeId } from './types.js'
 
 export const registered = new Set<Node>()
@@ -17,6 +18,37 @@ let sweepScheduled = false
 // handler-created nodes (no basis in root/payload arrays) are discarded once
 // they lose root visibility.
 const contentNodes = new Set<Node>()
+
+/** D8/F16 (B2) — the def-children prototype registry: per component LINK, the
+ *  pre-minted out-of-tree `'component'`-token prototype nodes minted at
+ *  translate for a value-carrying def binding (mint order = def.children
+ *  order). The D7 seam materialization (ops.md §2.7 ALS-1) and the emit-side
+ *  seam fill read it to wire the def's children onto the seam consumer. */
+const defPrototypes = new Map<Link, Node[]>()
+
+export function registerDefPrototypes(link: Link, protos: Node[]): void {
+  defPrototypes.set(link, protos)
+}
+
+export function defPrototypesFor(link: Link): Node[] {
+  return defPrototypes.get(link) ?? []
+}
+
+/** D8/ALS-1b (B3) — the def-ROOT prototype registry: per component LINK, the
+ *  pre-minted `'component'`-token prototype carrying the def's own root
+ *  element (type + css incl. cssDef) with family child links to the
+ *  def-children prototypes. The element-level carrier of the def's css —
+ *  wired as the seam consumer's child for `children`-targets (SED-2) and
+ *  merged into the consumer's element for `type`-targets (SED-1). */
+const defRootPrototypes = new Map<Link, Node>()
+
+export function registerDefRootPrototype(link: Link, root: Node): void {
+  defRootPrototypes.set(link, root)
+}
+
+export function defRootPrototypeFor(link: Link): Node | undefined {
+  return defRootPrototypes.get(link)
+}
 
 export function registerContentNode(node: Node): void {
   contentNodes.add(node)

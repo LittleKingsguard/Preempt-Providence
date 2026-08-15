@@ -372,10 +372,9 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
     })
 
     it('K8 gap — flat known-vocabulary targets warn component-target-gap, anchor kept, no synthesis', () => {
+      // the D7 seam set `type`/`content`/`children` is EXCLUDED from the gap
+      // (SPEC-ENCODED — they plan as seam candidates, options.seam = target)
       const targets = [
-        'type',
-        'content',
-        'children',
         'css',
         'css.id',
         'css.classes',
@@ -487,8 +486,8 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
           root: {
             type: 'app',
             component: [
-              { reference: 'a', value: 1, target: 'content' },
-              { reference: 'b', value: 2, target: 'content' },
+              { reference: 'a', value: 1, target: 'css.style' },
+              { reference: 'b', value: 2, target: 'css.style' },
             ],
           },
         },

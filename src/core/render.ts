@@ -45,6 +45,12 @@ export interface MinimalElement {
   props: Record<string, unknown>
   childOrder: NodeRef[]
   forkKey?: ForkPathKey
+  /** D4/STL-1 — the element's css.cssDef serialized to RULE STRINGS
+   *  `{selector}{kebab-case k: v; styles}` (media-query nesting serialized
+   *  recursively as nested blocks). Carried on the element so the diff's
+   *  sweep coalescer can dedup across the whole sweep and emit at most one
+   *  `styles` op (STL-2/STL-4, R-ORD-6). */
+  styles?: string[]
 }
 
 export function diffMinimal(prev: Map<NodeRef, MinimalElement> | null, next: MinimalElement[]): RenderOp[] {
@@ -111,6 +117,21 @@ export function diffMinimal(prev: Map<NodeRef, MinimalElement> | null, next: Min
       if (orderChanged || created.has(child)) ops.push({ kind: 'append', owner: el.wire, child })
     }
   }
+  // D4/STL-2/STL-4 (R-ORD-6) — the sweep coalescer: at most ONE `styles` op
+  // per sweep, its payload the deduped RULE STRINGS in first-seen order over
+  // the actionable node set. A cssDef-less sweep emits NO styles op (F11 —
+  // no empty `<style>` block, no empty styles prefix at the adapters).
+  const rules: string[] = []
+  const seen = new Set<string>()
+  for (const el of next) {
+    for (const rule of el.styles ?? []) {
+      if (!seen.has(rule)) {
+        seen.add(rule)
+        rules.push(rule)
+      }
+    }
+  }
+  if (rules.length > 0) ops.push({ kind: 'styles', cssDefs: rules })
   return ops
 }
 

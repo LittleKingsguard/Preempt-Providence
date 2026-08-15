@@ -1,5 +1,47 @@
 import type { ForkPathKey, MinimalElement, RenderAdapter, RenderOp } from './render.js'
-import type { NodeRef } from './types.js'
+import type { Anchor, NodeRef } from './types.js'
+import { kebabKey } from './translate.js'
+import { defPrototypesFor, defRootPrototypeFor } from './registry.js'
+
+/** D4/STL-1 — serialize one css.cssDef value (a `StyleNode[]` or a single
+ *  StyleNode `{selector, styles}`) into RULE STRINGS `{selector}{kebab-case
+ *  k: v; styles}`. A NESTED `styles` value (the media-query form
+ *  `{'.a': {...}}`) serializes recursively as nested `{selector}{…}` blocks
+ *  inside the outer rule. Non-array/non-object cssDef values (a stray string
+ *  like `'.x{}'`) contribute no rules. */
+export function cssDefRules(cssDef: unknown): string[] {
+  const entries = Array.isArray(cssDef)
+    ? cssDef
+    : cssDef !== null && typeof cssDef === 'object'
+      ? [cssDef]
+      : []
+  const out: string[] = []
+  for (const raw of entries) {
+    if (raw === null || typeof raw !== 'object') continue
+    const entry = raw as { selector?: unknown; styles?: unknown }
+    const sel = typeof entry.selector === 'string' ? entry.selector : ''
+    const styles = entry.styles
+    if (styles === null || typeof styles !== 'object' || Array.isArray(styles)) continue
+    out.push(`${sel}{${ruleBody(styles as Record<string, unknown>)}}`)
+  }
+  return out
+}
+
+/** STL-1 — the rule body: scalar entries serialize kebab-case `k: v;` (the
+ *  outer rule's form); a NESTED value serializes recursively as
+ *  `{selector}{k:v;…}` blocks (the media-query form, no outer spacing). */
+function ruleBody(styles: Record<string, unknown>, top = true): string {
+  let scalars = ''
+  let nested = ''
+  for (const [k, v] of Object.entries(styles)) {
+    if (v !== null && typeof v === 'object') {
+      nested += `${k}{${ruleBody(v as Record<string, unknown>, false)}}`
+    } else {
+      scalars += top ? `${kebabKey(k)}: ${String(v)};` : `${kebabKey(k)}:${String(v)};`
+    }
+  }
+  return scalars + nested
+}
 
 export interface MinimalElementSource {
   nodeId: string
@@ -67,12 +109,17 @@ function pathWireOf(s: { nodeId: string; pathKey?: ForkPathKey; forkKey?: ForkPa
   return isPathState(s) ? s.pathKey! : s.nodeId
 }
 
-/** Compiled-state reducer: props → `prop:*`, css → `css:*` EXCLUDING cssDef, content → `text`. */
+/** Compiled-state reducer: props → `prop:*`, css → `css:*` EXCLUDING cssDef
+ *  (cssDef → the element's `styles` RULE STRINGS, D4/STL-1), content → `text`. */
 export function minimalFromState(cs: MinimalElementSource): MinimalElement {
   const props: Record<string, unknown> = {}
+  const styles: string[] = []
   for (const [k, v] of Object.entries(cs.props ?? {})) props[`prop:${k}`] = v
   for (const [k, v] of Object.entries(cs.css ?? {})) {
-    if (k === 'cssDef') continue
+    if (k === 'cssDef') {
+      styles.push(...cssDefRules(v))
+      continue
+    }
     props[`css:${k}`] = v
   }
   if (cs.content !== undefined) props['text'] = cs.content
@@ -81,6 +128,7 @@ export function minimalFromState(cs: MinimalElementSource): MinimalElement {
   // conversion to child pathKey wires is the emitElements seam, which has the
   // full actionable set; single-state callers have no sibling context).
   const me: MinimalElement = { wire: pathWireOf(cs), type: cs.type, props, childOrder: [...(cs.children ?? [])] }
+  if (styles.length > 0) me.styles = styles
   if (cs.forkKey !== undefined) me.forkKey = cs.forkKey
   return me
 }
@@ -250,6 +298,7 @@ export function emitElements(
     children?: string[]
     bindings?: Record<string, unknown>
     forkKey?: ForkPathKey
+    anchors?: readonly Anchor[]
   }>,
   nodeById?: Map<string, EmitNodeSource> | null,
 ): MinimalElement[] {
@@ -306,14 +355,25 @@ export function emitElements(
   const defCovered = new Set<string>()
   for (const [wire, states] of groups) {
     const base = states[0]!
-    const def = Object.values(base.bindings ?? {}).find(isLinkDef)
-    if (!def) continue
+    const entry = Object.entries(base.bindings ?? {}).find(([, v]) => isLinkDef(v)) as [string, LinkDefSpec] | undefined
+    if (!entry) continue
+    const def = entry[1]
+    if (!linkChainAllowed(base, def, entry[0])) continue
     const offset = def.childOffset ?? 0
     const children = convertedOf(base) ?? base.children ?? []
     for (let i = 0; i < def.children.length; i += 1) {
       const cw = children[offset + i]
       if (cw) defCovered.add(cw)
     }
+  }
+  // D8/DFC-1..3 — real children whose wire emits STANDALONE (a non-covered
+  // group) must never also be pushed as def-branch defChildren: the blocked
+  // def branch's covered real children (no standalone state available, or a
+  // seam/mismatch block) join the element set only when nothing else emits
+  // their wire.
+  const standaloneWires = new Set<string>()
+  for (const [wire, states] of groups) {
+    if (!(states.length === 1 && defCovered.has(wire))) standaloneWires.add(wire)
   }
   for (const [wire, states] of groups) {
     const multi = states.length > 1
@@ -343,8 +403,12 @@ export function emitElements(
     // even for def-covered consumers: a covered consumer that is ITSELF a def
     // consumer (link-only chains — every level re-types the next) must still
     // emit its own defChildren, else the whole subtree below the covered node
-    // vanishes from the element set.
-    for (const c of emitted.defChildren ?? []) els.push(c)
+    // vanishes from the element set. D8/DFC-1..3 — real children with a
+    // standalone emission keep their OWN element (the blocked def branch
+    // never double-emits a wire).
+    for (const c of emitted.defChildren ?? []) {
+      if (!standaloneWires.has(c.wire)) els.push(c)
+    }
   }
   return els
 }
@@ -360,6 +424,10 @@ type EmitState = {
   children?: string[]
   bindings?: Record<string, unknown>
   forkKey?: ForkPathKey
+  /** the node's anchors (compiled states carry them) — D8/DFC-2: a seam
+   *  target anchor's `options.seam` marks the binding as seam-planned, and a
+   *  SEAM-TARGET def never drives an emit-time chain */
+  anchors?: readonly Anchor[]
 }
 
 /** First resolved binding whose value is a scalar (string/number) — the
@@ -387,6 +455,242 @@ function isLinkDef(v: unknown): v is LinkDefSpec {
     Array.isArray((v as { children?: unknown }).children)
 }
 
+/** D8/DFC-2 (F23) — a SEAM-TARGET binding (the node carries a `target` anchor
+ *  for the name with `options.seam` — translate.md TR-H15) NEVER drives an
+ *  emit-time chain: seam materialization is the D7 anchor layer's job. */
+function isSeamDefBinding(s: EmitState, name: string): boolean {
+  return (s.anchors ?? []).some(
+    (a) => a.role === 'target' && typeof a.target === 'string' && a.target === name
+      && a.options.seam !== undefined,
+  )
+}
+
+/** D8/DFC-1..3 (F22/F23) — the emit-time def-chain gate:
+ *  - a CHILDLESS host is always filled by the def (the seam slot / def-
+ *    provides-children case — path-emit P-EMIT-3, the [5]/[6] seam wrappers,
+ *    the fork-stress leaf clones): the def's children become the host's
+ *    emitted children;
+ *  - a SEAM-TARGET def NEVER re-types/aliases REAL authored children (DFC-2,
+ *    [14]) — the seam is the materialization path, the emit layer never
+ *    clobbers the host's own children;
+ *  - the chain runs ONLY for RE-TYPING-SPEC defs — every def child is a
+ *    re-typing spec (a `bind`-keyed spec OR a TYPE-ONLY spec with no
+ *    content/css/props/children/component beyond the type — the blind
+ *    emit-layer pin) — at offset 0 with the def's children covering the real
+ *    children from the first wire on (1:1 for bind-specs, >= for type-only
+ *    specs — the blind 2-specs-vs-1-child case);
+ *  - a DELIVERABLE-spec def (any def child carrying content/css/props/
+ *    children/component — the live-prod navBar/header/footer defs) NEVER
+ *    drives a chain: its subtree materializes through the seam (B1 ruling
+ *    2026-08-14 — the root's own source binding must not re-type its
+ *    children); no re-typing, no drops, no synthetic wires, real children
+ *    keep their own types and order. */
+function linkChainAllowed(s: EmitState, def: LinkDefSpec, name: string): boolean {
+  const childWires = s.children ?? []
+  if ((def.childOffset ?? 0) !== 0) return false
+  if (childWires.length === 0) return true
+  if (isSeamDefBinding(s, name)) return false
+  const retypingSpecs = def.children.every((c) => {
+    if (c === null || typeof c !== 'object') return false
+    if (typeof (c as { bind?: unknown }).bind === 'string') return true
+    return (c as { content?: unknown; css?: unknown; props?: unknown; children?: unknown; component?: unknown })
+      .content === undefined
+      && (c as { css?: unknown }).css === undefined
+      && (c as { props?: unknown }).props === undefined
+      && (c as { children?: unknown }).children === undefined
+      && (c as { component?: unknown }).component === undefined
+  })
+  if (!retypingSpecs) return false
+  const bindSpecs = def.children.every((c) => typeof (c as { bind?: unknown }).bind === 'string')
+  if (bindSpecs) return def.children.length === childWires.length
+  return def.children.length >= childWires.length
+}
+
+/** One def-child spec tree node: the deliverable spec data (type/content/
+ *  css/props/children — the authored def value) or a bind-spec re-type
+ *  target. */
+type DefChildSpec = LinkDefSpec['children'][number] & { children?: DefChildSpec[]; component?: unknown }
+
+/** The resolved seam/def binding for a compiled state: the FIRST binding
+ *  whose value is a def object — a SEAM-TARGETED def (a target anchor with
+ *  `options.seam` for the name — including LEAF defs with no children
+ *  array, SED-2/`[14]`) or a link-method/deliverable def (type + children
+ *  array). `content`-targets are found too — the caller skips the def
+ *  branch for them (SED-3 — text only). */
+function findDefBinding(
+  s: EmitState,
+): { name: string; def: LinkDefSpec & { content?: unknown; css?: Record<string, unknown>; children?: Array<DefChildSpec> }; seam: 'type' | 'content' | 'children' | undefined } | undefined {
+  for (const [name, v] of Object.entries(s.bindings ?? {})) {
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) continue
+    const d = v as { type?: unknown; children?: unknown }
+    if (typeof d.type !== 'string') continue
+    const seamAnchor = (s.anchors ?? []).find(
+      (a) => a.role === 'target' && typeof a.target === 'string' && a.target === name && a.options.seam !== undefined,
+    )
+    const seam = seamAnchor ? (seamAnchor.options.seam as 'type' | 'content' | 'children') : undefined
+    if (seam !== undefined || Array.isArray(d.children)) {
+      return { name, def: v as never, seam: seam as 'type' | 'content' | 'children' | undefined }
+    }
+  }
+  return undefined
+}
+
+/** SED-2 — the DEF-ROOT element: the def's own root element (def type +
+ *  css incl. cssDef rules + content) with the def's children nested under it
+ *  in order. `rootProto` is the pre-minted def-root prototype when the def
+ *  carries css (its serialized css enriches the element); `childProtos` zip
+ *  the def-children prototypes for the nested recursion. The wire is
+ *  synthetic — the prototype's id never surfaces in the element set. */
+function emitDefRootElement(
+  def: LinkDefSpec & { content?: unknown; css?: Record<string, unknown>; children?: Array<DefChildSpec> },
+  rootWire: string,
+  rootProto: (NodeLike & { anchors?: Anchor[] }) | undefined,
+  childProtos: Array<(NodeLike & { anchors?: Anchor[]; children?: NodeLike[] }) | undefined>,
+  layersSuffix: string | undefined,
+  nodeById: Map<string, EmitNodeSource> | null | undefined,
+  pathCtx: PathEmitContext | undefined,
+): { el: MinimalElement; flat: MinimalElement[] } {
+  const cprops: Record<string, unknown> = {}
+  const styles: string[] = []
+  if (def.content !== undefined) cprops['text'] = String(def.content)
+  if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
+  const css = rootProto?.css ?? def.css ?? {}
+  for (const [k, v] of Object.entries(css)) {
+    if (k === 'cssDef') {
+      styles.push(...cssDefRules(v))
+      continue
+    }
+    cprops[`css:${k}`] = v
+  }
+  const flat: MinimalElement[] = []
+  const children: MinimalElement[] = []
+  const childSpecs = def.children ?? []
+  for (let i = 0; i < childSpecs.length; i += 1) {
+    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx)
+    flat.push(...child.flat)
+    children.push(child.el)
+  }
+  const el: MinimalElement = { wire: rootWire, type: def.type, props: cprops, childOrder: children.map((c) => c.wire) }
+  if (styles.length > 0) el.styles = styles
+  flat.unshift(el)
+  return { el, flat }
+}
+
+/** D7/D8 — recursive def-fills-host emission: build the element for one def
+ *  child and its full nested subtree (the deliverable children ride the
+ *  def's own spec tree). `proto` is the pre-minted `'component'`-token
+ *  prototype node for this def child when available (the seam registry zip):
+ *  its real css/props enrich the element, its family children zip with the
+ *  nested specs, and its anchors resolve NESTED seam consumers (a def child
+ *  carrying `component: {target, reference}` — the live-prod auth-div inside
+ *  the nav-bar). The wire is synthetic (`<host>:<bind>` for bind-specs,
+ *  `<host>:<i>` for deliverable specs) — the prototypes' ids never surface
+ *  in the element set (the seam links the REAL nodes; emission renders the
+ *  def's data). */
+function emitDefChildTree(
+  spec: DefChildSpec,
+  index: number,
+  parentWire: string,
+  proto: (NodeLike & { anchors?: Anchor[]; children?: NodeLike[] }) | undefined,
+  layersSuffix: string | undefined,
+  nodeById: Map<string, EmitNodeSource> | null | undefined,
+  pathCtx: PathEmitContext | undefined,
+): { el: MinimalElement; flat: MinimalElement[] } {
+  const bind = (spec as { bind?: unknown }).bind
+  const wire = typeof bind === 'string' ? `${parentWire}:${bind}` : `${parentWire}:${index}`
+  const cprops: Record<string, unknown> = {}
+  const styles: string[] = []
+  let type = spec.type
+  if (spec.content !== undefined) cprops['text'] = String(spec.content)
+  if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
+  for (const [k, v] of Object.entries(proto?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
+  for (const [k, v] of Object.entries(proto?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
+  const flat: MinimalElement[] = []
+  const children: MinimalElement[] = []
+  const childSpecs = spec.children ?? []
+  const childProtos = proto ? (proto.children ?? []) : []
+  for (let i = 0; i < childSpecs.length; i += 1) {
+    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx)
+    flat.push(...child.flat)
+    children.push(child.el)
+  }
+  // a nested SEAM consumer (a def child carrying component: {target, ...}
+  // with no authored children): resolve its def off the prototype node's
+  // target anchor link and deliver per the delivery-shape ruling (SED-1..3):
+  // `'content'` = TEXT only (F13/ALS-7); `'type'` = SHELL COLLAPSE (the
+  // element takes the nested def's type + css incl. cssDef rules + children);
+  // `'children'` = the nested DEF-ROOT element becomes this element's child
+  // (the element keeps its own shell).
+  if (childSpecs.length === 0 && proto && Array.isArray(proto.anchors)) {
+    const seamTarget = proto.anchors.find(
+      (a) => a.role === 'target' && typeof a.target === 'string' && a.options.seam !== undefined,
+    )
+    if (seamTarget) {
+      const value = seamTarget.link.anchorsOf('source').find((p) => p.value !== undefined)?.value
+        ?? seamTarget.link.anchorsOf('duplex').find((p) => p.value !== undefined)?.value
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        const nested = value as { type?: string; content?: unknown; children?: unknown; css?: Record<string, unknown> }
+        if (seamTarget.options.seam === 'content') {
+          if (nested.content !== undefined) cprops['text'] = String(nested.content)
+        } else if (seamTarget.options.seam === 'type') {
+          // SED-1 — the element collapses into the nested def's element
+          const nestedRoot = defRootPrototypeFor(seamTarget.link)
+          const css = nestedRoot?.css ?? nested.css ?? {}
+          for (const [k, v] of Object.entries(css)) {
+            if (k === 'cssDef') styles.push(...cssDefRules(v))
+            else cprops[`css:${k}`] = v
+          }
+          if (typeof nested.type === 'string') type = nested.type
+          if (nested.content !== undefined) cprops['text'] = String(nested.content)
+          if (Array.isArray(nested.children) && nested.children.length > 0) {
+            const nestedProtos = defPrototypesFor(seamTarget.link)
+            for (let i = 0; i < nested.children.length; i += 1) {
+              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx)
+              flat.push(...child.flat)
+              children.push(child.el)
+            }
+          }
+        } else {
+          // SED-2 — the nested DEF-ROOT element becomes this element's child
+          // (this element keeps its own shell; its own text is dropped — the
+          // def-root is the content carrier)
+          delete cprops['text']
+          const nestedRoot = defRootPrototypeFor(seamTarget.link)
+          const nestedProtos = defPrototypesFor(seamTarget.link)
+          const rootTree = emitDefRootElement(
+            nested as LinkDefSpec & { content?: unknown; css?: Record<string, unknown>; children?: Array<DefChildSpec> },
+            `${wire}:0`,
+            nestedRoot,
+            nestedProtos,
+            undefined,
+            nodeById,
+            pathCtx,
+          )
+          flat.push(...rootTree.flat)
+          children.push(rootTree.el)
+        }
+      }
+    }
+  }
+  const el: MinimalElement = { wire, type, props: cprops, childOrder: children.map((c) => c.wire) }
+  if (styles.length > 0) el.styles = styles
+  flat.unshift(el)
+  return { el, flat }
+}
+
+/** EMPTY-OWNER (user rule 2026-08-14) — append `display: none` to the style
+ *  of an empty placement-owner container UNLESS an authored display
+ *  declaration exists (author intent wins). */
+function hideEmptyContainer(props: Record<string, unknown>): void {
+  const style = String(props['css:style'] ?? '')
+  if (/display\s*:/.test(style)) return
+  props['css:style'] = style ? `${style}; display: none;` : 'display: none;'
+}
+
+/** The minimal node surface the def-tree emission reads (the live harness
+ *  passes the real Node objects; unit states may pass nothing). */
+type NodeLike = { css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> }
+
 /** Per-path emit context passed down from emitElements (the full actionable
  *  set is the only place the child-state wires are knowable — §4.2). */
 interface PathEmitContext {
@@ -407,47 +711,166 @@ function emitOne(
   // fork arm on `nodeId#<i>`; a family/non-path state on its nodeId.
   const wire = isPathState(s) ? s.pathKey! : armIdx !== undefined ? `${s.nodeId}#${armIdx}` : s.nodeId
   const props: Record<string, unknown> = {}
+  const styles: string[] = []
   for (const [k, v] of Object.entries(s.props ?? {})) props[`prop:${k}`] = v
-  for (const [k, v] of Object.entries(s.css ?? {})) props[`css:${k}`] = v
+  for (const [k, v] of Object.entries(s.css ?? {})) {
+    // R6 — css.cssDef is never a `css:cssDef` set prop (D4): the rules ride
+    // the element's `styles` field for the sweep coalescer (STL-1)
+    if (k === 'cssDef') {
+      styles.push(...cssDefRules(v))
+      continue
+    }
+    props[`css:${k}`] = v
+  }
 
   // component-link layer: a resolved def object supplies the consumer's
   // children (prototype-as-child: the def links the children, deciding their
   // element type + ancestry suffix). The consumer keeps its OWN type unless it
   // is a pure link consumer (no scalar binding) — a node that is ALSO a values
   // child keeps its authored type so the diff never re-creates it (type
-  // changes would replace the element and break element identity).
-  const def = Object.values(s.bindings ?? {}).find(isLinkDef)
-  if (def && armIdx === undefined) {
-    const parentLayers = s.props?.['stress:layers'] ?? ''
-    const offset = def.childOffset ?? 0
-    const childWires = s.children ?? []
-    const reTyped = def.children.map((spec, i) => {
-      const cw = childWires[offset + i] ?? `${wire}:${spec.bind}`
-      const cprops: Record<string, unknown> = { text: String(spec.content ?? '') }
+  // changes would replace the element and break element identity). D8/DFC-1..3:
+  // the chain is scoped to the allowed gate (linkChainAllowed); a BLOCKED def
+  // (seam-target, count mismatch, non-zero offset) never re-types the host or
+  // invents def children — the real children keep their own wires, types and
+  // order (blocked defChildren carry the child's OWN type when knowable, else
+  // the host's authored type — never the def's re-type spec). SED-1..3 (the
+  // delivery-shape ruling): a seam `children`-target keeps its OWN shell with
+  // the DEF-ROOT element as its child; a seam `type`-target collapses into
+  // the def's element (def type + css); a seam `content`-target delivers text
+  // only (the def branch never fires — SED-3).
+    const defEntry = findDefBinding(s)
+    const def = defEntry?.def
+    const seam = defEntry?.seam
+    if (def && armIdx === undefined && seam !== 'content') {
+      const parentLayers = s.props?.['stress:layers'] ?? ''
+      const offset = def.childOffset ?? 0
+      const childWires = s.children ?? []
+      const allowed = linkChainAllowed(s, def, defEntry!.name)
+      if (seam === 'children' || (allowed && childWires.length === 0)) {
+        const layersSuffix =
+          def.childLayersSuffix && parentLayers ? `${parentLayers}|${def.childLayersSuffix}` : undefined
+        const seamTarget = (s.anchors ?? []).find(
+          (a) => a.role === 'target' && typeof a.target === 'string' && a.target === defEntry!.name,
+        )
+        const protos = seamTarget ? defPrototypesFor(seamTarget.link) : []
+        const defRootProto = seamTarget ? defRootPrototypeFor(seamTarget.link) : undefined
+        if (seam === 'children') {
+          // SED-2 — SHELL + DEF-ROOT CHILD (B1 clarification 2026-08-14): the
+          // consumer NEVER collapses — it keeps its OWN element, its OWN
+          // authored text and its OWN authored children UNTOUCHED; the
+          // anchor layer's DEF-ROOT element (def type + css incl. cssDef
+          // rules) joins as an ADDITIONAL child. `div(shell text) >
+          // [p(authored), nav.nav-bar > logo]` — the component rule for a
+          // children-target: original node data as-is, prototype node added.
+          const rootWire = `${wire}:0`
+          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx)
+          if (s.content !== undefined) props['text'] = s.content
+          const el: MinimalElement = { wire, type: s.type, props, childOrder: [...childWires, rootWire] }
+          if (styles.length > 0) el.styles = styles
+          if (s.forkKey !== undefined) el.forkKey = s.forkKey
+          return { el, defChildren: rootTree.flat }
+        }
+      if (seam === 'type') {
+        // SED-1 — SHELL COLLAPSE: the consumer element IS the def's element
+        // (def type + css incl. cssDef rules); the def's children emit as its
+        // seam-wired children; NO separate def-root element renders.
+        const defCss = defRootProto?.css ?? (def as { css?: Record<string, unknown> }).css
+        if (defCss) {
+          for (const [k, v] of Object.entries(defCss)) {
+            if (k === 'cssDef') styles.push(...cssDefRules(v))
+            else props[`css:${k}`] = v
+          }
+        }
+        const trees = (def.children ?? []).map((spec, i) => emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx))
+        const bound = scalarBinding(s.bindings)
+        if (bound !== undefined) props['text'] = bound
+        const el: MinimalElement = { wire, type: def.type, props, childOrder: trees.map((t) => t.el.wire) }
+        if (styles.length > 0) el.styles = styles
+        if (s.forkKey !== undefined) el.forkKey = s.forkKey
+        return { el, defChildren: trees.flatMap((t) => t.flat) }
+      }
+      // non-seam empty-host def-fill (P-EMIT-3, the fork-stress leaf clones):
+      // the def's children — recursed through the def's spec tree (deliverable
+      // children) or the bind-specs — become the host's emitted children. The
+      // pre-minted prototypes (the seam registry, in def-children order)
+      // enrich the elements with the real css/props and resolve NESTED seam
+      // consumers. Wires are synthetic — never the prototypes' ids.
+      const trees = def.children.map((spec, i) => emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx))
+      const bound = scalarBinding(s.bindings)
+      if (bound !== undefined) props['text'] = bound
+      const type = bound !== undefined ? s.type : def.type
+      const el: MinimalElement = { wire, type, props, childOrder: trees.map((t) => t.el.wire) }
+      if (styles.length > 0) el.styles = styles
+      if (s.forkKey !== undefined) el.forkKey = s.forkKey
+      return { el, defChildren: trees.flatMap((t) => t.flat) }
+    }
+    const reTyped: MinimalElement[] = []
+    // D8/DFC-1..3 — a BLOCKED def still lets every REAL child join the set as
+    // its own element (no drops, no re-typing, no synthetic wires): the real
+    // children carry their OWN type when knowable (else the host's authored
+    // type) and their own css/props — never the def's re-type spec.
+    const specs: Array<{ bind: string; type: string; content?: unknown; css?: Record<string, unknown>; props?: Record<string, unknown> }> =
+      allowed
+        ? def.children
+        : childWires.map((_, i) => ({ bind: String(i), type: s.type }))
+    for (let i = 0; i < specs.length; i += 1) {
+      const spec = specs[i]!
+      const cw = childWires[offset + i]
+      // DFC-1/F22 — no synthetic `${wire}:${bind}` wires EXCEPT where the
+      // allowed chain fills a CHILDLESS host (the def provides children — the
+      // path-emit P-EMIT-3 pin) and the legacy non-link def chain; a BLOCKED
+      // def never synthesizes (def children beyond the real children are
+      // simply not emitted — no id-less orphans, no dropped wires).
+      const resolvedWire = cw ?? (allowed ? `${wire}:${spec.bind}` : undefined)
+      if (resolvedWire === undefined) continue
+      const cprops: Record<string, unknown> = {}
+      if (allowed) cprops['text'] = String(spec.content ?? '')
       if (def.childLayersSuffix && parentLayers) cprops['prop:stress:layers'] = `${parentLayers}|${def.childLayersSuffix}`
       // a REAL child (covered by the def, standalone emission skipped) keeps
       // its OWN authored css/props — the def's css/props are a fallback only
-      // for synthetic `${wire}:${bind}` children with no graph node behind
-      // them. (Per-node unique stress css is authored on the child node.)
-      // It ALSO keeps its OWN children: a real child may itself have a child
-      // subtree (the next layer), which the emitted element must adopt so
-      // diffMinimal nests them (the "boxes must nest" contract). For a
-      // path-state child the wire is its pathKey — the node id comes from the
-      // emit context, and its own children are its path-derived child wires.
-      const childNodeId = pathCtx?.pathNodeOf.get(cw) ?? cw
-      const childNode = nodeById?.get(childNodeId) as unknown as { css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> } | undefined
+      // for synthetic children with no graph node behind them. It ALSO keeps
+      // its OWN children: a real child may itself have a child subtree (the
+      // next layer), which the emitted element must adopt so diffMinimal
+      // nests them (the "boxes must nest" contract). For a path-state child
+      // the wire is its pathKey — the node id comes from the emit context.
+      const childNodeId = pathCtx?.pathNodeOf.get(resolvedWire) ?? resolvedWire
+      const childNode = nodeById?.get(childNodeId) as unknown as { type?: string; css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> } | undefined
       for (const [k, v] of Object.entries(childNode?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
       for (const [k, v] of Object.entries(childNode?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
-      const childOrder = pathCtx?.pathStateChildren.get(cw)
+      const childOrder = pathCtx?.pathStateChildren.get(resolvedWire)
         ?? (childNode ? (childNode.children ?? []).map((c) => c.id) : [])
-      return { wire: cw, type: spec.type, props: cprops, childOrder }
-    })
-    // full child order: untouched children (before the def slice) + def-typed
-    const order = [...childWires.slice(0, offset), ...reTyped.map((c) => c.wire)]
+      // D8 — a blocked def never re-types: the covered real child keeps its
+      // OWN type (when knowable) — never the def spec's re-type target
+      const type = allowed ? spec.type : (childNode?.type as string | undefined) ?? s.type
+      reTyped.push({ wire: resolvedWire, type, props: cprops, childOrder })
+    }
+    if (allowed) {
+      // the def decides the consumer's type + child order (1:1 re-typing)
+      const order = [...childWires.slice(0, offset), ...reTyped.map((c) => c.wire)]
+      const bound = scalarBinding(s.bindings)
+      if (bound !== undefined) props['text'] = bound
+      const type = bound !== undefined ? s.type : def.type
+      const el: MinimalElement = { wire, type, props, childOrder: order }
+      if (styles.length > 0) el.styles = styles
+      if (s.forkKey !== undefined) el.forkKey = s.forkKey
+      return { el, defChildren: reTyped }
+    }
+    // DFC-1..3 — blocked: the host emits its OWN type + authored children in
+    // their own order; no drops, no re-typing, no synthetic wires. The real
+    // children (no standalone state in this set) join as their own elements.
     const bound = scalarBinding(s.bindings)
-    if (bound !== undefined) props['text'] = bound
-    const type = bound !== undefined ? s.type : def.type
-    const el: MinimalElement = { wire, type, props, childOrder: order }
+    const content = bound !== undefined ? bound : s.content
+    if (content !== undefined) props['text'] = content
+    if (
+      (s.anchors ?? []).some((a) => a.role === 'container')
+      && (s.children ?? []).length === 0
+      && content === undefined
+      && (s.css?.style === undefined || s.css.style === '')
+    ) {
+      hideEmptyContainer(props)
+    }
+    const el: MinimalElement = { wire, type: s.type, props, childOrder: [...childWires] }
+    if (styles.length > 0) el.styles = styles
     if (s.forkKey !== undefined) el.forkKey = s.forkKey
     return { el, defChildren: reTyped }
   }
@@ -455,6 +878,23 @@ function emitOne(
   const bound = scalarBinding(s.bindings)
   const content = bound !== undefined ? bound : s.content
   if (content !== undefined) props['text'] = content
+  // EMPTY-OWNER (user rules 2026-08-14) — a placement-owner container with
+  // NO children at render time emits `display: none` UNLESS it carries
+  // renderable information of its own: an authored TEXT content or an
+  // authored inline `css.style` (an empty drop-zone must not clutter the
+  // page — the modal overlay / empty sidebar case — but a container that
+  // renders something — the path-fork/fork-stress tree leaves with their
+  // levelCss styling and badge pseudo-elements — is content, not chrome).
+  // An AUTHORED display declaration also wins (author intent overrides
+  // emptiness). Applies to the container's own element wherever it emits
+  // (plain, blocked-def and fork arms — a container with a def is non-empty
+  // by construction).
+  const emptyOwnerHide =
+    (s.anchors ?? []).some((a) => a.role === 'container')
+    && (s.children ?? []).length === 0
+    && s.content === undefined
+    && (s.css?.style === undefined || s.css.style === '')
+  if (emptyOwnerHide) hideEmptyContainer(props)
   if (armIdx === undefined) {
     const node = nodeById?.get(s.nodeId)
     const handlers = node ? (node.handlers ?? []) : []
@@ -462,11 +902,13 @@ function emitOne(
       if (h && typeof h === 'object' && typeof h.event === 'string') props[`on:${h.event}`] = true
     }
     const el: MinimalElement = { wire, type: s.type, props, childOrder: [...(s.children ?? [])] }
+    if (styles.length > 0) el.styles = styles
     if (s.forkKey !== undefined) el.forkKey = s.forkKey
     return { el }
   }
   // fork arms are leaves in this page (no children on the themed divs)
   const el: MinimalElement = { wire, type: s.type, props, childOrder: [] }
+  if (styles.length > 0) el.styles = styles
   if (s.forkKey !== undefined) el.forkKey = s.forkKey
   return { el }
 }

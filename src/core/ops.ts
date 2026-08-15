@@ -1,6 +1,6 @@
 import type { LayerMutationList, LinkConfigNameHub, MutationOp, NodeId, PlacementAttachOp, PlacementTrigger, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
-import { Node, findCycle } from './node.js'
+import { Node, findCycle, ancestorServesZone } from './node.js'
 import { Link } from './link.js'
 
 export interface OpContext {
@@ -87,13 +87,6 @@ export interface PlacementAttachResult {
  *  node's) ancestor chain: an ancestor offering the zone → the container
  *  anchor is NOT minted (warn `placement-name-vetoed`, warn+skip, never a
  *  throw). Content anchors (the consumer side) are never vetoed. */
-function ancestorServesZone(node: Node, zone: string): boolean {
-  for (let cur: Node | null = node.parent; cur; cur = cur.parent) {
-    if (cur.anchors.some(a => a.role === 'container' && typeof a.target === 'string' && a.target === zone)) return true
-  }
-  return false
-}
-
 /** P3 §3.3/§9-Q2 — the placement-attach executor: mints the node's `content`
  *  anchor(s) per the requested container names (preference order, dedup
  *  keep-first — re-attach is idempotent) and mints/ensures the `container`

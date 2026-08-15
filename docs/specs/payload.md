@@ -64,6 +64,34 @@ interface ReverseTranslateOptions {
 function reverseTranslate(root: Node, opts?): LegacyInitialData
 ```
 
+**Envelope shape contract (D2, 2026-08-14 — SPEC-ENCODED, fix pass PENDING;
+expect RED):** the reversed document ALWAYS
+emits `content` as an ARRAY of payloads (`ContentPayload[]`) — the obsolete
+single-payload OBJECT form `{content, metadata}` is never emitted (it is
+outdated legacy; translate warns `payload-shape-obsolete` on ANY non-array
+`content`, translate.md §2/§3). `R-4`'s single-group `opts.content` emits a
+ONE-ELEMENT array.
+**Payload item content (D5, SPEC-ENCODED, fix pass PENDING):** payload
+`NodeData.content` values are TEXT
+only — the legacy dual-parse (content as NodeData ⇒ children) is discontinued;
+children reverse from the `children` field only.
+**D3/F7 reverse (2026-08-14 — SPEC-ENCODED, fix pass PENDING; expect RED):**
+a node's serialized `css.style` STRING is
+ALWAYS parsed back to the `Record<string,string>` object on reverse — no
+provenance tracking; a string-authored style becomes an object on save
+(legacy format is object-native, accepted). The string form is never
+re-emitted.
+**D1/F2 reverse (2026-08-14 — SPEC-ENCODED, fix pass PENDING; expect RED):**
+placement reverses as ONE flat object per
+node (merged anchors: `placementName` + `targetPlacement: string[]` in mint
+order); only a multi-producer node (2+ container anchors) emits the `placement`
+ARRAY (one entry per container anchor, content names in the first entry);
+re-translate of either emission is anchor-identical (translate.md TR-H11).
+**D7/F20 reverse (2026-08-14 — SPEC-ENCODED, fix pass PENDING; expect RED):**
+seam-wired def children are NOT emitted as
+the consumer's authored `data.children` — they stay in the def's JSON home;
+the consumer reverses with its authored children ONLY (translate.md TR-H16).
+
 | # | Rule |
 | --- | --- |
 | R-1 | Template root + authored in-tree children (EXCLUDING content roots) → `template.root`/`template.children`; content roots emit as ContentPayload items, never template children — placement/component-induced tree state is reversed. |
@@ -87,4 +115,13 @@ function reverseTranslate(root: Node, opts?): LegacyInitialData
 | R-H1 | reverse round-trip | template/content/payloads/placements/components preserved |
 | R-H2 | user edit | preserved in reversed output |
 | R-H3 | per-payload groups | separate ContentPayloads |
+| R-H4 | reverse emits the payload envelope (D2) | `content` is ALWAYS a `ContentPayload[]` array — never the obsolete `{content, metadata}` single-object form; `opts.content` emits a one-element array |
+| R-H5 | payload item `content` values (D5) | text-only on reverse — NodeData values never appear in `content` (dual-parse discontinued); children reverse from `children` only |
+| R-H6 | reverse style strings (D3/F7) | a serialized `css.style` string parses back to the `Record<string,string>` OBJECT on reverse — ALWAYS, no provenance (string-authored styles become objects on save; accepted, legacy-format is object-native) |
+| R-H7 | reverse placement shape (D1/F2) | ONE flat object per node (merged anchors; `targetPlacement: string[]` mint order); multi-producer node (2+ container anchors) → `placement` ARRAY (one entry per container anchor, content names in the first entry); re-translate anchor-identical |
+| R-H8 | seam children on reverse (D7/F20) | seam-wired def children NOT emitted as the consumer's `data.children` — they stay in the def's JSON home; the consumer reverses with its authored children only |
 | R-F1 | dropped/refreshed payload | no longer present in reversed output |
+
+> **Rows R-H4..R-H8 are SPEC-ENCODED (2026-08-14 — fix pass PENDING; a
+> TestWriter reading this file alone expects RED for these rows until the
+> engine fix pass lands).**

@@ -68,6 +68,12 @@ export interface AnchorOptions {
    *  resolved value is applied to; persisted so reverseTranslate can re-emit
    *  `target` on the round-trip (translate.ts sets it at synthesis). */
   applyPath?: string
+  /** D7/F17 — the anchor-layer seam marker: `true` on layer-materialized seam
+   *  parent/child anchors (F15/F19 — the role-scoped single-parent exemption
+   *  and the familyLinkFor filter key off it); the persisted seam target
+   *  STRING (`'type'|'content'|'children'`) on translate-planned target
+   *  anchors (F17 — assembly distinguishes seam candidates by it). */
+  seam?: boolean | 'type' | 'content' | 'children'
 }
 export interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link; value?: unknown; owner?: import('./node.js').Node }
 // `value` is the provided/deployed cell for `source`/`duplex` anchors (api.md §4.1: source provides

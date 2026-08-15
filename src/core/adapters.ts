@@ -39,6 +39,10 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   private readonly mount: HTMLElement
   private readonly onEvent: ((wire: NodeRef, event: Event) => void) | undefined
   private stylesEl: HTMLElement | null = null
+  /** D4 (DOM-H29) — per-adapter-instance rule-signature dedup set: a rule
+   *  string whose exact signature was already appended is SKIPPED (the emit
+   *  side already dedups per sweep; this is the boundary's defensive half). */
+  private readonly stylesSeen = new Set<string>()
 
   constructor(mount: HTMLElement, opts: DomAdapterOptions = {}) {
     if (typeof document === 'undefined') {
@@ -131,7 +135,12 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   }
 
   styles(cssDefs: unknown[]): void {
-    for (const def of cssDefs) this.ensureStyles(String(def))
+    for (const def of cssDefs) {
+      const rule = String(def)
+      if (this.stylesSeen.has(rule)) continue
+      this.stylesSeen.add(rule)
+      this.ensureStyles(rule)
+    }
   }
 
   private ensureStyles(def: string): void {
@@ -157,9 +166,17 @@ interface SSRFragmentState {
 
 type StylesBuffer = string[] & ((cssDefs: unknown[]) => void)
 
-function makeStylesBuffer(buffer: string[]): StylesBuffer {
+/** D4 (FRG-H27) — the SSR styles buffer: pushes dedup per-adapter-instance
+ *  on the exact rule string (the same rule never appends twice — mirror of
+ *  the DomAdapter's stylesSeen, the defensive boundary half). */
+function makeStylesBuffer(buffer: string[], seen: Set<string>): StylesBuffer {
   const call = (cssDefs: unknown[]): void => {
-    for (const def of cssDefs) buffer.push(String(def))
+    for (const def of cssDefs) {
+      const rule = String(def)
+      if (seen.has(rule)) continue
+      seen.add(rule)
+      buffer.push(rule)
+    }
   }
   const fn = call as unknown as StylesBuffer
   Object.defineProperty(fn, Symbol.iterator, { value: buffer[Symbol.iterator].bind(buffer) })
@@ -190,12 +207,14 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
   readonly fragments: Map<string, FragmentDescriptor> = new Map()
   readonly styles: StylesBuffer
   private readonly stylesBuffer: string[] = []
+  /** D4 (FRG-H27) — per-adapter-instance rule-signature dedup set. */
+  private readonly stylesSeen = new Set<string>()
   private readonly states = new WeakMap<FragmentDescriptor, SSRFragmentState>()
   private readonly created: FragmentDescriptor[] = []
   private rootKey: string | undefined
 
   constructor() {
-    this.styles = makeStylesBuffer(this.stylesBuffer)
+    this.styles = makeStylesBuffer(this.stylesBuffer, this.stylesSeen)
   }
 
   createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): FragmentDescriptor {
@@ -223,7 +242,12 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
     } else if (name.startsWith('css:')) {
       const key = name.slice(4)
       if (key === 'cssDef') {
-        this.stylesBuffer.push(String(val))
+        // D4 — rule strings only, deduped per adapter instance (FRG-H27)
+        const rule = String(val)
+        if (!this.stylesSeen.has(rule)) {
+          this.stylesSeen.add(rule)
+          this.stylesBuffer.push(rule)
+        }
       } else {
         const attr = key === 'classes' ? 'class' : key
         if (val === undefined) state.attrs.delete(attr)
