@@ -1,5 +1,5 @@
 // src/core/legacy-handlers.ts — the LEGACY-HANDLER RUNTIME BRIDGE
-// (docs/specs/legacy-handler-reuse-review.md §5/§6, decisions 3/4/5/6 +
+// (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review.md §5/§6, decisions 3/4/5/6 +
 // the user directive 2026-08-15: children-injection ships via the
 // origin-owner `layer-apply` op). Adapter-internal compat surface for the
 // legacy (event, context) handler convention:
@@ -44,6 +44,11 @@ export interface LegacyNodeView {
   readonly props: Record<string, unknown>
   readonly content: unknown
   readonly handlers: unknown[]
+  /** AUTH-SEAM (2026-08-15) — the live node's id STRING: the honest
+   *  reference for the runtime mutation channel (clientAPI.apply(id, …) —
+   *  state-slice / destroy on an in-tree node). A string, never a Node
+   *  reference — the "exposes no node reference" rule is preserved. */
+  readonly id: string
   /** READ-ONLY maps of the node's component anchor reference names (fresh
    *  copies — `.delete()` etc. are graph no-ops) */
   readonly targetComponents: Map<string, { reference: string }>
@@ -208,6 +213,10 @@ class NodeViewImpl implements LegacyNodeView {
 
   get state(): NodeState {
     return this.node.state
+  }
+
+  get id(): string {
+    return this.node.id
   }
 
   get type(): string {

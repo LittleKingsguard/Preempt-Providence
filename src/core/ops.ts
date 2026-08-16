@@ -150,7 +150,7 @@ export function derivePlacementTrigger(linkName: string, containerAnchorMinted: 
   return { kind: 'placement', linkName, direction: containerAnchorMinted ? 'container-added' : 'content-added' }
 }
 
-/** ORIGIN-OWNER (legacy-handler-reuse-review §12.4, unpark acceptance) — the
+/** ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4, unpark acceptance) — the
  *  layer-apply executor: ONE atomic mint-and-wire op. Mints each NodeData as
  *  a family child of the target (appended after the current children), marks
  *  each node's `originLayer` + registers it in the module-level minted-set

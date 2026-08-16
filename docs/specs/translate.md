@@ -305,7 +305,7 @@ targets.
 | `css.style` | Style dict | `Record<string,string>` | injects style key-value pairs | NOT implemented (gap) |
 | `css.style.<property>` | Style property | string/numeric CSS value | injects one inline style property | NOT implemented (gap) |
 | `handlers` | Handlers list | `HandlerDef`/`Handler` or array | injects into `node.handlers` | NOT implemented (gap) |
-| `handlers.<eventName>` | Event binding | `HandlerDef` or JS string body | binds one event/lifecycle hook (`handlers.click`, `handlers.submit`, …). Legacy lifecycle hook NAMES (`handlers.beforeAssembly`, `handlers.beforePreprocess`, `handlers.afterAssembly`, …) are DELIBERATELY NOT SUPPORTED in the new version — no mapping; as a TARGET PATH they warn `handler-phase-unknown` + skip (N5 — the 3-phase set is closed; event-only reuse); separately, a handler DEF whose `phase` is a legacy lifecycle name warns `handler-phase-unknown` (K8, closed 3-set) and the definition is skipped | **HANDLER-SEAM (D6 un-park, LANDED 2026-08-15)** — the event suffix plans WITHOUT the `component-target-gap` warn (`options.handlerEvent` persisted verbatim, F17-style); the def registers by reference and compile materializes ONE provenance-marked handlers layer on the consumer (handlers.md §6); legacy lifecycle names as the suffix stay excluded |
+| `handlers.<eventName>` | Event binding | `HandlerDef` or JS string body | binds one event/lifecycle hook (`handlers.click`, `handlers.submit`, …). Legacy lifecycle hook NAMES (`handlers.beforeAssembly`, `handlers.beforePreprocess`, `handlers.afterAssembly`, …) are DELIBERATELY NOT SUPPORTED in the new version — no mapping; as a TARGET PATH they warn `handler-phase-unknown` + skip (N5 — the 3-phase set is closed; event-only reuse); separately, a handler DEF whose `phase` is a legacy lifecycle name warns `handler-phase-unknown` (K8, closed 3-set) and the definition is skipped | **HANDLER-SEAM (D6 un-park, LANDED 2026-08-15)** — the event suffix plans WITHOUT the `component-target-gap` warn (`options.handlerEvent` persisted verbatim, F17-style); the def registers by reference and compile materializes ONE provenance-marked handlers layer on the consumer (handlers.md §6); legacy lifecycle names as the suffix stay excluded — **EXCEPT `afterAssembly` (the AUTH-SEAM carve-out, 2026-08-16 — decisions.md AUTH-SEAM row):** it maps to the `after-compile` PHASE (`handlerPhase: 'after-compile'` planned on the anchor, `AnchorOptions.handlerPhase` — the consumer's ASSEMBLY is its after-compile pass; tests AU1-AU3); the def-root NEVER executes the handler — the compiled entries COPY onto the TYPE-target consumer (`seam-handlers-def` layer) which re-homes the def's children in-tree |
 | `component` | Nested binding | `ComponentBinding` or array | injects nested component bindings onto the host's `component` array | NOT implemented (gap) |
 
 **Core binding semantics (legacy, §6.3 of RENDER_PROCESS_NOTES.md):**
@@ -321,9 +321,13 @@ targets.
   workers are Phase 4 (`componentAssembly`) and Phase 5 (`slotAssembly`) in
   `RENDER_PROCESS_NOTES.md` §6.3's PhaseRegistry numbering (canon, with
   `componentRouting` = 3). Worker NAMES are the stable reference — this spec
-  and the review doc ("Phase 5") each follow one numbering; legacy lifecycle
-  HOOK names (e.g. `beforeAssembly`) are deliberately NOT mapped to the new
-  3-phase set — `handler-phase-unknown` warn at translate (K8, DECIDED).
+   and the review doc ("Phase 5") each follow one numbering; legacy lifecycle
+   HOOK names (e.g. `beforeAssembly`) are deliberately NOT mapped to the new
+   3-phase set — `handler-phase-unknown` warn at translate (K8, DECIDED).
+   The ONE carve-out (AUTH-SEAM, 2026-08-16): `handlers.afterAssembly`
+   maps to the `after-compile` PHASE via the component binding
+   (`handlerPhase: 'after-compile'` on the anchor) — see decisions.md
+   AUTH-SEAM row.
 - **Empty placeholders are a legitimate pattern**: legacy templates
   deliberately declare `{ "reference": "MyComponent" }` (no `value`, no
   `target`) as placeholders whose value arrives via SSR payload injection —
@@ -387,7 +391,8 @@ targets.
   entry; `placement: []` stays a legal empty list, no warn),
   `handler-phase-unknown` (AP13, closed 3-set at
   translate.ts:177 — raw legacy names never dispatch, guard lives at
-  translate), `handler-body-invalid` (NP11 — the pre-kernel non-function-body
+  translate; the ONE carve-out is `handlers.afterAssembly` → the
+  `after-compile` PHASE, AUTH-SEAM 2026-08-16 — decisions.md AUTH-SEAM row), `handler-body-invalid` (NP11 — the pre-kernel non-function-body
   THROW is downgraded to warn+skip per TR-F2; a body STRING that fails to
   compile or evaluate to a function also warns + skips),
   `handler-format-invalid` (FORMAT MARKER, LANDED 2026-08-15 — a `format`

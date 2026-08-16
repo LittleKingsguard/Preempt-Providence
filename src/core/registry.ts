@@ -101,8 +101,9 @@ export function defRootPrototypeFor(link: Link): Node | undefined {
   return defRootPrototypes.get(link)
 }
 
-// Origin tracking (the ORIGIN-OWNER element, legacy-handler-reuse-review
-// §12.4.3/4 — A1): the module-level minted-set record — minted node id →
+// Origin tracking (the ORIGIN-OWNER element, archive/reviews/2026-08-16/
+// 2026-08-16-legacy-handler-reuse-review §12.4.3/4 — A1): the module-level
+// minted-set record — minted node id →
 // origin layer id. It SURVIVES creator death (a moved minted node under a
 // non-origin permanent parent is promoted by the teardown, never left
 // permanently reverse-excluded) and is the rollback handle (one layer id →

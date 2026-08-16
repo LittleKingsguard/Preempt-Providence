@@ -68,6 +68,10 @@ export interface AnchorOptions {
    *  resolved value is applied to; persisted so reverseTranslate can re-emit
    *  `target` on the round-trip (translate.ts sets it at synthesis). */
   applyPath?: string
+  /** AUTH-SEAM (2026-08-15) — `handlers.afterAssembly` maps to a PHASE: the
+   *  N5 carve-out for the one legacy lifecycle name with a semantic home
+   *  (after-compile = the consumer's assembly). */
+  handlerPhase?: string
   /** HANDLER-SEAM (2026-08-15, D6 un-park) — a `handlers.<event>` binding's
    *  event suffix, verbatim: the consumer's handler layer fires on that event. */
   handlerEvent?: string
@@ -82,7 +86,7 @@ export interface AnchorOptions {
    *  STRING (`'type'|'content'|'children'`) on translate-planned target
    *  anchors (F17 — assembly distinguishes seam candidates by it). */
   seam?: boolean | 'type' | 'content' | 'children'
-  /** ORIGIN-OWNER (legacy-handler-reuse-review §12.4.3) — the layer id that
+  /** ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4.3) — the layer id that
    *  minted an anchor: `layer-apply`'s decl child anchors carry it (admitted
    *  by the role-scoped single-parent exemption, like the seam flag). */
   origin?: string
@@ -134,7 +138,7 @@ export interface PlacementAttachOp {
   names: string[]
   trigger?: PlacementTrigger
 }
-/** ORIGIN-OWNER (legacy-handler-reuse-review §12.4, unpark acceptance) — the
+/** ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4, unpark acceptance) — the
  *  atomic mint-and-wire structural op: mints each NodeData as a family child
  *  of `target` (family children ONLY — a NodeData `anchors` field is
  *  rejected/warned, A5), registers the minted set (per-node `originLayer` +

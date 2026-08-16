@@ -1,6 +1,7 @@
 /**
- * Run C (RED) — the LEGACY-HANDLER RUNTIME BRIDGE (docs/specs/
- * legacy-handler-reuse-review.md §5/§6 + decisions 3/4/5/6 + the user
+ * Run C (RED) — the LEGACY-HANDLER RUNTIME BRIDGE (archive/reviews/
+ * 2026-08-16/2026-08-16-legacy-handler-reuse-review.md §5/§6 + decisions
+ * 3/4/5/6 + the user
  * directive 2026-08-15: children-injection SHIPS via the origin-owner
  * `layer-apply` op). Runtime surface: the NodeView proxy (WeakMap-backed per
  * live node), the arg-order wrapper + event stub, the per-member legacy
@@ -45,9 +46,12 @@ import { readFileSync } from 'node:fs'
 import { translateLegacy, reverseTranslate, type LegacyInitialData } from '../../src/core/translate.js'
 import { Supervisor } from '../../src/core/supervisor.js'
 import { EventBridge } from '../../src/core/events.js'
-import { dispatchEvent } from '../../src/core/handlers.js'
+import { dispatchEvent, dispatchPhase } from '../../src/core/handlers.js'
 import { mintedByOrigin } from '../../src/core/registry.js'
 import { getNodeView } from '../../src/core/legacy-handlers.js'
+import { emitElements, applyOps } from '../../src/core/render-helpers.js'
+import { diffMinimal } from '../../src/core/render.js'
+import { SSRFragmentAdapter } from '../../src/core/adapters.js'
 import type { Node as NodeType } from '../../src/core/node.js'
 
 afterEach(() => {
@@ -634,5 +638,280 @@ describe('ROUND-5 DEFECTS — #16 merge / #17 seed leak / #18 seam-install conta
     } finally {
       console.warn = orig
     }
+  })
+})
+
+describe('AUTH-SEAM — the def handler copies to the TYPE-target consumer (2026-08-15)', () => {
+  // The legacy auth pattern: the userAuthComponent def carries
+  // `handlers.afterAssembly` → AuthInitHandler. Per the design: the handler
+  // COPIES with the def's data onto the TYPE-target consumer (the assembled
+  // component node) — it never executes on the component prototype. The
+  // consumer collapses into the def element with the def children as its
+  // children; after-compile fires the copied phase handler with
+  // ctx.node = the consumer (children[0] = the button, in-tree).
+  const authEnvelope = (userData?: Record<string, unknown>) => ({
+    template: {
+      root: {
+        type: 'app',
+        component: [
+          {
+            reference: 'auth',
+            value: {
+              type: 'div',
+              css: { classes: ['user-auth-dropdown'] },
+              component: [{ target: 'handlers.afterAssembly', reference: 'AuthInitHandler' }],
+              children: [
+                { type: 'button', css: { classes: ['auth-main-btn'] }, content: 'Sign In / Profile', component: [{ target: 'handlers.click', reference: 'ToggleUserDropdown' }] },
+                { type: 'div', css: { classes: ['dropdown-menu'] }, children: [{ type: 'a', props: { href: '/profile' }, content: 'Profile' }] },
+              ],
+            },
+          },
+          {
+            reference: 'AuthInitHandler',
+            value: {
+              name: 'AuthInitHandler',
+              body: `(event, context) => {
+                const node = context.node;
+                const btn = node.children[0];
+                if (context.supervisor.userData) {
+                  context.clientAPI.apply(btn.id, { kind: 'state-slice', mutation: [{ targetProp: 'content', mode: 'replace', value: 'Profile ▼' }] });
+                } else {
+                  context.clientAPI.apply(btn.id, { kind: 'state-slice', mutation: [
+                    { targetProp: 'type', mode: 'replace', value: 'a' },
+                    { targetProp: 'content', mode: 'replace', value: 'Sign In' },
+                    { targetProp: 'props.href', mode: 'replace', value: '/api/oauth/login' },
+                  ]});
+                  context.clientAPI.apply(node.children[1].id, { kind: 'destroy' });
+                }
+                return 'auth-done';
+              }`,
+            },
+          },
+          { reference: 'ToggleUserDropdown', value: { name: 'ToggleUserDropdown', body: '() => {}' } },
+        ],
+        children: [{ type: 'div', props: { id: 'auth-consumer' }, component: [{ target: 'type', reference: 'auth' }] }],
+      },
+    },
+    content: [{ ...(userData ? { userData } : {}), content: [] }],
+  })
+
+  it('[AU1] handlers.afterAssembly plans a PHASE (after-compile) — NO handler-phase-unknown warn; the other lifecycle names still warn+skip', () => {
+    const t = translateLegacy(authEnvelope() as never)
+    expect(t.warnings.filter((w) => w.code === 'handler-phase-unknown')).toEqual([])
+    const t2 = translateLegacy({
+      template: { root: { type: 'app', component: [{ reference: 'x', value: { name: 'x', body: '() => {}' } }], children: [{ type: 'div', component: [{ reference: 'x', target: 'handlers.beforeAssembly' }] }] } },
+      content: [],
+    } as never)
+    expect(t2.warnings.map((w) => w.code)).toContain('handler-phase-unknown')
+  })
+
+  it('[AU2] the handler COPIES to the type-target consumer (never the prototype); WITHOUT userData the button converts to a Sign-In link and the dropdown is destroyed', () => {
+    const t = translateLegacy(authEnvelope() as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = t.root.children[0]!
+    // the handler ran on the CONSUMER (not a prototype): the phase entry lives there
+    expect(consumer.handlers?.some((h) => (h as { phase?: string; name?: string }).phase === 'after-compile' && (h as { name?: string }).name === 'AuthInitHandler')).toBe(true)
+    const results = dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    expect(String(results[0])).toContain('auth-done')
+    // the consumer's children are the def children (button + dropdown), in-tree
+    const btn = consumer.children[0]!
+    expect(btn.type).toBe('a')
+    expect(btn.content).toBe('Sign In')
+    expect(btn.props.href).toBe('/api/oauth/login')
+    expect(consumer.children[1]!.destroyed).toBe(true)
+  })
+
+  it('[AU3] WITH userData the button becomes the profile label and the dropdown survives', () => {
+    const t = translateLegacy(authEnvelope({ username: 'alice' }) as never)
+    expect(t.userData).toEqual({ username: 'alice' })
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = t.root.children[0]!
+    const results = dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    expect(String(results[0])).toContain('auth-done')
+    expect(consumer.children[0]!.content).toBe('Profile ▼')
+    expect(consumer.children[0]!.type).toBe('button')
+    expect(consumer.children[1]!.destroyed).not.toBe(true)
+  })
+
+  it('[N5] DEFECT #20 (top-level) — the destroyed adopted def child\'s element does NOT emit in the SED-1 def-fill either; the converted chip still does', () => {
+    const t = translateLegacy(authEnvelope() as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = t.root.children[0]!
+    dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    // the harness flow: dispatch → RECOMPILE → emit
+    const cr2 = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els = emitElements(cr2.actionable, byNode)
+    expect(els.some((e) => String(e.props['css:classes'] ?? '').includes('dropdown-menu'))).toBe(false)
+    const btnEl = els.find((e) => e.type === 'a' && String(e.props['css:classes'] ?? '').includes('auth-main-btn'))
+    expect(btnEl).toBeDefined()
+    expect(String(btnEl!.props['text'])).toBe('Sign In')
+  })
+})
+
+describe('AUTH-SEAM — NESTED seam consumer (def-in-def, 2026-08-16)', () => {
+  // The live-prod auth pattern NESTED: the nav def's child div is a
+  // `target: 'type'` seam consumer of the auth def — a PROTOTYPE-CHAIN node
+  // (family child of the nav def-root prototype, itself token-terminated),
+  // so it is never viable and the compile gate used to skip its seam
+  // install entirely (the nested defect: no copied phase handler → no
+  // dispatch, no adopted def children → the handler's children[0] is
+  // undefined, the state-slice gate rejects prototype nodes, and the
+  // nested-seam emit sources the SPEC data → the converted button never
+  // renders). The fix: the seam install runs for every SEAM-BEARING node
+  // regardless of viability; adopted def children are mutable in a
+  // prototype chain; the emit sources the mutated proto pass1.
+  const nestedEnvelope = (userData?: Record<string, unknown>) => ({
+    template: {
+      root: {
+        type: 'app',
+        component: [
+          {
+            reference: 'nav',
+            value: {
+              type: 'nav',
+              css: { classes: ['nav-bar'] },
+              children: [
+                { type: 'div', props: { id: 'auth-slot' }, component: [{ target: 'type', reference: 'auth' }] },
+              ],
+            },
+          },
+          {
+            reference: 'auth',
+            value: {
+              type: 'div',
+              css: { classes: ['user-auth-dropdown'] },
+              component: [{ target: 'handlers.afterAssembly', reference: 'AuthInitHandler' }],
+              children: [
+                { type: 'button', css: { classes: ['auth-main-btn'] }, content: 'Sign In / Profile', component: [{ target: 'handlers.click', reference: 'ToggleUserDropdown' }] },
+                { type: 'div', css: { classes: ['dropdown-menu'] }, children: [{ type: 'a', props: { href: '/profile' }, content: 'Profile' }] },
+              ],
+            },
+          },
+          {
+            reference: 'AuthInitHandler',
+            value: {
+              name: 'AuthInitHandler',
+              body: `(event, context) => {
+                const node = context.node;
+                const btn = node.children[0];
+                if (context.supervisor.userData) {
+                  context.clientAPI.apply(btn.id, { kind: 'state-slice', mutation: [{ targetProp: 'content', mode: 'replace', value: 'Profile ▼' }] });
+                } else {
+                  context.clientAPI.apply(btn.id, { kind: 'state-slice', mutation: [
+                    { targetProp: 'type', mode: 'replace', value: 'a' },
+                    { targetProp: 'content', mode: 'replace', value: 'Sign In' },
+                    { targetProp: 'props.href', mode: 'replace', value: '/api/oauth/login' },
+                  ]});
+                  context.clientAPI.apply(node.children[1].id, { kind: 'destroy' });
+                }
+                return 'auth-done';
+              }`,
+            },
+          },
+          { reference: 'ToggleUserDropdown', value: { name: 'ToggleUserDropdown', body: '() => {}' } },
+        ],
+        children: [{ type: 'div', component: [{ target: 'type', reference: 'nav' }] }],
+      },
+    },
+    content: [{ ...(userData ? { userData } : {}), content: [] }],
+  })
+
+  /** the NESTED auth consumer: the nav def child whose `type`-seam target
+   *  names 'auth' — a prototype-chain node (the top-level consumer targets
+   *  'nav' and is in-tree, so this find is unambiguous). */
+  const nestedConsumer = (t: ReturnType<typeof translateLegacy>) =>
+    t.nodes.find((n) =>
+      n.anchors.some((a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string'
+        && a.target === 'auth' && a.options.seam === 'type')
+      && n.state === 'prototype',
+    )!
+
+  it('[N1] the NESTED (prototype-chain) consumer installs the copied phase handler + adopted def children; WITHOUT userData the button converts and the dropdown is destroyed', () => {
+    const t = translateLegacy(nestedEnvelope() as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = nestedConsumer(t)
+    expect(consumer.state).toBe('prototype')
+    // the phase entry COPIES onto the nested consumer (the same cast pattern
+    // as AU2 — the nested seam install runs even though the node is never
+    // viable)
+    expect(consumer.handlers?.some((h) => (h as { phase?: string; name?: string }).phase === 'after-compile' && (h as { name?: string }).name === 'AuthInitHandler')).toBe(true)
+    // the def children are family-adopted onto the nested consumer
+    expect(consumer.children.length).toBe(2)
+    expect(consumer.children[0]!.type).toBe('button')
+    expect((consumer.children[0]!.css as { classes?: string[] }).classes).toContain('auth-main-btn')
+    expect((consumer.children[1]!.css as { classes?: string[] }).classes).toContain('dropdown-menu')
+    const results = dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    expect(String(results[0])).toContain('auth-done')
+    const btn = consumer.children[0]!
+    expect(btn.type).toBe('a')
+    expect(btn.content).toBe('Sign In')
+    expect(btn.props.href).toBe('/api/oauth/login')
+    expect(consumer.children[1]!.destroyed).toBe(true)
+  })
+
+  it('[N2] WITH userData the profile label lands on the nested button and the dropdown survives', () => {
+    const t = translateLegacy(nestedEnvelope({ username: 'alice' }) as never)
+    expect(t.userData).toEqual({ username: 'alice' })
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = nestedConsumer(t)
+    const results = dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    expect(String(results[0])).toContain('auth-done')
+    expect(consumer.children[0]!.content).toBe('Profile ▼')
+    expect(consumer.children[0]!.type).toBe('button')
+    expect(consumer.children[1]!.destroyed).not.toBe(true)
+  })
+
+  it('[N3] RENDER reflection: after dispatch + recompile the emitted auth-button element is the CONVERTED link (type a, text Sign In)', () => {
+    const t = translateLegacy(nestedEnvelope() as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = nestedConsumer(t)
+    dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    // the harness flow: dispatch → RECOMPILE → emit
+    const cr2 = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els = emitElements(cr2.actionable, byNode)
+    const btnEl = els.find((e) => e.type === 'a' && String(e.props['css:classes'] ?? '').includes('auth-main-btn'))
+    expect(btnEl).toBeDefined()
+    expect(btnEl!.type).toBe('a')
+    expect(String(btnEl!.props['text'])).toBe('Sign In')
+    expect(btnEl!.props['prop:href']).toBe('/api/oauth/login')
+    // the render probe: a fresh diff + adapter application surfaces the
+    // converted link in the HTML fragment
+    const ops = diffMinimal(null, els)
+    const adapter = new SSRFragmentAdapter()
+    applyOps(adapter, ops)
+    expect(adapter.toString()).toContain('<a')
+    expect(adapter.toString()).toContain('Sign In')
+  })
+
+  it('[N4] DEFECT #20 (nested) — the destroyed adopted def child\'s element does NOT emit (the def-fill prunes it); the converted chip still does', () => {
+    const t = translateLegacy(nestedEnvelope() as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    const consumer = nestedConsumer(t)
+    dispatchPhase(consumer, sup.handlerContext, 'after-compile')
+    // the harness flow: dispatch → RECOMPILE → emit
+    const cr2 = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const els = emitElements(cr2.actionable, byNode)
+    // the destroyed dropdown's element must NOT surface (def-fill prune)
+    expect(els.some((e) => String(e.props['css:classes'] ?? '').includes('dropdown-menu'))).toBe(false)
+    const btnEl = els.find((e) => e.type === 'a' && String(e.props['css:classes'] ?? '').includes('auth-main-btn'))
+    expect(btnEl).toBeDefined()
+    expect(String(btnEl!.props['text'])).toBe('Sign In')
   })
 })

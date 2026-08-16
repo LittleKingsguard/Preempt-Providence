@@ -619,13 +619,13 @@ describe('HANDLER-SEAM — handlers.<event> targets wire legacy handler defs (D6
     expect(anchor.options.handlerEvent).toBe('click')
   })
 
-  it('[H4] a legacy lifecycle name as the event suffix warns handler-phase-unknown + skips', () => {
+  it('[H4] a legacy lifecycle name as the event suffix warns handler-phase-unknown + skips (afterAssembly is the ONE carve-out — it maps to the after-compile phase, AU1)', () => {
     const t = translateLegacy({
       template: {
         root: {
           type: 'app',
           component: [{ reference: 'authInit', value: { name: 'authInit', body: '() => {}' } }],
-          children: [{ type: 'div', component: [{ reference: 'authInit', target: 'handlers.afterAssembly' }] }],
+          children: [{ type: 'div', component: [{ reference: 'authInit', target: 'handlers.beforeAssembly' }] }],
         },
       },
       content: [],

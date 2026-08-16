@@ -531,6 +531,52 @@ function assertLegacyShapeCensus(prof) {
   assertLegacyShapeCensus(prof)
 }
 
+// ---- handlers-scenarios page: blind test #5 (mocked real-world handlers) ----
+// Three legacy envelopes (mounts anon/alice — scenario 1's two userData
+// variants — + main — scenarios 2–10); the module translates each, mirrors
+// the supervisor's after-compile phase dispatch (AUTH-SEAM) + the page-load
+// 'load' dispatch, renders via DomAdapter, and runs the per-scenario runner
+// checks (the spec's intended outputs). Census guard: the page publishes
+// registered/inTree/unplaced/destroyed/prototypes/cloneOps on the profile
+// (captured pre-interaction — the builder ran the IDENTICAL core pipeline and
+// embedded the expected census in server-data); the smoke pins equality so
+// the census can never silently drift.
+{
+  const pageHtml = await readFile(`${base}demo/handlers-scenarios.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/handlers-scenarios.js`).catch((e) => {
+    console.error('handlers-scenarios failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__handlersScenariosDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__handlersScenariosProfile
+  if (!prof) {
+    console.error('handlers-scenarios profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  // performance guard (same contract as the other pages): the timed sections
+  // (load/compile/phase/emit/diff/apply/checks) must cover ~all of the total,
+  // so "total" can never hide an untimed pipeline (RCA:
+  // archive/reviews/2026-08-15/2026-08-15-session-defect-review.md).
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`handlers-scenarios profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  const serverData = JSON.parse(byId.get('server-data').textContent)
+  const exp = serverData.expected.census
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'prototypes', 'cloneOps']) {
+    if (typeof prof[f] !== 'number' || prof[f] !== exp[f]) {
+      console.error(`handlers-scenarios census mismatch on "${f}": page=${prof[f]} expected=${exp[f]}`)
+      process.exit(1)
+    }
+  }
+}
+
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
 
@@ -607,6 +653,10 @@ if (!banners.some((b) => b.includes('translate-showcase') && /0 failed/.test(b))
 }
 if (!banners.some((b) => b.includes('legacy-shape') && /0 failed/.test(b))) {
   console.error('legacy-shape page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('handlers-scenarios') && /0 failed/.test(b))) {
+  console.error('handlers-scenarios page did not complete its checks (banner missing)')
   process.exit(1)
 }
 

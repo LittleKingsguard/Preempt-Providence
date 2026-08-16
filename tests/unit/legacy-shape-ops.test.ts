@@ -429,8 +429,9 @@ describe('DEFECT-10 — removeLayer removes its generating anchors (node.md §6.
 })
 
 /**
- * Run B (RED) — the ORIGIN-OWNER element (docs/specs/legacy-handler-reuse-
- * review.md §12.4, the unpark acceptance criteria): the `layer-apply`
+ * Run B (RED) — the ORIGIN-OWNER element (archive/reviews/2026-08-16/
+ * 2026-08-16-legacy-handler-reuse-review.md §12.4, the unpark acceptance
+ * criteria): the `layer-apply`
  * structural op mints family children under the creator, registers the
  * minted set (module registry + node.originLayer), applies the anchor layer
  * to the creator, and tears the minted set down on removeLayer/
@@ -464,7 +465,7 @@ describe('DEFECT-10 — removeLayer removes its generating anchors (node.md §6.
  *      (like the runtimeMinted filter); a promoted node reverses as
  *      authored.
  */
-describe('ORIGIN-OWNER — the layer-apply op (legacy-handler-reuse-review §12.4)', () => {
+describe('ORIGIN-OWNER — the layer-apply op (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4)', () => {
   function mintingSuper(root: NodeType, creator: NodeType): Supervisor {
     const sup = new Supervisor(root, new Map([[root.id, root], [creator.id, creator]]))
     return sup

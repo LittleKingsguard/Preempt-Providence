@@ -189,3 +189,11 @@ async function emitPage(templateName, outName, doc, serverData) {
 {
   await import('./legacy-shape-page.mjs')
 }
+
+// ---- page 20: handlers-scenarios (blind test #5 — mocked real-world handlers) ---
+// The 10 mocked scenario cards (S1 ×2 userData variants + scenarios 2–10)
+// from one legacy envelope per mount; the builder writes
+// demo/handlers-scenarios.html (envelopes + the expected census) at import.
+{
+  await import('./handlers-scenarios-page.mjs')
+}

@@ -336,7 +336,7 @@ export class Node {
    *  placement/component logic — clone-instance is a legacy artifact guard).
    *  Runtime-only; never serialized. */
   runtimeMinted = false
-  /** ORIGIN-OWNER (legacy-handler-reuse-review §12.4.3) — the per-node
+  /** ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4.3) — the per-node
    *  origin marker: the layer id that minted this node via `layer-apply`.
    *  Doubles as the reverse-exclusion marker (nodeToLegacy's filter, like
    *  runtimeMinted). Cleared by the teardown's survivor promotion (a moved
@@ -627,7 +627,7 @@ export class Node {
     scheduleSweep(true)
   }
 
-  /** ORIGIN-OWNER teardown (legacy-handler-reuse-review §12.4.2/6, B2) — the
+  /** ORIGIN-OWNER teardown (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4.2/6, B2) — the
    *  PRE-DETACH survival predicate, per minted node, decided BEFORE any
    *  detach (post-detach a node is always 'unplaced', so the sweep gate can
    *  never see it in-tree): DOOMED iff the node's CURRENT family chain
@@ -1073,11 +1073,6 @@ export class Node {
     }
 
     for (const node of slice) {
-      if (!viable.has(node.id)) continue
-      const targetNames = node.anchors
-        .filter(a => a.role === 'target' && typeof a.target === 'string')
-        .map(a => a.target as string)
-
       // D7/ALS-1..7 (G23-G28) — the seam materialization runs for EVERY
       // viable node (DEFECT #10: the reversion pass must also run for
       // nodes whose seam anchors were REMOVED — a target-less node still
@@ -1085,7 +1080,23 @@ export class Node {
       // the compiled state reads the merged slot + the seam anchors.
       // Idempotent across recompiles (no re-mint, no double-add; the
       // reversion unwinds links whose driving seam anchor is gone).
-      node.materializeSeam()
+      // AUTH-SEAM (2026-08-16) — SEAM-BEARER carve-out: a nested seam
+      // consumer in a prototype chain (a def-in-def type/children seam —
+      // the live-prod auth div inside the nav def) is NEVER viable, yet it
+      // still needs the seam install: the phase-handler layer copy
+      // (copyDefPhaseHandlers), the def-children family adoption
+      // (adoptDefChildren) and the seam-link reversion. The seam install
+      // therefore runs for every seam-bearing node regardless of viability
+      // (destroyed nodes are exempt — addAnchor rejects destroyed writes).
+      const seamBearer = node.anchors.some(
+        (a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string'
+          && (a.options.seam !== undefined || a.options.handlerEvent !== undefined || a.options.handlerPhase !== undefined),
+      )
+      if ((seamBearer && !node.destroyed) || viable.has(node.id)) node.materializeSeam()
+      if (!viable.has(node.id)) continue
+      const targetNames = node.anchors
+        .filter(a => a.role === 'target' && typeof a.target === 'string')
+        .map(a => a.target as string)
 
       if (!hasAnyTarget || targetNames.length === 0) {
         if (hasAnyTarget && isResolutionParticipant(node) && !isSeamProvider(node)) continue
@@ -1440,6 +1451,13 @@ export class Node {
           this.addAnchor('parent', this, { seam: true, seamTarget: a.target }, seamLink)
           defRoot.addAnchor('child', defRoot, { seam: true }, seamLink)
         }
+        // AUTH-SEAM (2026-08-15): the def-root carries the def's own phase
+        // bindings (afterAssembly → after-compile, the N5 carve-out); the
+        // layer install runs here so the compiled entries exist to COPY onto
+        // the TYPE-target consumer (below — the def-root itself is
+        // token-terminated, never compiles on its own, and the harness's
+        // phase dispatch runs on in-tree nodes only).
+        if (defRoot.rebuildHandlerSeamLayer()) defRoot.compileLocal()
         for (const proto of protos) {
           if (defRoot.hasSeamParentFor(proto)) continue
           const seamLink = new Link({ name: 'parent-child' })
@@ -1452,6 +1470,15 @@ export class Node {
           }
         }
         continue
+      }
+      if (defRoot !== undefined) {
+        // AUTH-SEAM — the same consumer-side install for `type`-targets
+        // (SED-1 shell collapse): the def's phase handlers copy onto the
+        // consumer and the def's children are family-adopted (the auth
+        // pattern's component root = the consumer, not the prototype).
+        if (defRoot.rebuildHandlerSeamLayer()) defRoot.compileLocal()
+        this.copyDefPhaseHandlers(defRoot)
+        this.adoptDefChildren(defRoot)
       }
       for (const proto of protos) {
         if (this.hasSeamParentFor(proto)) continue
@@ -1483,11 +1510,11 @@ export class Node {
    *  arg order restored via eventStub + legacyContext; modern bodies raw).
    *  Idempotent: the rebuilt layer replaces in place. */
   private rebuildHandlerSeamLayer(): boolean {
-    const entries: Array<{ name: string; event: string; body: unknown }> = []
+    const entries: Array<{ name: string; event?: string; phase?: string; body: unknown }> = []
     let stale = false
     for (const a of this.anchors) {
       if ((a.role !== 'target' && a.role !== 'duplex') || typeof a.target !== 'string') continue
-      if (a.options.handlerEvent === undefined) continue
+      if (a.options.handlerEvent === undefined && a.options.handlerPhase === undefined) continue
       const def = handlerDef(a.target)
       if (def) {
         // DEFECT #18 fix (round 5): per-ENTRY containment — a malformed def
@@ -1496,7 +1523,9 @@ export class Node {
         // of the consumer's other bindings.
         try {
           const compiled = compileHandlerBody(def.body)
-          entries.push({ name: def.name, event: a.options.handlerEvent, body: def.format === 'legacy' ? wrapLegacyHandler(compiled, a.options.handlerEvent) : compiled })
+          entries.push(a.options.handlerPhase !== undefined
+            ? { name: def.name, phase: a.options.handlerPhase, body: def.format === 'legacy' ? wrapLegacyHandler(compiled, a.options.handlerPhase) : compiled }
+            : { name: def.name, event: a.options.handlerEvent!, body: def.format === 'legacy' ? wrapLegacyHandler(compiled, a.options.handlerEvent!) : compiled })
         } catch {
           console.warn(`handler-body-invalid at seam def "${a.target}": the body does not evaluate; entry skipped`)
         }
@@ -1513,6 +1542,65 @@ export class Node {
     if (idx !== -1) this.layers[idx] = layer
     else this.layers.push(layer)
     return true
+  }
+
+  /** AUTH-SEAM (2026-08-15) — copy the def-root's compiled phase-handler
+   *  entries onto the consumer's own seam layer (`seam-handlers-def`,
+   *  replace-in-place, idempotent). The consumer's own handlerEvent anchors
+   *  keep their `seam-handlers` layer; compileLocal's append-with-override
+   *  merge combines both. */
+  private copyDefPhaseHandlers(defRoot: Node): void {
+    const src = defRoot.layers.find((l) => l.sourceName === 'handler-seam')
+    const entries = src?.handlers ?? []
+    const idx = this.layers.findIndex((l) => l.id === 'seam-handlers-def')
+    if (entries.length === 0) {
+      if (idx !== -1) {
+        this.layers.splice(idx, 1)
+        this.compileLocal()
+      }
+      return
+    }
+    const layer: NodeLayer = { id: 'seam-handlers-def', sourceName: 'handler-seam', handlers: entries }
+    if (idx !== -1) this.layers[idx] = layer
+    else this.layers.push(layer)
+    this.compileLocal()
+  }
+
+  /** AUTH-SEAM (2026-08-15) — when the def-root carries a PHASE-handler
+   *  binding, the consumer RE-HOMES the def-root's children: the def child's
+   *  PRIMARY family edge moves from the def-root (token-terminated, never
+   *  compiles) to the consumer's family link — the assembled component's
+   *  child is an IN-TREE node, so the legacy handler's ctx.node.children
+   *  walk + the clientAPI apply surface land on it. Idempotent: children
+   *  already on the consumer's family link are skipped. The adopted child
+   *  anchor carries the seam flag (G24 admission — a second child anchor
+   *  beside the seam-wired one); the def child is marked runtimeMinted
+   *  (reverse-excluded like a clone-instance — the authored truth is the
+   *  def's children data, shipped via the seam binding). */
+  private adoptDefChildren(defRoot: Node): void {
+    const phaseBound = defRoot.anchors.some(
+      (a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string'
+        && a.options.handlerPhase !== undefined,
+    )
+    if (!phaseBound) return
+    const fam = this.familyLinkFor()
+    const kids = defRoot.children
+    let changed = false
+    for (let i = 0; i < kids.length; i++) {
+      const kid = kids[i]!
+      if (fam.anchorsOf('child').some((ca) => ca.target === kid)) continue
+      // the def-root's family link is dissolved as a whole (the sanctioned
+      // min-1-bypassing removal — S-R3.4, the same mechanism the ops detach
+      // uses when the last child leaves); every def child re-homes in one go
+      const primary = kid.childAnchor()
+      if (primary && linkOf(primary).anchorsOf('parent')[0]?.target === defRoot) {
+        linkOf(primary).destroy()
+      }
+      kid.runtimeMinted = true
+      kid.addAnchor('child', kid, { priority: i, seam: true }, fam)
+      changed = true
+    }
+    if (changed) this.compileLocal()
   }
 
   private clearHandlerSeamLayers(target: string): boolean {

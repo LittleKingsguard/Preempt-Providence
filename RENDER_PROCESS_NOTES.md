@@ -1184,5 +1184,87 @@ is recorded here and encoded in the specs listed.
   materializes through the D7 seam when wired by component assembly.
   Encoding: `docs/specs/render.md` §3.4.2/§10.6 DFC-1..3;
   `docs/specs/translate.md` §2 (D8 row); `docs/specs/ops.md` §2.7 (D8 note).
+- **DECIDED (AUTH-SEAM — the def phase handler copies to the TYPE-target
+  consumer; N5 carve-out for afterAssembly, 2026-08-16):**
+  `handlers.afterAssembly` is the ONE legacy lifecycle name with a semantic
+  home in the 3-phase set — a component binding
+  `{target: 'handlers.afterAssembly', reference: X}` maps to the
+  `after-compile` PHASE (the binding plans `handlerPhase: 'after-compile'`
+  on the anchor — `AnchorOptions.handlerPhase`; the consumer's ASSEMBLY is
+  its after-compile pass). The other legacy lifecycle names
+  (beforeAssembly, beforeRender, …) still warn `handler-phase-unknown` +
+  skip (N5 stands for them). **Consumer-copy model:** the def-root never
+  executes handlers — it is token-terminated, never compiles on its own,
+  and the harness's phase dispatch runs on in-tree nodes only — so the
+  def's compiled phase-handler entries COPY onto the TYPE-target consumer
+  (the `seam-handlers-def` layer, replace-in-place idempotent, merged
+  beside the consumer's own `seam-handlers` layer by compileLocal's
+  append-with-override). **Def-children re-homing:** when the def carries a
+  phase binding, the consumer RE-HOMES the def-root's family children —
+  the def child's PRIMARY family edge moves from the def-root's family link
+  (dissolved via `Link.destroy`, the S-R3.4 min-1-bypassing mechanism) to
+  the consumer's family link (the adopted child anchor carries the seam
+  flag — G24 multi-parent admission). The adopted children are genuinely
+  IN-TREE (their state walks to the consumer → root — the legacy write
+  surface `clientAPI.apply` state-slice/destroy works on them) and marked
+  `runtimeMinted` (reverse-excluded like clone-instances — the authored
+  truth is the def's children data). The seam parent anchors stay excluded
+  from the family walk (ALS-5 untouched); the adopted child appears in
+  `consumer.children` via the NEW family edge — the AUTH-SEAM carve-out to
+  the G27/F18 letter ("a seam-wired def child never appears in
+  consumer.children" stays true for the seam edge). **Retention destroy:**
+  runtime-minted nodes use `markDestroyed` instead of `destroy`/
+  `destroyLinks` — the family edge stays (the walk keeps the slot —
+  `children[i]` positions stable, siblings' shared family link untouched)
+  while the compile drops the node (destroyed ⇒ no states from the node itself);
+  the EMIT side prunes the destroyed adopted def child (DEFECT #20 FIXED
+  2026-08-16 — `defChildPruned` at every def-fill zip site + the blocked-def/
+  nodeById reTyped loop skips destroyed childNodes and filters their wires
+  out of the consumer's childOrder — tests N4/N5; the node's family subtree
+  (def grandchildren) drops out, state 'unplaced');
+  authored in-tree nodes keep the edge-dissolving destroy. **LegacyNodeView
+  gains `id`:** the live node's id STRING — the honest reference for
+  `clientAPI.apply(id, …)`; a string, never a Node reference (the "exposes
+  no node reference" rule preserved). **NESTED consumers (def-in-def,
+  2026-08-16):** a nested seam consumer in a PROTOTYPE chain (the auth div
+  inside the nav def's children — family child of the nav def-root
+  prototype, never viable) installs the seam the same way: the seam
+  install (handler layer copy + def-children family adoption + seam-link
+  reversion) runs for every SEAM-BEARING node regardless of viability
+  (the compile's per-node gate now materializes seam-bearers before the
+  viability continue); runtime-minted adopted def children are mutable
+  even in a prototype chain (the state-slice gate rejects only non-in-tree
+  non-runtimeMinted nodes — the def DATA is the authored truth, the
+  runtime instance is the delivered component); the def-fill emit sources
+  type/content from the mutated proto pass1 when the proto carries the
+  copied phase-handler layer (falling back to the def spec data). Encoding:
+  `docs/decisions.md` (AUTH-SEAM row), `docs/specs/handlers.md` §6,
+  `docs/specs/translate.md` §2.1; tests: legacy-bridge.test.ts AUTH-SEAM
+  (AU1-AU3 + N1-N5) + legacy-shape-translate H4 update.
+
+- **DECIDED (blind test #5 proofreader pins — 2026-08-16):**
+  (1) `receiveNextState({children: []})` is NOT a teardown — on a
+  layer-bearing node it is the OO-2 idempotent no-op; on a layer-less node
+  it applies an EMPTY layer that blocks later mints; the teardown
+  (removeLayer) is engine-side only, no legacy body op kind invokes it
+  (op kinds: state-slice/destroy/layer-apply/attach/detach/move/
+  clone-instance/placement-attach). (2) The layer-apply mint is ONE LEVEL —
+  a minted NodeData's nested `children` are silently dropped; an `anchors`
+  field warns `layer-apply-anchors-rejected` + is stripped (OO-3). (3)
+  Def-CHILD `handlers.<event>` bindings are INERT (planned-but-inert, the
+  S45 standing surprise — pinned, never dispatch; the def-root binding is
+  the only def-side wiring). (4) Def GRANDchildren of an adopted def child
+  render only while the adopted parent is in-tree + actionable (a
+  retention-destroyed adopted def child still emits its OWN element via the
+  blocked-def/nodeById path — destroyed flag ignored — while its subtree
+  drops). (5) The AUTH-SEAM type-target consumer emits the BLOCKED-DEF
+  shape (own element, own authored type + css — the SED-1 def-css merge
+  does not fire; the def's classes are not findable on the consumer). (6)
+  The userData capture is automatic at translate (module slot) — the engine
+  Supervisor has no userData member/constructor option; manual assignment
+  on the engine object is a harmless no-op for bodies. Encoding:
+  `docs/specs/handlers.md` §6, `docs/specs/ops.md` §2.8 OO-7,
+  `docs/specs/render.md` SED-1, `docs/decisions.md` AUTH-SEAM row,
+  `docs/defects.md` (OPEN standing surprise + #15 row).
 
 (TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — handlers-scenarios: mocked real-world handler scenarios (blind test #5)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .scenario-card, .comments-panel, .weather-card, .product-list, .search-wrap,
+    .tabs, .newsletter-form, .broken-widget, .toast-stack, .multi-panel,
+    .site-header, .chip-slot, .user-auth-dropdown, .dropdown-menu, .toast,
+    .result-item, .comment, .tab, .tab-panel, .cart-badge, .cart-header {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .comment { background: #eef4ef; }
+    .result-item { background: #eef4ff; }
+    .toast { border: 1px solid #2a7; background: #e6f7ec; padding: 8px; display: inline-block; margin-left: 6px; }
+    .toast-stack { min-height: 2.2em; border-style: solid; }
+    .tab.is-active, .tab-panel.is-active { background: #cfe8ff; border-color: #267; }
+    .cart-badge { background: #ffe08a; border: 1px solid #b98; border-radius: 10px; padding: 0 8px; }
+    .auth-main-btn, .logout-btn, .add-btn, .small-btn, .weather-btn, .toast-trigger,
+    .toast-dismiss, #newsletter-submit { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; }
+    .dropdown-menu { border: 1px solid #789; box-shadow: 2px 2px 6px rgba(0,0,0,.15); background: #fff; width: 10em; }
+    .input-error { border-color: #c33 !important; background: #fdeaea !important; }
+    .is-cold { background: #dbe9ff; }
+    .is-warm { background: #fff0d6; }
+    .touched { border-color: #2a7 !important; background: #e6f7ec !important; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="handlers-scenarios">
+  <!--
+    ============================================================================
+    HANDLERS-SCENARIOS — blind test #5 (docs/specs/handlers-scenarios.md).
+    The page renders MOCKED real-world handler use cases through the LANDED
+    legacy-handler surface. The page input is a LEGACY JSON envelope
+    (translate.md §1 LegacyInitialData); handler bodies ship as function-STRING
+    data (the seam default 'legacy' format — the bridge wraps them so bodies
+    receive `(event, context)`, handlers.md §6). The page module
+    (demo/handlers-scenarios.js) is CORE ONLY (dist/core/*) + the envelope
+    data + the harness; there is NO page-side feature logic for any scenario —
+    a use case needing an outside script/function is a data-authoring mistake.
+
+    The harness mirrors the supervisor's after-compile phase dispatch by hand
+    (the render-new.mjs pattern): compile -> recordResolved -> dispatch
+    after-compile on every node whose handlers carry the phase -> recompile ->
+    emit. The page-load 'load' dispatch fires on every load-bound node before
+    the first render; the runner checks dispatch the click/input/submit events
+    with their args and assert the INTENDED OUTPUTS of the spec.
+
+    SECTION MAP (scenario -> mount -> documentation)
+    ----------------------------------------------------------------------------
+    1.  Auth dropdown (AUTH-SEAM)   #mount-s1-anon + #mount-s1-alice
+        (rendered TWICE: no-userData / userData {username:'alice'})
+                                    -- decisions.md AUTH-SEAM row; handlers.md §6;
+                                       legacy-bridge AU1-AU3 (the def phase entry
+                                       copies to the type-target consumer; def
+                                       children re-home in-tree; userData-driven
+                                       chip conversion; retention destroy)
+    2.  Comments panel (mocked)     #mount-main s2-card
+                                    -- handlers.load + layer-apply children
+                                       injection (ops.md §2.8 OO-7), idempotent
+                                       re-injection (OO-2); teardown is
+                                       engine-side only (OO-5 removeLayer — no
+                                       body op kind invokes it; Clear destroys
+                                       each minted comment via clientAPI)
+    3.  Weather card (mocked API)   #mount-main s3-card
+                                    -- event args (event.value), state-slice
+                                       content/props/css writes, NodeView css read
+    4.  Cart badge counter          #mount-main s4-card
+                                    -- parent walk + findNode honest classes
+                                       query, content read + write
+    5.  Search filter (mocked data) #mount-main s5-card
+                                    -- input event + event.value; the FIRST
+                                       dispatch injects the filtered set,
+                                       re-dispatch never accumulates (the
+                                       OO-2 layer-apply no-op)
+    6.  Tabs is-active toggling     #mount-main s6-card
+                                    -- event stub target, family-children
+                                       iteration, css class writes
+    7.  Form submit validation      #mount-main s7-card
+                                    -- preventDefault, args, two targets in one
+                                       body (findNode + writes)
+    8.  Throwing-handler containment #mount-main s8-card
+                                    -- pre-throw write lands; the dispatch
+                                       result carries the contained Error
+    9.  Toast + authored dismiss    #mount-main s9-card
+                                    -- layer-minted LEAF child (the mint
+                                       drops nested children AND anchors — the
+                                       dismiss binding is AUTHORED beside the
+                                       stack); destroy (retention)
+    10. Multi-handler node          #mount-main s10-card
+                                    -- load + click on ONE node (D16
+                                       append-with-override merge)
+    ============================================================================
+  -->
+
+  <main>
+    <h1>handlers-scenarios — mocked real-world handler scenarios (blind test #5)</h1>
+    <p class="goals">
+      Ten mocked real-world use cases driven ENTIRELY from LEGACY JSON envelopes
+      + the documented core interfaces (<code>translateLegacy → Supervisor →
+      EventBridge → compile → recordResolved → dispatchPhase/dispatchEvent →
+      emitElements / diffMinimal / applyOps (DomAdapter)</code>). Handler bodies
+      are function-STRING data (the seam's <code>(event, context)</code>
+      legacy format); the harness dispatches <code>after-compile</code> on the
+      AUTH-SEAM phase targets and <code>load</code> on every load-bound node at
+      page load, then the runner checks dispatch the rest and assert the
+      spec's intended outputs. The banner is <code>handlers-scenarios</code>;
+      a profile line (<code>[handlers-scenarios:profile]</code>) mirrors the
+      other pages' <code>acc()</code> instrumentation.
+    </p>
+
+    <!-- Framework input: the LEGACY envelopes (translateLegacy input), keyed
+         by mount: anon / alice (scenario 1's two userData variants) + main
+         (scenarios 2–10). -->
+    <script id="preempt-initial-data" type="application/json">{"anon":{"template":{"root":{"type":"div","props":{"id":"s1a-root"},"children":[{"type":"header","props":{"id":"s1a-header"},"css":{"classes":["site-header"]},"children":[{"type":"span","props":{"id":"s1a-brand"},"content":"Preempt News"},{"type":"div","props":{"id":"s1a-chip"},"css":{"classes":["chip-slot"]},"component":[{"reference":"userAuth","target":"type"}]}]}]},"component":[{"reference":"userAuth","value":{"type":"div","css":{"classes":["user-auth-dropdown"]},"component":[{"target":"handlers.afterAssembly","reference":"AuthInit"}],"children":[{"type":"button","props":{"id":"s1a-btn"},"css":{"classes":["auth-main-btn"]},"content":"Account"},{"type":"div","props":{"id":"s1a-dropdown"},"css":{"classes":["dropdown-menu"]},"content":"Menu: log out (the logout control is the authored button in the header)"}]}},{"reference":"AuthInit","value":{"name":"AuthInit","body":"function (event, context) {\n  var node = context.node;\n  var ud = context.supervisor ? context.supervisor.userData : null;\n  var kids = node && node.children ? node.children : [];\n  if (kids.length < 2) return;\n  if (ud && ud.username) {\n    kids[0].receiveNextState({ content: 'Profile \\u25bc' });\n  } else {\n    kids[0].receiveNextState({ type: 'a', props: { href: '/api/oauth/login' }, content: 'Sign In' });\n    context.clientAPI.apply(kids[1].id, { kind: 'destroy' });\n  }\n}"}},{"reference":"Logout","value":{"name":"Logout","body":"function (event, context) {\n  var container = event.target;\n  var chip = null;\n  while (container && !chip) {\n    chip = container.findNode({ classes: ['chip-slot'] });\n    if (!chip) container = container.parent;\n  }\n  if (!chip) return;\n  var kids = chip.children || [];\n  if (kids.length >= 2) {\n    context.clientAPI.apply(kids[1].id, { kind: 'destroy' });\n    kids[0].receiveNextState({ content: 'Sign In' });\n  }\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"alice":{"template":{"root":{"type":"div","props":{"id":"s1b-root"},"children":[{"type":"header","props":{"id":"s1b-header"},"css":{"classes":["site-header"]},"children":[{"type":"span","props":{"id":"s1b-brand"},"content":"Preempt News"},{"type":"div","props":{"id":"s1b-chip"},"css":{"classes":["chip-slot"]},"component":[{"reference":"userAuth","target":"type"}]},{"type":"button","props":{"id":"s1b-logout"},"css":{"classes":["logout-btn"]},"content":"Log out","component":[{"target":"handlers.click","reference":"Logout"}]}]}]},"component":[{"reference":"userAuth","value":{"type":"div","css":{"classes":["user-auth-dropdown"]},"component":[{"target":"handlers.afterAssembly","reference":"AuthInit"}],"children":[{"type":"button","props":{"id":"s1b-btn"},"css":{"classes":["auth-main-btn"]},"content":"Account"},{"type":"div","props":{"id":"s1b-dropdown"},"css":{"classes":["dropdown-menu"]},"content":"Menu: log out (the logout control is the authored button in the header)"}]}},{"reference":"AuthInit","value":{"name":"AuthInit","body":"function (event, context) {\n  var node = context.node;\n  var ud = context.supervisor ? context.supervisor.userData : null;\n  var kids = node && node.children ? node.children : [];\n  if (kids.length < 2) return;\n  if (ud && ud.username) {\n    kids[0].receiveNextState({ content: 'Profile \\u25bc' });\n  } else {\n    kids[0].receiveNextState({ type: 'a', props: { href: '/api/oauth/login' }, content: 'Sign In' });\n    context.clientAPI.apply(kids[1].id, { kind: 'destroy' });\n  }\n}"}},{"reference":"Logout","value":{"name":"Logout","body":"function (event, context) {\n  var container = event.target;\n  var chip = null;\n  while (container && !chip) {\n    chip = container.findNode({ classes: ['chip-slot'] });\n    if (!chip) container = container.parent;\n  }\n  if (!chip) return;\n  var kids = chip.children || [];\n  if (kids.length >= 2) {\n    context.clientAPI.apply(kids[1].id, { kind: 'destroy' });\n    kids[0].receiveNextState({ content: 'Sign In' });\n  }\n}"}}]},"content":[{"userData":{"username":"alice"},"content":[{"type":"div","props":{"id":"s1b-session"},"content":"session payload"}]}],"clientConfig":{"runInstantiation":true,"runRendering":true}},"main":{"template":{"root":{"type":"div","props":{"id":"hs-root"},"children":[{"type":"section","props":{"id":"s2-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s2-title"},"content":"Scenario 2 — Server content load: comments panel (mocked fetch)"},{"type":"div","props":{"id":"comments-panel"},"css":{"classes":["comments-panel"]},"component":[{"target":"handlers.load","reference":"LoadComments"}],"children":[{"type":"button","props":{"id":"comments-refresh"},"css":{"classes":["small-btn"]},"content":"Refresh","component":[{"target":"handlers.click","reference":"LoadComments"}]},{"type":"button","props":{"id":"comments-clear"},"css":{"classes":["small-btn"]},"content":"Clear","component":[{"target":"handlers.click","reference":"ClearComments"}]}]}]},{"type":"section","props":{"id":"s3-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s3-title"},"content":"Scenario 3 — Third-party widget: weather card (mocked API)"},{"type":"div","props":{"id":"weather-card"},"css":{"classes":["weather-card"]},"content":"no report yet","children":[{"type":"button","props":{"id":"weather-btn","data-city":"Berlin"},"css":{"classes":["weather-btn"]},"content":"Load weather (Berlin)","component":[{"target":"handlers.click","reference":"WeatherHandler"}]}]}]},{"type":"section","props":{"id":"s4-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s4-title"},"content":"Scenario 4 — Cart badge: add-to-cart counter"},{"type":"header","props":{"id":"cart-header"},"css":{"classes":["cart-header"]},"children":[{"type":"span","props":{"id":"cart-label"},"content":"Cart: "},{"type":"span","props":{"id":"cart-badge"},"css":{"classes":["cart-badge"]},"content":"0"}]},{"type":"div","props":{"id":"product-list"},"css":{"classes":["product-list"]},"children":[{"type":"div","css":{"classes":["product"]},"content":"Widget A","children":[{"type":"button","props":{"id":"add-a"},"css":{"classes":["add-btn"]},"content":"Add","component":[{"target":"handlers.click","reference":"AddToCart"}]}]},{"type":"div","css":{"classes":["product"]},"content":"Gadget B","children":[{"type":"button","props":{"id":"add-b"},"css":{"classes":["add-btn"]},"content":"Add","component":[{"target":"handlers.click","reference":"AddToCart"}]}]}]}]},{"type":"section","props":{"id":"s5-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s5-title"},"content":"Scenario 5 — Search filter: input-driven list (mocked dataset)"},{"type":"div","props":{"id":"search-wrap"},"css":{"classes":["search-wrap"]},"children":[{"type":"input","props":{"id":"search-box"},"css":{"classes":["search-box"]},"component":[{"target":"handlers.input","reference":"FilterList"}]},{"type":"div","props":{"id":"results-list"},"css":{"classes":["results-list"]}}]}]},{"type":"section","props":{"id":"s6-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s6-title"},"content":"Scenario 6 — Tabs: active-state css toggling across the tree"},{"type":"div","props":{"id":"tabs"},"css":{"classes":["tabs"]},"children":[{"type":"button","props":{"id":"tab-a"},"css":{"classes":["tab","tab-a","is-active"]},"content":"Tab A","component":[{"target":"handlers.click","reference":"SelectTab"}]},{"type":"button","props":{"id":"tab-b"},"css":{"classes":["tab","tab-b"]},"content":"Tab B","component":[{"target":"handlers.click","reference":"SelectTab"}]},{"type":"div","props":{"id":"tab-panel-a"},"css":{"classes":["tab-panel","tab-panel-a","is-active"]},"content":"Panel A"},{"type":"div","props":{"id":"tab-panel-b"},"css":{"classes":["tab-panel","tab-panel-b"]},"content":"Panel B"}]}]},{"type":"section","props":{"id":"s7-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s7-title"},"content":"Scenario 7 — Form submit: validation + status message (mocked)"},{"type":"form","props":{"id":"newsletter-form"},"css":{"classes":["newsletter-form"]},"component":[{"target":"handlers.submit","reference":"SubmitNews"}],"children":[{"type":"input","props":{"id":"newsletter-input"},"css":{"classes":["newsletter-input"]}},{"type":"button","props":{"id":"newsletter-submit"},"content":"Subscribe"},{"type":"div","props":{"id":"form-status"},"css":{"classes":["form-status"]},"content":""}]}]},{"type":"section","props":{"id":"s8-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s8-title"},"content":"Scenario 8 — Throwing-handler containment + fallback"},{"type":"div","props":{"id":"broken-widget"},"css":{"classes":["broken-widget"]},"content":"widget placeholder","component":[{"target":"handlers.load","reference":"VendorWidget"}]}]},{"type":"section","props":{"id":"s9-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s9-title"},"content":"Scenario 9 — Toast: injected child + dismiss (RE-EXPRESSED: the dismiss binding is authored — the layer-apply mint drops the payload’s anchors)"},{"type":"div","props":{"id":"toast-stack"},"css":{"classes":["toast-stack"]}},{"type":"button","props":{"id":"toast-trigger"},"css":{"classes":["toast-trigger"]},"content":"Show toast","component":[{"target":"handlers.click","reference":"ShowToast"}]},{"type":"button","props":{"id":"toast-dismiss"},"css":{"classes":["toast-dismiss-btn"]},"content":"Dismiss toast","component":[{"target":"handlers.click","reference":"DismissToast"}]}]},{"type":"section","props":{"id":"s10-card"},"css":{"classes":["scenario-card"]},"children":[{"type":"h3","props":{"id":"s10-title"},"content":"Scenario 10 — Multi-handler node: load + click on ONE node"},{"type":"div","props":{"id":"multi-panel"},"css":{"classes":["multi-panel"]},"content":"panel","component":[{"target":"handlers.load","reference":"LoadPanel"},{"target":"handlers.click","reference":"TouchPanel"}]}]}]},"component":[{"reference":"LoadComments","value":{"name":"LoadComments","body":"function (event, context) {\n  var panel = context.node;\n  while (panel && (!panel.css || !panel.css.classes || panel.css.classes.indexOf('comments-panel') === -1)) {\n    panel = panel.parent;\n  }\n  if (!panel) return;\n  var comments = [\n    { type: 'div', css: { classes: ['comment'] }, props: { id: 'comment-1' }, content: 'First comment' },\n    { type: 'div', css: { classes: ['comment'] }, props: { id: 'comment-2' }, content: 'Second comment' },\n    { type: 'div', css: { classes: ['comment'] }, props: { id: 'comment-3' }, content: 'Third comment' }\n  ];\n  panel.receiveNextState({ children: comments });\n}"}},{"reference":"ClearComments","value":{"name":"ClearComments","body":"function (event, context) {\n  var panel = event.target && event.target.parent;\n  while (panel && (!panel.css || !panel.css.classes || panel.css.classes.indexOf('comments-panel') === -1)) {\n    panel = panel.parent;\n  }\n  if (!panel) return;\n  var kids = panel.children || [];\n  for (var i = 0; i < kids.length; i++) {\n    var k = kids[i];\n    if (k.css && k.css.classes && k.css.classes.indexOf('comment') !== -1) {\n      context.clientAPI.apply(k.id, { kind: 'destroy' });\n    }\n  }\n}"}},{"reference":"WeatherHandler","value":{"name":"WeatherHandler","body":"function (event, context) {\n  var city = String(event.value == null ? '' : event.value).trim() || 'Berlin';\n  var cold = city === 'Berlin' || city === 'Oslo';\n  var temp = cold ? 12 : 24;\n  var card = event.target && event.target.parent;\n  if (!card) return;\n  var cur = card.css && card.css.classes ? card.css.classes.slice() : [];\n  var next = [];\n  for (var i = 0; i < cur.length; i++) {\n    if (cur[i] !== 'is-cold' && cur[i] !== 'is-warm') next.push(cur[i]);\n  }\n  next.push(cold ? 'is-cold' : 'is-warm');\n  card.receiveNextState({\n    content: city + ' ' + temp + '\\u00b0C',\n    props: { temperature: String(temp) },\n    css: { classes: next }\n  });\n}"}},{"reference":"AddToCart","value":{"name":"AddToCart","body":"function (event, context) {\n  var container = event.target && event.target.parent;\n  var badge = null;\n  while (container && !badge) {\n    badge = container.findNode({ classes: ['cart-badge'] });\n    if (!badge) container = container.parent;\n  }\n  if (!badge) return;\n  var n = (Number(badge.content) || 0) + 1;\n  badge.receiveNextState({ content: String(n) });\n}"}},{"reference":"FilterList","value":{"name":"FilterList","body":"function (event, context) {\n  var titles = ['Home', 'Meta Tools', 'Analysis', 'Meta Guide', 'About'];\n  var q = String(event.value == null ? '' : event.value).toLowerCase();\n  var filtered = [];\n  for (var i = 0; i < titles.length; i++) {\n    if (titles[i].toLowerCase().indexOf(q) !== -1) {\n      filtered.push({ type: 'div', css: { classes: ['result-item'] }, content: titles[i] });\n    }\n  }\n  var wrap = event.target && event.target.parent;\n  var list = wrap ? wrap.findNode({ classes: ['results-list'] }) : null;\n  if (!list) return;\n  list.receiveNextState({ children: filtered });\n}"}},{"reference":"SelectTab","value":{"name":"SelectTab","body":"function (event, context) {\n  var tab = event.target;\n  if (!tab || !tab.css || !tab.css.classes || !tab.parent) return;\n  var classes = tab.css.classes;\n  var key = null;\n  for (var i = 0; i < classes.length; i++) {\n    if (classes[i].indexOf('tab-') === 0 && classes[i] !== 'tab-panel' && classes[i].indexOf('tab-panel-') !== 0) {\n      key = classes[i].slice(4);\n      break;\n    }\n  }\n  if (!key) return;\n  var container = tab.parent;\n  var panelClass = 'tab-panel-' + key;\n  var kids = container.children || [];\n  for (var i = 0; i < kids.length; i++) {\n    var k = kids[i];\n    var kc = k.css && k.css.classes ? k.css.classes : [];\n    var isTabLike = false;\n    for (var j = 0; j < kc.length; j++) {\n      if (kc[j] === 'tab' || kc[j] === 'tab-panel' || kc[j].indexOf('tab-panel-') === 0 || (kc[j].indexOf('tab-') === 0 && kc[j] !== 'tab-panel')) {\n        isTabLike = true;\n        break;\n      }\n    }\n    if (!isTabLike) continue;\n    var chosen = kc.indexOf('tab-' + key) !== -1 || kc.indexOf(panelClass) !== -1;\n    var hadActive = false;\n    var next = [];\n    for (var j = 0; j < kc.length; j++) {\n      if (kc[j] === 'is-active') { hadActive = true; continue; }\n      next.push(kc[j]);\n    }\n    if (chosen) next.push('is-active');\n    if (hadActive !== chosen) k.receiveNextState({ css: { classes: next } });\n  }\n}"}},{"reference":"SubmitNews","value":{"name":"SubmitNews","body":"function (event, context) {\n  event.preventDefault();\n  var v = String(event.value == null ? '' : event.value).trim();\n  var field = event.target.findNode({ classes: ['newsletter-input'] });\n  var status = event.target.findNode({ classes: ['form-status'] });\n  if (!field || !status) return;\n  var cur = field.css && field.css.classes ? field.css.classes.slice() : [];\n  var next = [];\n  for (var i = 0; i < cur.length; i++) {\n    if (cur[i] !== 'input-error') next.push(cur[i]);\n  }\n  if (!v) {\n    next.push('input-error');\n    field.receiveNextState({ css: { classes: next } });\n    status.receiveNextState({ content: 'Please enter an email' });\n  } else {\n    field.receiveNextState({ css: { classes: next } });\n    status.receiveNextState({ content: 'Subscribed!' });\n  }\n}"}},{"reference":"VendorWidget","value":{"name":"VendorWidget","body":"function (event, context) {\n  if (context.node) context.node.receiveNextState({ content: 'vendor unavailable' });\n  throw new Error('vendor-down');\n}"}},{"reference":"ShowToast","value":{"name":"ShowToast","body":"function (event, context) {\n  var parent = event.target && event.target.parent;\n  var stack = parent ? parent.findNode({ classes: ['toast-stack'] }) : null;\n  if (!stack) return;\n  stack.receiveNextState({\n    children: [\n      { type: 'div', css: { classes: ['toast'] }, props: { id: 'toast-1' }, content: 'Saved! (dismiss below)' }\n    ]\n  });\n}"}},{"reference":"DismissToast","value":{"name":"DismissToast","body":"function (event, context) {\n  var parent = event.target && event.target.parent;\n  var stack = parent ? parent.findNode({ classes: ['toast-stack'] }) : null;\n  if (!stack) return;\n  var kids = stack.children || [];\n  for (var i = 0; i < kids.length; i++) {\n    if (kids[i].css && kids[i].css.classes && kids[i].css.classes.indexOf('toast') !== -1) {\n      context.clientAPI.apply(kids[i].id, { kind: 'destroy' });\n    }\n  }\n}"}},{"reference":"LoadPanel","value":{"name":"LoadPanel","body":"function (event, context) {\n  if (context.node) context.node.receiveNextState({ content: 'loaded' });\n}"}},{"reference":"TouchPanel","value":{"name":"TouchPanel","body":"function (event, context) {\n  if (context.node) context.node.receiveNextState({ css: { classes: ['touched'] } });\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}}}</script>
+    <script id="server-data" type="application/json">{"goals":["S1 auth dropdown (AUTH-SEAM): afterAssembly → after-compile phase, def phase entry copies to the type-target consumer, def children re-home in-tree, userData-driven chip conversion + retention destroy — rendered TWICE (anon / alice)","S2 comments: handlers.load → ONE layer-apply children injection, idempotent re-injection, clear destroys the minted comments","S3 weather: event.value arg → mocked vendor payload → content/props/css state-slice with a css read branch","S4 cart: parent walk + findNode honest classes query + content read/write, one def consumed by two buttons","S5 search: input value filter over a body-local dataset; the first dispatch injects, re-dispatch never accumulates (OO-2 no-op)","S6 tabs: event.target css read, family-children iteration, is-active css shuffle","S7 form: preventDefault + arg value, conditional writes on two targets","S8 throwing handler: pre-throw write lands, dispatch result carries the contained Error, page renders on","S9 toast: layer-minted leaf child + an AUTHORED dismiss control that destroys it (the mint drops payload anchors — re-expressed)","S10 multi-handler node: load + click coexist (append-with-override), both effects visible"],"expected":{"census":{"registered":68,"inTree":65,"unplaced":0,"destroyed":1,"prototypes":2,"cloneOps":0},"mounts":3}}</script>
+
+    <section>
+      <h2>Scenario 1 — Auth dropdown: login/profile button + logout (AUTH-SEAM)</h2>
+      <p class="expect">
+        The corpus auth pattern through the AUTH-SEAM consumer model: the def
+        <code>userAuth</code> carries <code>{target: 'handlers.afterAssembly',
+        reference: 'AuthInit'}</code> — the N5 carve-out that plans the
+        after-compile PHASE; the chip-slot div type-targets the def; the
+        compiled phase entry copies onto the consumer and the def children
+        (auth button + dropdown menu) re-home in-tree. <code>AuthInit</code>
+        reads the read-only <code>supervisor.userData</code> passthrough:
+        WITHOUT userData the chip converts to the Sign-In LINK
+        (<code>&lt;a href="/api/oauth/login"&gt;Sign In&lt;/a&gt;</code>) and
+        the dropdown is destroyed-but-retained (walk slot kept, destroyed
+        flag set — its ELEMENT still emits: the def-fill emit sources def
+        children from def data, so a destroyed flag is NOT a render-removal,
+        defects.md OPEN #20; the checks pin the retention half);
+        WITH <code>{username: 'alice'}</code> the chip is the
+        <code>Profile ▼</code> button and the dropdown survives. The logout
+        control is an AUTHORED header button (the spec's logout button sat
+        inside the def — def-child bindings are a docs-silent dead surface,
+        see the writer notes); its click destroys the dropdown menu
+        (retention) — the page still renders. Rendered twice, one envelope per
+        variant (userData is per-translate, first payload wins).
+      </p>
+      <h3>Variant 1a — no userData (not signed in)</h3>
+      <div class="card-mount" id="mount-s1-anon"></div>
+      <h3>Variant 1b — userData {username: 'alice'} (signed in)</h3>
+      <div class="card-mount" id="mount-s1-alice"></div>
+    </section>
+
+    <section>
+      <h2>Scenarios 2–10 — the main envelope (one legacy envelope, a card per scenario)</h2>
+      <p class="expect">
+        Every card below is framework-rendered from the main envelope: the
+        comments panel loads its mocked comments on page load (idempotent
+        re-injection; Clear destroys the minted comments — the empty-children
+        payload is a documented no-op), the weather card is written by a click
+        dispatched with the city as the event arg, the cart badge counts
+        clicks across both product buttons, the search box filters a
+        body-local dataset (the first dispatch injects; re-dispatch never
+        accumulates — the OO-2 no-op), the tabs shuffle
+        <code>is-active</code>, the form validates on submit, the broken
+        widget contains its throwing handler (fallback lands, Error
+        contained), the toast stack mints a leaf toast on "Show toast" and the
+        AUTHORED dismiss button destroys it (the layer-apply mint drops the
+        payload's own anchors — re-expressed per the spec's data-fix rule),
+        and the multi-handler panel keeps BOTH its load and click entries. All
+        mutation logic lives in the string bodies; the page only dispatches
+        and re-renders.
+      </p>
+      <div class="card-mount" id="mount-main"></div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="handlers-scenarios.js"></script>
+</body>
+</html>

@@ -405,6 +405,8 @@ interface BindingPlan {
   value?: unknown
   applyPath?: string | undefined
   synthesized?: DerivedDecl | undefined
+  /** AUTH-SEAM — `handlers.afterAssembly` maps to the after-compile phase. */
+  handlerPhase?: string | undefined
   /** HANDLER-SEAM (D6 un-park) — a `handlers.<event>` target's verbatim event
    *  suffix. */
   handlerEvent?: string | undefined
@@ -436,7 +438,7 @@ function classifyTarget(
   authoredDerived: DerivedDecl | undefined,
   warnings: TranslatedWarning[],
   path: string,
-): { applyPath?: string; synthesized?: DerivedDecl; seam?: 'type' | 'content' | 'children'; handlerEvent?: string } {
+): { applyPath?: string; synthesized?: DerivedDecl; seam?: 'type' | 'content' | 'children'; handlerEvent?: string; handlerPhase?: string } {
   if (target === 'type' || target === 'content' || target === 'children') {
     // D7/F17 — anchor-layer seam candidate: no gap warn, seam persisted
     return { seam: target }
@@ -476,6 +478,14 @@ function classifyTarget(
     // unknown + skip (N5 — the 3-phase set is closed; event-only reuse).
     const event = target.slice('handlers.'.length)
     if (LEGACY_LIFECYCLE_EVENTS.has(event)) {
+      // AUTH-SEAM (2026-08-15): `afterAssembly` is the ONE legacy lifecycle
+      // name with a semantic home in the new 3-phase set — the consumer's
+      // ASSEMBLY is its after-compile pass, so the binding maps to the
+      // after-compile PHASE (the N5 carve-out). The other names stay
+      // warn+skip (no home).
+      if (event === 'afterAssembly') {
+        return { handlerPhase: 'after-compile' }
+      }
       warn(warnings, 'handler-phase-unknown', path, `target "${target}": "${event}" is a legacy lifecycle phase, not an event; binding skipped (N5)`)
       return {}
     }
@@ -565,6 +575,7 @@ function planBindings(
       plan.synthesized = t.synthesized
       plan.seam = t.seam
       plan.handlerEvent = t.handlerEvent
+      plan.handlerPhase = t.handlerPhase
     }
     plans.push(plan)
   }
@@ -602,6 +613,7 @@ function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): v
     if (plan.applyPath !== undefined) options.applyPath = plan.applyPath
     if (plan.seam !== undefined) options.seam = plan.seam
     if (plan.handlerEvent !== undefined) options.handlerEvent = plan.handlerEvent
+    if (plan.handlerPhase !== undefined) options.handlerPhase = plan.handlerPhase
     if (plan.role === 'source' || plan.role === 'duplex') {
       const a = node.addAnchor(plan.role, plan.reference, options, link)
       if (a !== null && plan.value !== undefined) a.value = plan.value

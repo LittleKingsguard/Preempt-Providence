@@ -23,7 +23,11 @@ The 2026-08-15 pass moved: `docs/FRESH-CONTEXT-SUMMARY.md`,
 and `docs/specs/` `compile-horizon-review.md`, `legacy-component-ref-only-review.md`,
 `mid-process-handler-review.md`, `path-fork-review.md`, `state-first-analysis.md`,
 `state-first-analysis-review.md`, `stress-test-scenarios.md`,
-`translate-stress-scenarios.md`.
+`translate-stress-scenarios.md`. The 2026-08-16 pass moved the closed §7-gate
+legacy-handler-reuse review quartet: `docs/specs/` `legacy-handler-reuse-proposal.md`,
+`legacy-handler-reuse-review.md`, `legacy-handler-reuse-critique.md`,
+`legacy-handler-reuse-validity.md` → `archive/reviews/2026-08-16/`
+(all 8 review decisions adopted/superseded/landed — decisions.md rows).
 
 **`RENDER_PROCESS_NOTES.md` stays in-tree** (2026-08-15 decision): the specs
 cite its §10.x decision provenance pervasively (dozens+ citations), so it

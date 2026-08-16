@@ -562,6 +562,17 @@ function findDefBinding(
   return undefined
 }
 
+/** DEFECT #20 (2026-08-16) — the def-fill prune: a DESTROYED adopted def
+ *  child must not emit. The def-fill iterates the def DATA (specs zipped
+ *  with the registry protos) — the destroyed flag on the proto is the only
+ *  signal (the node's own states already dropped: destroyed ⇒ not
+ *  actionable). Only adopted (runtime-minted, AUTH-SEAM retention-destroy)
+ *  def children can ever carry the flag — the registry protos are
+ *  otherwise inert — so the check is exactly the adoption prune. */
+function defChildPruned(proto: unknown): boolean {
+  return typeof proto === 'object' && proto !== null && (proto as { destroyed?: boolean }).destroyed === true
+}
+
 /** SED-2 — the DEF-ROOT element: the def's own root element (def type +
  *  css incl. cssDef rules + content) with the def's children nested under it
  *  in order. `rootProto` is the pre-minted def-root prototype when the def
@@ -593,6 +604,9 @@ function emitDefRootElement(
   const children: MinimalElement[] = []
   const childSpecs = def.children ?? []
   for (let i = 0; i < childSpecs.length; i += 1) {
+    // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
+    // (its subtree never recurses either)
+    if (defChildPruned(childProtos[i])) continue
     const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx)
     flat.push(...child.flat)
     children.push(child.el)
@@ -618,7 +632,7 @@ function emitDefChildTree(
   spec: DefChildSpec,
   index: number,
   parentWire: string,
-  proto: (NodeLike & { anchors?: Anchor[]; children?: NodeLike[] }) | undefined,
+  proto: (NodeLike & { anchors?: Anchor[]; children?: NodeLike[]; layers?: Array<{ sourceName?: string }>; content?: unknown; type?: string }) | undefined,
   layersSuffix: string | undefined,
   nodeById: Map<string, EmitNodeSource> | null | undefined,
   pathCtx: PathEmitContext | undefined,
@@ -627,8 +641,14 @@ function emitDefChildTree(
   const wire = typeof bind === 'string' ? `${parentWire}:${bind}` : `${parentWire}:${index}`
   const cprops: Record<string, unknown> = {}
   const styles: string[] = []
-  let type = spec.type
-  if (spec.content !== undefined) cprops['text'] = String(spec.content)
+  // AUTH-SEAM (2026-08-16) — the mutated proto pass1 (state-slice content
+  // replace) wins over the def spec data when the def carries the copied
+  // phase-handler layer (seam-handlers-def / seam-handlers — sourceName
+  // 'handler-seam'): the nested phase handler converted the authored def
+  // child (button → sign-in link), and the CONVERTED element must render.
+  const authSeamed = proto !== undefined && (proto.layers?.some((l) => l.sourceName === 'handler-seam') ?? false)
+  let type = (authSeamed && typeof proto?.type === 'string') ? proto.type : spec.type
+  if ((proto?.content !== undefined && authSeamed) || spec.content !== undefined) cprops['text'] = String(authSeamed ? proto?.content ?? spec.content : spec.content)
   if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
   for (const [k, v] of Object.entries(proto?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
   for (const [k, v] of Object.entries(proto?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
@@ -637,6 +657,9 @@ function emitDefChildTree(
   const childSpecs = spec.children ?? []
   const childProtos = proto ? (proto.children ?? []) : []
   for (let i = 0; i < childSpecs.length; i += 1) {
+    // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
+    // (its subtree never recurses either)
+    if (defChildPruned(childProtos[i])) continue
     const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx)
     flat.push(...child.flat)
     children.push(child.el)
@@ -672,6 +695,8 @@ function emitDefChildTree(
           if (Array.isArray(nested.children) && nested.children.length > 0) {
             const nestedProtos = defPrototypesFor(seamTarget.link)
             for (let i = 0; i < nested.children.length; i += 1) {
+              // DEFECT #20 — the def-fill prune (nested branch)
+              if (defChildPruned(nestedProtos[i])) continue
               const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx)
               flat.push(...child.flat)
               children.push(child.el)
@@ -812,7 +837,10 @@ function emitOne(
             else props[`css:${k}`] = v
           }
         }
-        const trees = (def.children ?? []).map((spec, i) => emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx))
+        // DEFECT #20 — the SED-1 def-fill prune: a destroyed adopted def
+        // child's element never surfaces (flatMap skips the pair)
+        const trees = (def.children ?? []).flatMap((spec, i) =>
+          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx)])
         const bound = scalarBinding(s.bindings)
         if (bound !== undefined) props['text'] = bound
         const el: MinimalElement = { wire, type: def.type, props, childOrder: trees.map((t) => t.el.wire) }
@@ -826,7 +854,9 @@ function emitOne(
       // pre-minted prototypes (the seam registry, in def-children order)
       // enrich the elements with the real css/props and resolve NESTED seam
       // consumers. Wires are synthetic — never the prototypes' ids.
-      const trees = def.children.map((spec, i) => emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx))
+      // DEFECT #20 — the P-EMIT-3 def-fill prune (same rule).
+      const trees = def.children.flatMap((spec, i) =>
+        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx)])
       const bound = scalarBinding(s.bindings)
       if (bound !== undefined) props['text'] = bound
       const type = bound !== undefined ? s.type : def.type
@@ -844,6 +874,12 @@ function emitOne(
       allowed
         ? def.children
         : childWires.map((_, i) => ({ bind: String(i), type: s.type }))
+    // DEFECT #20 (2026-08-16) — the blocked-def/nodeById path: a DESTROYED
+    // adopted def child must not synthesize an element (its node data is
+    // still in nodeById — the destroyed flag is the signal; its own states
+    // already dropped: not actionable). The wire also leaves the consumer's
+    // childOrder (filtered below) so diffMinimal never looks for a ghost.
+    const destroyedWires = new Set<string>()
     for (let i = 0; i < specs.length; i += 1) {
       const spec = specs[i]!
       const cw = childWires[offset + i]
@@ -865,7 +901,11 @@ function emitOne(
       // nests them (the "boxes must nest" contract). For a path-state child
       // the wire is its pathKey — the node id comes from the emit context.
       const childNodeId = pathCtx?.pathNodeOf.get(resolvedWire) ?? resolvedWire
-      const childNode = nodeById?.get(childNodeId) as unknown as { type?: string; css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> } | undefined
+      const childNode = nodeById?.get(childNodeId) as unknown as { type?: string; css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }>; destroyed?: boolean } | undefined
+      if (childNode?.destroyed === true) {
+        destroyedWires.add(resolvedWire)
+        continue
+      }
       for (const [k, v] of Object.entries(childNode?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
       for (const [k, v] of Object.entries(childNode?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
       const childOrder = pathCtx?.pathStateChildren.get(resolvedWire)
@@ -877,7 +917,7 @@ function emitOne(
     }
     if (allowed) {
       // the def decides the consumer's type + child order (1:1 re-typing)
-      const order = [...childWires.slice(0, offset), ...reTyped.map((c) => c.wire)]
+      const order = [...childWires.slice(0, offset).filter((w) => !destroyedWires.has(w)), ...reTyped.map((c) => c.wire)]
       const bound = scalarBinding(s.bindings)
       if (bound !== undefined) props['text'] = bound
       const type = bound !== undefined ? s.type : def.type
@@ -900,7 +940,7 @@ function emitOne(
     ) {
       hideEmptyContainer(props)
     }
-    const el: MinimalElement = { wire, type: s.type, props, childOrder: [...childWires] }
+    const el: MinimalElement = { wire, type: s.type, props, childOrder: [...childWires].filter((w) => !destroyedWires.has(w)) }
     if (styles.length > 0) el.styles = styles
     if (s.forkKey !== undefined) el.forkKey = s.forkKey
     return { el, defChildren: reTyped }

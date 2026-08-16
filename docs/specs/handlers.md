@@ -160,8 +160,57 @@ the handler-seam (review decision 7, landed 2026-08-15):
 - **Seam planning:** `target: 'handlers.<event>'` plans WITHOUT the
   `component-target-gap` warn; the event suffix persists verbatim as
   `options.handlerEvent` (F17-style). Legacy lifecycle names as the suffix
-  (afterAssembly, beforeRender, …) warn `handler-phase-unknown` + skip (N5 —
-  event-only reuse; the 3-phase set stays closed).
+  warn `handler-phase-unknown` + skip (N5 —
+  event-only reuse; the 3-phase set stays closed) — **EXCEPT `afterAssembly`
+  (the AUTH-SEAM carve-out, 2026-08-16 — decisions.md AUTH-SEAM row):** it
+  maps to the `after-compile` PHASE via the component binding
+  (`handlerPhase: 'after-compile'` planned on the anchor,
+  `AnchorOptions.handlerPhase`; the consumer's ASSEMBLY is its after-compile
+  pass — tests AU1-AU3).
+- **Def phase handlers copy to the TYPE-target consumer (AUTH-SEAM):** a
+  seam def-root carrying the def's own phase binding never executes handlers
+  itself — it is token-terminated, never compiles on its own, and the
+  harness's phase dispatch runs on in-tree nodes only. The def's compiled
+  phase-handler entries COPY onto the TYPE-target consumer (`seam-handlers-def`
+  layer, replace-in-place idempotent, merged beside the consumer's own
+  `seam-handlers` layer by compileLocal's append-with-override), and the
+  consumer RE-HOMES the def-root's family children (primary family edge to
+  the consumer's family link — in-tree, mutable via `clientAPI`;
+  `runtimeMinted` reverse-exclusion; G24 seam-flag admission on the adopted
+  child anchor). AUTH-SEAM is the carve-out to the G27/F18 letter: "a
+  seam-wired def child never appears in consumer.children" stays true for
+  the seam edge — the adopted def child appears via its NEW family edge.
+  **NESTED consumers (2026-08-16):** a nested (prototype-chain) seam
+  consumer — a def-in-def auth div under a nav def — installs the copied
+  phase handler the same way (the seam install — handler layer copy,
+  def-children adoption, seam-link reversion — runs for SEAM-BEARING
+  nodes regardless of viability; tests N1-N5, with N4/N5 adding the DEFECT
+  #20 destroyed-child prune pins — a retention-destroyed adopted def child's
+  element is PRUNED from the emitted set, defects.md FIXED #20 row).
+  - **Def-CHILD bindings are inert (pinned standing surprise, S45 — blind
+    test #5 proofreader):** a `handlers.<event>` binding authored on a def
+    CHILD (a `value.children[i]` entry's `component` array) plans on the
+    OUT-OF-TREE def-child prototype — the prototype never compiles and the
+    harness's dispatch runs on in-tree nodes only, so the binding NEVER
+    materializes and NEVER dispatches (a dispatch returns `[]`). Only the
+    def-ROOT's binding wires (via the copy to the type-target consumer,
+    above); author event bindings on IN-TREE nodes (or re-express the
+    control as authored data). **Def GRANDchildren (blind test #5
+    proofreader):** the adopted def child's element emits at its OWN wire
+    with its own (possibly phase-mutated) data; the def child's OWN family
+    children render only while the adopted parent is in-tree + actionable —
+    a retention-destroyed adopted def child STILL emits its own element
+    (the blocked-def/nodeById path reads the node data, destroyed flag
+    ignored — see the defects.md standing surprise) while its subtree
+    (grandchildren) drops out (state 'unplaced' → no states → no element).
+  - **Type-seam READ side (blind test #5 proofreader):** the def's css
+    classes are NOT findable on the consumer — the consumer NODE's compiled
+    css keeps only its authored classes (the def's classes live on the
+    out-of-tree def-root prototype, invisible to the family walk and to
+    `findNode`). The AUTH-SEAM adoption case emits the consumer as the
+    BLOCKED-DEF shape (own element, OWN authored type + css — the SED-1
+    def-css merge does NOT fire; render.md §3.4.2). A body must walk/find by
+    the consumer's OWN authored class.
 - **Materialization:** compile layers ONE provenance-marked handlers layer on
   the consumer — `{name, event: <suffix verbatim>, body: compiled}` — via the
   origin/layer pattern (idempotent replace-in-place; a def that disappears
@@ -191,9 +240,15 @@ the handler-seam (review decision 7, landed 2026-08-15):
     argument.
   - **The NodeView proxy (decision 3, review §5):** one WeakMap-cached view
     per live node — the SAME object across dispatches (bodies compare/
-    attach to nodes). `parent` walks the family chain, token-terminated
+    attach to nodes). `id` (AUTH-SEAM, 2026-08-16) is the live node's id
+    STRING — the honest reference for `clientAPI.apply(id, …)` on an in-tree
+    node; a string, never a Node reference (the "exposes no node reference"
+    rule preserved). `parent` walks the family chain, token-terminated
     (rootNode/contentNodes/component — never a synthetic token node);
-    `children` = FAMILY children only (seam-wired def children excluded);
+    `children` = FAMILY children only (seam-wired def children excluded —
+    AUTH-SEAM carve-out: a PHASE-bound def's children are RE-HOMED onto the
+    consumer's family link, so they DO appear in `consumer.children` — via
+    the family edge, not the seam edge);
     `css` reads parse a serialized style STRING back to the
     `Record<string,string>` OBJECT (F7 — the D3 reverse contract); `data` is
     the base facade (children NOT included — graph-derived, never stored);
@@ -212,7 +267,15 @@ the handler-seam (review decision 7, landed 2026-08-15):
   - **userData (decision 6):** read-only passthrough — the real supervisor
     with a `userData` member captured from `TranslatedTree.userData` at
     translate; a WRITE is a contained no-op (strict-mode assignment failure
-    surfaces in the dispatch results — no session channel).
+    surfaces in the dispatch results — no session channel). **The capture
+    is AUTOMATIC at translate** (`setTranslateUserData`, translate.ts — the
+    bridge's proxy reads the module slot, never a supervisor member): the
+    engine `Supervisor` class has NO userData member and its constructor
+    takes no userData option (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review.md §5.1 — "the
+    supervisor itself has no userData, verified"); a page/harness that
+    assigns `supervisor.userData = …` on the ENGINE object after
+    construction is a harmless no-op for bodies (they read the translate
+    slot) and needs no wiring for the passthrough to work.
   - **receiveNextState — the write surface:** `type`/`content`/`props.*`/
     `css.*`/`handlers` map to ONE state-slice (`props.<k>`/`css.<k>`
     replaceAll per key); `css.style` OBJECT writes serialize back to the
@@ -222,7 +285,7 @@ the handler-seam (review decision 7, landed 2026-08-15):
     **`{children}` payload is ONE `layer-apply`** (the user directive
     2026-08-15 — the origin-owner op; `legacy-kids-<nodeId>` deterministic
     layerId, minted family children origin-marked + registered, idempotent
-    re-injection, teardown = one layer removal; a NodeView entry in the
+    re-injection; a NodeView entry in the
     payload serializes to its data shape with the style re-serialized). A
     MIXED payload (children + state keys) rides the atomic layer-apply + a
     SEPARATE state-slice. A **`type: 'component'` NodeData in the children
@@ -231,6 +294,18 @@ the handler-seam (review decision 7, landed 2026-08-15):
     (node.ts `familyParentTokenOf`), never as a node's type string. A
     non-array children value rejects with
     `{status: 'rejected', error: {code: 'children-shape-invalid', …}}`.
+    **Mint semantics pins (blind test #5, proofreader):** the layer-apply
+    mint is ONE LEVEL — a minted NodeData's NESTED `children` are silently
+    dropped (the Node constructor never recurses; no warn), and an `anchors`
+    field warns `layer-apply-anchors-rejected` + is stripped (OO-3). An
+    EMPTY payload (`{children: []}`) is NOT a teardown: on a layer-bearing
+    node it is the OO-2 idempotent no-op; on a layer-less node it applies an
+    EMPTY layer that blocks every later mint (the layer exists → OO-2). The
+    teardown (removeLayer/removeLayersForSource, OO-5) is an ENGINE-side
+    surface — no documented legacy body op kind invokes it (the op kinds are
+    state-slice / destroy / layer-apply / attach / detach / move /
+    clone-instance / placement-attach); a body "clears" injected children by
+    destroying each minted node (`clientAPI.apply(id, {kind: 'destroy'})`).
   - **Remaining no-analog (REAL):** `enterEditMode`'s `window.Preempt`
     mutations (`fetchContent`/`fetchHandlers`/`rerun`) have no new-system
     analog — the body is data-fixed to the fetch path and its window guard

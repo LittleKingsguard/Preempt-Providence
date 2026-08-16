@@ -139,7 +139,25 @@ def-chain is scoped to the fork-stress 1:1 link method — render.md §3.4.2
 DFC-1..3). **Path enumeration (F18):** seam-wired def children enumerate via
 their PRIMARY (family) path — the seam links are EXCLUDED from the
 path-walk's parent selection (placement-path-spec §10.ag supplement); the
-seam parent anchors never contribute a path hop.
+seam parent anchors never contribute a path hop. **AUTH-SEAM carve-out
+(2026-08-16 — decisions.md AUTH-SEAM row):** when the def carries a
+PHASE-handler binding (`handlerPhase` anchor option, afterAssembly →
+after-compile), the TYPE-target consumer RE-HOMES the def-root's children:
+the def child's PRIMARY family edge moves from the def-root's family link
+(dissolved via `Link.destroy` — the S-R3.4 min-1-bypassing mechanism) to the
+CONSUMER's family link (the adopted child anchor carries the seam flag —
+G24 admission beside the seam-wired edge). The adopted def child is then
+genuinely IN-TREE (its state walks to the consumer → root; the legacy write
+surface `clientAPI.apply` state-slice/destroy lands on it) and marked
+`runtimeMinted` (reverse-excluded like a clone-instance — the authored
+truth is the def's children data). The seam parent anchors stay excluded
+from the family walk (ALS-5 untouched); the adopted child's appearance in
+`consumer.children` is via the NEW family edge — the carve-out to the
+G27/F18 letter ("a seam-wired def child never appears in consumer.children"
+stays true for the seam edge). Destroy of a runtime-minted node uses
+RETENTION destroy (`markDestroyed` — the family edge stays, the walk keeps
+the slot, the compile drops the node); authored in-tree nodes keep the
+edge-dissolving destroy.
 
 **Clone-seam contract (PINNED — stress-test review loop round 4, scenario
 35; DEFECT #9):** `clone()` copies the anchor profile (node.md §6.3 Post-1),
@@ -161,7 +179,7 @@ DIVERGE for clones. Engine gap: `materializeSeam` reads `linkOf(a)`
 
 ---
 
-### 2.8 `layer-apply` (the ORIGIN-OWNER op — legacy-handler-reuse-review §12.4, LANDED 2026-08-15)
+### 2.8 `layer-apply` (the ORIGIN-OWNER op — archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review.md §12.4, LANDED 2026-08-15)
 
 The origin-owner element's core, unparked: ONE atomic journaled structural op
 that mints a set of created nodes under a creator and wires an anchor layer to
@@ -177,7 +195,7 @@ review §7 decision-2 "cut" is superseded; the primitive is engine-level).
 | OO-4 | **Origin-marked decl admission:** the layer's CHILD-role decls carry `options.origin = layerId` (injected at apply; the marker split's anchor side). `addAnchor`'s role-scoped single-parent exemption (ALS-4) admits origin-marked second `'child'` anchors exactly like seam-marked ones; a plain second family child anchor still rejects `'single-parent'` |
 | OO-5 | **Teardown = the creator's removeLayer/removeLayersForSource** (the whole-subtree cascade, ruling 5): the layer's generating anchors are removed (DEFECT #10) AND each minted node of that layer is decided by the PRE-DETACH survival predicate (B2) — doomed iff its CURRENT family chain reaches a non-permanent terminal (`chainRoot ∈ {unplaced, destroyed-owner, loop, slice-root, token 'other'}`) OR the chain still passes through the creator; survives iff the chain reaches a permanent token (rootNode/contentNodes/component) under a NON-origin parent. Doomed → `detachNodeSafe` (the shared sibling-preserving detach — works on a moved node's current child anchor) → the sweep cascade destroys it and its subtree; survivor → PROMOTION: `originLayer` cleared + unregistered (becomes authored content, reverse-emitted). Every touched node is unregistered; double-remove is a no-op |
 | OO-6 | **Reverse exclusion:** `nodeToLegacy` excludes children whose `originLayer` is set (like the runtimeMinted filter — the authored envelope is base truth); a promoted node reverses as authored |
-| OO-7 | **Bridge mapping LANDED (user directive 2026-08-15):** `receiveNextState({children})` is ONE `layer-apply` — deterministic per-consumer layerId `legacy-kids-<nodeId>`, `sourceName: 'legacy-bridge'`, child decls in payload order (`priority` = index), NodeView entries in the payload coerced to their data shape (style re-serialized); re-injection with the same layerId is a no-op (OO-2); a MIXED payload (children + state keys) rides the atomic layer-apply + a SEPARATE state-slice. **Mint semantics pins (blind test #4):** a NodeData carrying `type: 'component'` (or any type string) mints as an ORDINARY family child — `type` is carried verbatim; the `'component'` token exists ONLY as a family-link parent-anchor target (node.ts `familyParentTokenOf`), never as a node's type string. A css slice's `cssDef` key is a PLAIN css key — the value lands in the merged pass-1 css unchanged (no special casing; the emit-side cssDef rules read the merged value like authored cssDef). Still open (review §12.4-7): serialization fate (A2 — runtime-only + promotion today), non-child-anchor cleanup vs render-path prune (A4), the preservation-by-reversal flag (a FUTURE feature — NOT-YET-IMPLEMENTED) |
+| OO-7 | **Bridge mapping LANDED (user directive 2026-08-15):** `receiveNextState({children})` is ONE `layer-apply` — deterministic per-consumer layerId `legacy-kids-<nodeId>`, `sourceName: 'legacy-bridge'`, child decls in payload order (`priority` = index), NodeView entries in the payload coerced to their data shape (style re-serialized); re-injection with the same layerId is a no-op (OO-2); a MIXED payload (children + state keys) rides the atomic layer-apply + a SEPARATE state-slice. **Mint semantics pins (blind test #4):** a NodeData carrying `type: 'component'` (or any type string) mints as an ORDINARY family child — `type` is carried verbatim; the `'component'` token exists ONLY as a family-link parent-anchor target (node.ts `familyParentTokenOf`), never as a node's type string. A css slice's `cssDef` key is a PLAIN css key — the value lands in the merged pass-1 css unchanged (no special casing; the emit-side cssDef rules read the merged value like authored cssDef). **Mint semantics pins 2 (blind test #5, proofreader):** the mint is ONE LEVEL — a minted NodeData's NESTED `children` are silently DROPPED (the Node constructor never recurses; no warn — a payload must be leaf-shaped), and an `anchors` field warns `layer-apply-anchors-rejected` + is stripped (OO-3). **An EMPTY payload (`{children: []}`) is NOT a teardown:** on a layer-bearing target it is the OO-2 idempotent no-op; on a layer-less target it APPLIES an EMPTY layer that blocks every later mint (the layer exists → OO-2). The teardown (OO-5 removeLayer/removeLayersForSource) is engine-side only — no legacy body op kind invokes it (op kinds: state-slice/destroy/layer-apply/attach/detach/move/clone-instance/placement-attach); a body clears minted children by destroying them individually. Still open (review §12.4-7): serialization fate (A2 — runtime-only + promotion today), non-child-anchor cleanup vs render-path prune (A4), the preservation-by-reversal flag (a FUTURE feature — NOT-YET-IMPLEMENTED) |
 
 Pins: tests/unit/legacy-shape-ops.test.ts Run B (O1–O9). Teardown helper
 history: the pre-existing ops detach was a whole-family-link wipe (critique
@@ -316,7 +334,7 @@ interface Supervisor {
 | G24 | D7 seam: def referenced MORE THAN ONCE (two consumers) | the def's child nodes (and, for `children`-targets, the def-root) may end up with MULTIPLE LEGAL PARENTS — LEGAL, intended; no `SingleParentError`, no `'single-parent'` op error: the role-scoped addAnchor exemption admits layer-materialized `'child'` anchors carrying `options.seam = true` (ALS-4); the exemption is the ONLY bypass — any other second `'child'` anchor still throws | D7 (live-prod 2026-08-14; F15 + delivery-shape ruling) |
 | G25 | family `attach`/`move`/`clone-instance` of a node that already holds a family `'child'` anchor | STILL rejected with `'single-parent'` (G16) — the guard scoping is seam-side only (the `options.seam` role-scoped exemption, ALS-4), family attach enforcement is unchanged | D7 (live-prod 2026-08-14; F15) |
 | G26 | seam parent anchors vs familyLinkFor (F19) | `familyLinkFor` filters `options.seam` parent anchors and returns the family link; a real `attachChild` after a seam still grabs the family link; the family `children` walk ignores seam parent anchors | D7 (live-prod 2026-08-14; F19) |
-| G27 | seam-wired def children in path enumeration (F18) | enumerate via their PRIMARY (family) path only — the seam links are excluded from the path-walk's parent selection; seam parent anchors never contribute a path hop (placement-path-spec §10.ag supplement) | D7 (live-prod 2026-08-14; F18) |
+| G27 | seam-wired def children in path enumeration (F18) | enumerate via their PRIMARY (family) path only — the seam links are excluded from the path-walk's parent selection; seam parent anchors never contribute a path hop (placement-path-spec §10.ag supplement). **AUTH-SEAM carve-out (2026-08-16):** a PHASE-bound def's children are RE-HOMED onto the CONSUMER's family link (adoptDefChildren — primary family edge moved, `runtimeMinted` + seam-flag admission) — they enumerate as ordinary family children of the consumer; the "seam-wired child never appears in consumer.children" letter stays true for the SEAM edge only | D7 (live-prod 2026-08-14; F18) + AUTH-SEAM 2026-08-16 |
 | G28 | content-target seam text delivery (ALS-7) | the anchor layer carries a `content` VALUE (the def's own `content` field, when present) merged by `compileLocal` into the consumer's content slot; a def without `content` delivers none (consumer keeps its authored content); `'children'`/`'type'` seam layers carry NO `content` value; `scalarBinding` not involved | D7 (live-prod 2026-08-14; F13 mechanism) |
 | G29 | delivery shapes (ALS-1/1b — user ruling 2026-08-14) | `children`-target: the consumer keeps its OWN element (the wrapper shell) and the DEF-ROOT element materializes as its seam-wired child (def type + css incl. cssDef rules on the def-root); `type`-target: SHELL COLLAPSE — the consumer's element takes the def's type + css (classes + cssDef rules; empty-host def-fill is correct for type-targets) and no separate def-root element renders; `content`-target: text only (G28). The def-root's cssDef rules join the deduped styles block once it has a renderable compiled state (D4 interplay, render.md SED-1/2) | D7 (live-prod 2026-08-14; delivery-shape ruling) |
 

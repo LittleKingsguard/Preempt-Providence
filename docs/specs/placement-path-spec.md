@@ -1796,7 +1796,14 @@ component-assembly anchor-layer seam for `target: 'type' | 'content' |
   single-parent language in §2.1 stay coherent because the seam introduces
   no additional path hop and no additional parent SELECTION — the seam's
   multiple legal parents are a compile/assembly fact, not a path-enumeration
-  multiplicity.
+  multiplicity. **AUTH-SEAM carve-out (2026-08-16 — decisions.md AUTH-SEAM
+  row):** a PHASE-bound def's children are RE-HOMED onto the consumer's
+  FAMILY link (`adoptDefChildren`, ops.md §2.7 D8 note — the def-root's
+  family link dissolves via `Link.destroy`, the adopted child anchor carries
+  the seam flag for G24 admission, the child is `runtimeMinted` +
+  in-tree) — they then enumerate via the ordinary consumer family path
+  exactly like authored children; the "seam-wired child never appears in
+  consumer.children" letter applies to the SEAM edge only.
 - **Reverse**: layer-passed placement anchors reverse like authored ones
   (`'content'` → `targetPlacement: string[]` in anchor order, §6.2/P3 — the
   layer is a compile-time materialization, the anchor's origin does not

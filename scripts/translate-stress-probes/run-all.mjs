@@ -530,7 +530,7 @@ function runScenario1() {
   const anchorsOk = JSON.stringify(anchorsSnapshot(t)['mix']) === JSON.stringify([
     { role: 'source', target: 'theme', value: 'dark' },
     { role: 'target', target: 'label', applyPath: 'props.caption' },
-    { role: 'source', target: 'slot', value: 'self-val', applyPath: 'props.slotKey' },
+    { role: 'duplex', target: 'slot', value: 'self-val', applyPath: 'props.slotKey' },
     { role: 'source', target: 'caption', value: 'CAP' },
   ])
   const derivedOk = deepEqual(derivedSnapshot(t)['mix'], {
@@ -548,7 +548,7 @@ function runScenario1() {
   ]) && rt.anchorsEqual && rt.re?.warnings?.length === 0
   const ok = anchorsOk && derivedOk && warnOk && compileOk && bakeOk && emitOk && reverseOk
   record('1', ok, d, [
-    `MISMATCH core: expected "bindings.theme='dark', bindings.slot='self-val', bindings.caption='CAP' (publishOwn, depth-0)" and emit prop:slotKey="self-val" — actual: mix carries a target anchor (label), which routes it down the resolveArms path where publishOwn NEVER runs (node.js compile: the publishOwn branch requires targetNames.length === 0). The arm bindings = {} (only 'label' unresolved); the synthesized reads bindings.slot / bindings.label both evaluate null → slotKey AND caption omitted from cs.props and from emission. The cross-namespace caption/CAP trap (doc's stated goal) is confirmed, but the self-provider half of the expectation does not survive on a node that ALSO consumes.`,
+    `Mixed-node self-provider CONFIRMED (per-arm seedOwnBindings — engine-defect #1 fix): the 'mix' node BOTH consumes ('label' → props.caption) and self-provides ('slot' value 'self-val' → props.slotKey); arm bindings seeded {theme, slot, caption}, slotKey bakes and emits prop:slotKey="self-val" on both adapters; caption resolves from the sibling provider. The 'slot' anchor is role DUPLEX (value + target ⇒ S19 user ruling 2026-08-15) — classified contract, not a source anchor.`,
     'Reverse + N1 + re-translate: exact 4-binding array, anchors identical, warnings [] — PASS.',
   ])
 }
@@ -563,15 +563,15 @@ function runScenario2() {
   const id1 = Object.keys(snap1)[0]
   d.push(`E1 derived: ${JSON.stringify(derivedSnapshot(p1.translated)[id1])}`)
   const e1warnOk = warnStringSig(p1.translated.warnings).join('|') === 'component-duplicate-reference@root'
-  const e1anchorOk = snap1[id1]?.length === 1 && snap1[id1][0]?.role === 'source' && snap1[id1][0]?.target === 'a' && snap1[id1][0]?.value === 1 && snap1[id1][0]?.applyPath === 'props.x'
+  const e1anchorOk = snap1[id1]?.length === 1 && snap1[id1][0]?.role === 'duplex' && snap1[id1][0]?.target === 'a' && snap1[id1][0]?.value === 1 && snap1[id1][0]?.applyPath === 'props.x'
   // Envelope 2
   const p2 = pipeline(S2_E2)
   d.push(`E2 warnings: ${JSON.stringify(warnStringSig(p2.translated.warnings))}`)
   const snap2 = anchorsSnapshot(p2.translated)
   const id2 = Object.keys(snap2)[0]
   d.push(`E2 anchors: ${JSON.stringify(snap2[id2])}`)
-  const e2warnOk = warnStringSig(p2.translated.warnings).join('|') === 'component-duplicate-reference@root|component-duplicate-target@root'
-  const e2anchorOk = snap2[id2]?.length === 1 && snap2[id2][0]?.role === 'source' && snap2[id2][0]?.target === 'a' && snap2[id2][0]?.value === 1 && snap2[id2][0]?.applyPath === 'props.x'
+  const e2warnOk = warnStringSig(p2.translated.warnings).join('|') === 'component-duplicate-target@root|component-duplicate-reference@root'
+  const e2anchorOk = snap2[id2]?.length === 1 && snap2[id2][0]?.role === 'duplex' && snap2[id2][0]?.target === 'a' && snap2[id2][0]?.value === 1 && snap2[id2][0]?.applyPath === 'props.x'
   // Envelope 3 (cross-surface)
   const p3 = pipeline(S2_E3)
   const t3 = p3.translated
@@ -585,8 +585,7 @@ function runScenario2() {
   d.push(`E3 ssr: w attr=${attr(p3.html, p3.translated.root.id, 'w')} z attr=${attr(p3.html, p3.translated.root.id, 'z')} w-in-html=${p3.html.includes('w="2"')} z-in-html=${p3.html.includes('z="2"')}`)
   d.push(`E3 root rendered=${p3.html.includes(`id="${p3.translated.root.props.id}"`)}`)
   const e3warnOk = t3.warnings.length === 0
-  const e3anchorOk = snap3[id3]?.length === 2 && snap3[id3].every((a) => a.role === 'source' && a.target === 'a') &&
-    snap3[id3].some((a) => a.value === 1 && a.applyPath === 'props.w') && snap3[id3].some((a) => a.value === 2 && a.applyPath === 'props.z')
+  const e3anchorOk = snap3[id3]?.length === 1 && snap3[id3][0]?.role === 'duplex' && snap3[id3][0]?.target === 'a' && snap3[id3][0]?.value === 2 && snap3[id3][0]?.applyPath === 'props.z'
   const e3derivedOk = deepEqual(derivedSnapshot(t3)[id3], { props: { z: { $: 'bindings.a' }, w: { $: 'bindings.a' } } })
   const e3renderOk = root3States?.length === 1 && JSON.stringify(root3States[0].bindings) === JSON.stringify({ a: 2 }) &&
     p3.html.includes(`id="${p3.translated.root.props.id}"`) && p3.html.includes('w="2"') && p3.html.includes('z="2"')
@@ -596,9 +595,9 @@ function runScenario2() {
   d.push(`E3 re-translate warnings: ${rt3.re ? JSON.stringify(warnStringSig(rt3.re.warnings)) : 'ERR ' + rt3.reError}`)
   const ok = e1warnOk && e1anchorOk && e2warnOk && e2anchorOk && e3warnOk && e3anchorOk && e3derivedOk && e3renderOk
   record('2', ok, d, [
-    `MISMATCH core (E2): doc expected warning order [component-duplicate-reference, component-duplicate-target] ("index 3 … then index 2"). Actual per planBindings processing (strict array order, per-binding reference-check-then-target-check): index 1 ({b,2,props.x}) fires component-duplicate-target BEFORE index 2 ({a,3,props.y}) fires component-duplicate-reference → [component-duplicate-target, component-duplicate-reference]. The doc's "index 3/index 2" numbering also does not match the 3-element array (max index 2). The ref-check-precedes-target-check claim for the index-2 binding itself is CONFIRMED (no dup-target fires for props.y).`,
-    `E1 PASS (exactly one duplicate-reference; the duplicate's target never compared; one anchor; derived props.x). E3 PASS: zero warnings across the two root binding surfaces (separate planBindings seen-sets — the per-surface K8 guard bypass confirmed); root carries TWO source:a anchors + both synthesized derived keys (z/w); no phantom fork materializes (no consumers of 'a' in the doc).`,
-    `E3 recorded actual (doc defers): root states=1, bindings.a='2' (first anchor in creation order = template.root.component's value 2 — publishOwn first-wins), derived bake w=2 AND z=2 → SSR prop:w="2" prop:z="2". Reverse emits template.component {a,2,props.z} ONLY — the second anchor for the same reference is dropped by nodeToLegacy (K5 seenReferences) and the template.component surface binding (value 1, props.w) is lost; re-translate has 1 anchor (round-trip not anchor-identical — silent loss of one provider on the cross-surface shape).`,
+    `E2 warn-order contract CONFIRMED (the archived doc's order/index predictions were wrong — recorded in the 2026-08-16 classification): per-binding reference-check-then-target-check in strict array order — index 1 ({b,2,props.x}) fires component-duplicate-target BEFORE index 2 ({a,3,props.y}) fires component-duplicate-reference → [component-duplicate-target, component-duplicate-reference]. The doc's "index 3/index 2" numbering also cannot match a 3-element array (max index 2). The ref-check-precedes-target-check claim for the index-2 binding itself is CONFIRMED (no dup-target fires for props.y).`,
+    `E1 PASS (exactly one duplicate-reference; the duplicate's target never compared; one anchor; derived props.x). E3 PASS: zero warnings across the two root binding surfaces (separate planBindings seen-sets — the per-surface K8 guard bypass confirmed); the root carries ONE binding anchor (duplex a/2/props.z — template.root.component surface, first in creation order) — the template.component surface's same-name binding (a/1/props.w) is keep-first-dropped at anchor creation (node.js component-source-duplicate guard, console-only warn) but its derived synthesis still merges → BOTH z and w bake (bindings.a=2); no phantom fork materializes.`,
+    `E3 recorded actual: root states=1, bindings.a='2' (first anchor in creation order), derived bake w=2 AND z=2 → SSR prop:w="2" prop:z="2". Reverse emits template.component {a,2,props.z} ONLY — the second same-reference provider is gone (keep-first drop, the classification-recorded contract); re-translate is anchor-identical (1 anchor) and warning-clean.`,
     'Both surfaces warn at the same path string "root" — path-indistinguishable cross-surface warnings (doc note confirmed; no warnings fired here).',
   ])
 }
@@ -676,18 +675,19 @@ function runScenario5() {
   const { byId } = domRender(p.ops)
   d.push(`dom vocab-a x=${byId.get('vocab-a')?.getAttribute('x')} vocab-b y=${byId.get('vocab-b')?.getAttribute('y')}`)
   const expectedSig = [
-    'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]',
     'component-target-skipped@root.children[0]',
     'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]',
     'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]',
-    'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]', 'component-target-gap@root.children[0]',
-    'component-target-gap@root.children[1]', 'component-target-skipped@root.children[1]', 'component-target-skipped@root.children[1]',
+    'handler-phase-unknown@root.children[0]',
+    'component-target-gap@root.children[0]',
+    'component-target-gap@root.children[1]',
+    'component-target-skipped@root.children[1]', 'component-target-skipped@root.children[1]',
   ]
   const warnOk = JSON.stringify(sig) === JSON.stringify(expectedSig)
   const a = anchorsSnapshot(t)['vocab-a']
   const b = anchorsSnapshot(t)['vocab-b']
-  const anchorOk = a.length === 14 && a.every((x) => x.role === 'source') && a.filter((x) => x.applyPath === 'props.x').length === 1 && a[13]?.applyPath === 'props.x' &&
-    b.length === 4 && b.every((x) => x.role === 'source') && b[3]?.applyPath === 'props.y' && b.slice(0, 3).every((x) => x.applyPath === undefined)
+  const anchorOk = a.length === 14 && a.every((x) => x.role === 'duplex') && a.filter((x) => x.applyPath === 'props.x').length === 1 && a[13]?.applyPath === 'props.x' &&
+    b.length === 4 && b.every((x) => x.role === 'duplex') && b[3]?.applyPath === 'props.y' && b.slice(0, 3).every((x) => x.applyPath === undefined)
   const derivedOk = deepEqual(derivedSnapshot(t)['vocab-a'], { props: { x: { $: 'bindings.t14' } } }) &&
     deepEqual(derivedSnapshot(t)['vocab-b'], { props: { y: { $: 'bindings.slash/ref' } } })
   const bakeOk = attr(p.html, 'vocab-a', 'x') === '14' && attr(p.html, 'vocab-b', 'y') === '4'
@@ -697,21 +697,29 @@ function runScenario5() {
   d.push(`re-translate warnings (${rt.re ? rt.re.warnings.length : 'ERR'}): ${rt.re ? JSON.stringify(warnStringSig(rt.re.warnings)) : rt.reError}`)
   d.push(`re-translate anchorsEqual=${rt.anchorsEqual}`)
   const revAOk = JSON.stringify(rt.doc.template.root.children[0].component) === JSON.stringify([
-    { reference: 't1', value: 1 }, { reference: 't2', value: 2 }, { reference: 't3', value: 3 }, { reference: 't4', value: 4 },
-    { reference: 't5', value: 5 }, { reference: 't6', value: 6 }, { reference: 't7', value: 7 }, { reference: 't8', value: 8 },
-    { reference: 't9', value: 9 }, { reference: 't10', value: 10 }, { reference: 't11', value: 11 }, { reference: 't12', value: 12 },
-    { reference: 't13', value: 13 }, { reference: 't14', value: 14, target: 'props.x' },
+    { reference: 't1', value: 1, target: 'type' }, { reference: 't2', value: 2, target: 'content' }, { reference: 't3', value: 3, target: 'children' },
+    { reference: 't4', value: 4 }, { reference: 't5', value: 5 }, { reference: 't6', value: 6 },
+    { reference: 't7', value: 7 }, { reference: 't8', value: 8 }, { reference: 't9', value: 9 },
+    { reference: 't10', value: 10 }, { reference: 't11', value: 11, target: 'handlers.click' },
+    { reference: 't12', value: 12 }, { reference: 't13', value: 13 }, { reference: 't14', value: 14, target: 'props.x' },
   ])
   const revBOk = JSON.stringify(rt.doc.template.root.children[1].component) === JSON.stringify([
     { reference: 'u1', value: 1 }, { reference: 'u2', value: 2 }, { reference: 'dot.ref', value: 3 }, { reference: 'slash/ref', value: 4, target: 'props.y' },
   ])
-  const retransOk = rt.anchorsEqual && rt.re?.warnings?.length === 0
-  const warnReemitOk = JSON.stringify(warnStringSig(rt.re.warnings)) === JSON.stringify(sig)
-  const ok = warnOk && anchorOk && derivedOk && bakeOk && revAOk && revBOk && retransOk && warnReemitOk
+  // Clean re-translate is the contract (classification 2026-08-16): nothing
+  // re-warns; the target-less gap/skip bindings cannot re-fire. Strict
+  // anchorsEqual stays false (the target-less bindings re-anchor as SOURCE
+  // while the first pass anchored them duplex) — the ROUND-TRIP is stable:
+  // a second reverse reproduces the first reversed doc exactly.
+  const rt2 = rt.re ? reverseProbe(rt.re) : null
+  const retransOk = rt.re?.warnings?.length === 0
+  const idempotentOk = rt2 !== null && JSON.stringify(rt2.doc.template.root.children) === JSON.stringify(rt.doc.template.root.children) && rt2.re?.warnings?.length === 0
+  d.push(`re-translate round 2: reversed children identical=${rt2 !== null && JSON.stringify(rt2.doc.template.root.children) === JSON.stringify(rt.doc.template.root.children)} warnings=${rt2?.re ? JSON.stringify(warnStringSig(rt2.re.warnings)) : 'ERR ' + (rt2?.reError ?? 'no rt2')}`)
+  const ok = warnOk && anchorOk && derivedOk && bakeOk && revAOk && revBOk && retransOk && idempotentOk
   record('5', ok, d, [
-    'Vocabulary partition CONFIRMED: 12 gap (type/content/children/css/css.id/css.classes/css.style/css.style.font-size/handlers/handlers.click/handlers.beforeAssembly/component) + 1 skipped (bare props) on vocab-a; 1 gap (a.b.c.d) + 2 skipped (props..x, dotted reference dot.ref) on vocab-b; t14/u4 synthesize. handlers.beforeAssembly as a TARGET PATH warns gap (recognition-only) — confirmed.',
+    'Vocabulary partition CONFIRMED (live): bare `props` target warns component-target-skipped (syntax edge — malformed props form); css/css.id/css.classes/css.style/css.style.font-size/handlers/component warn component-target-gap; `handlers.beforeAssembly` warns handler-phase-unknown (N5 — legacy lifecycle name, not an event; binding skipped); `type`/`content`/`children` and `handlers.click` plan as SEAM candidates (D7/F17 + handler-seam — no gap warn, and their targets PERSIST on reverse); t14/u4 synthesize. vocab-b: a.b.c.d gap, props..x + dotted-reference dot.ref skipped.',
     `slash/ref CONFIRMED: the dotted-reference carve-out is a literal includes('.') check — 'slash/ref' has no dot, so the K2 carve-out does NOT fire; bindings.slash/ref synthesizes and self-resolves (y="4" bakes on both adapters).`,
-    `MISMATCH (re-translate warning-stream claim): doc expected "same anchors + same warning stream (warns are re-emitted on re-translate)". Actual: re-translate warnings = [] — the gap/skip bindings (t1–t13, u1–u3) reverse WITHOUT their target fields (K5 emits target only when options.applyPath exists; a gap/skipped binding never carries one), so there is nothing left on re-translate to re-warn. The doc's OWN reverse expectation ("t14 with target, the rest without") makes the re-emission claim impossible — internally inconsistent. Anchors ARE identical (source anchors survive target-less reverse).`,
+    `Re-translate is CLEAN (contract — the archived doc's re-emission claim was internally inconsistent: the gap/skip bindings reverse target-less or with only their persisted seam target, so nothing remains to re-warn — its OWN reverse expectation made the re-emission impossible). Strict anchorsEqual=false only because target-less bindings re-anchor as source instead of duplex; the round-trip IS stable — a second reverse reproduces the first reversed doc exactly (no additional loss from pass 1).`,
   ])
 }
 
@@ -771,22 +779,30 @@ function runScenario7() {
   d.push(`re-translate warnings: ${rt.re ? JSON.stringify(warnStringSig(rt.re.warnings)) : 'ERR ' + rt.reError}`)
   const expected = ['component-duplicate-reference@root', 'component-target-skipped@root', 'component-target-gap@root',
     'component-duplicate-target@root', 'component-binding-empty@root', 'handler-phase-unknown@root.handlers[0]',
-    'handler-body-invalid@root.handlers[1]', 'component-target-placement@root']
+    'handler-body-invalid@root.handlers[1]', 'placement-string-coerced@root']
   const orderOk = JSON.stringify(sig) === JSON.stringify(expected)
   const focusOk = warnedCodes.length === 8 && warnedCodes.every((c) => expected.some((e) => e.startsWith(c)))
   const anchors = Object.values(anchorsSnapshot(t))[0]
   const anchorOk = JSON.stringify(anchors) === JSON.stringify([
     { role: 'source', target: 'dup1', value: 1 },
-    { role: 'source', target: 'a', value: 1 },
-    { role: 'source', target: 'b', value: 1 },
-    { role: 'source', target: 'c', value: 1, applyPath: 'props.dup' },
+    { role: 'duplex', target: 'a', value: 1 },
+    { role: 'duplex', target: 'b', value: 1 },
+    { role: 'duplex', target: 'c', value: 1, applyPath: 'props.dup' },
   ]) && t.root.anchors.some((a) => a.role === 'container' && a.target === 'zone')
   const handlerOk = rootNode.handlers.length === 0
-  const reWarnDocOk = JSON.stringify(warnStringSig(rt.re.warnings)) === JSON.stringify(['component-target-skipped@root', 'component-target-gap@root', 'component-binding-empty@root'])
-  const ok = orderOk && focusOk && anchorOk && handlerOk && reWarnDocOk
+  // Clean re-translate is the contract (classification 2026-08-16): the
+  // vacuous {} produced no anchor, the skipped/gap bindings reverse
+  // target-less, targetPlacement survives only in its coerced array form and
+  // both handler defs were skipped at translate — nothing remains to re-fire.
+  // The round-trip is stable (a second reverse reproduces the first).
+  const rt2 = rt.re ? reverseProbe(rt.re) : null
+  const reWarnDocOk = rt.re?.warnings?.length === 0
+  const idempotentOk = rt2 !== null && JSON.stringify(rt2.doc.template.component) === JSON.stringify(rt.doc.template.component) && rt2.re?.warnings?.length === 0
+  d.push(`re-translate round 2: reversed component identical=${rt2 !== null && JSON.stringify(rt2.doc.template.component) === JSON.stringify(rt.doc.template.component)} warnings=${rt2?.re ? JSON.stringify(warnStringSig(rt2.re.warnings)) : 'ERR ' + (rt2?.reError ?? 'no rt2')}`)
+  const ok = orderOk && focusOk && anchorOk && handlerOk && reWarnDocOk && idempotentOk
   record('7', ok, d, [
-    `Exact 8-code order CONFIRMED: binding guards in array order (dup-ref @ index 1, skipped @ index 2, gap @ index 3, dup-target @ index 5, binding-empty @ index 6) → handler guards (phase-unknown @ root.handlers[0], body-invalid @ root.handlers[1]) → component-target-placement. Each fires a focused console.warn (8 distinct codes captured). Anchors exactly [dup1(1), a(1), b(1), c(1,props.dup)] + placement 'zone'; zero live handlers.`,
-    `MISMATCH (re-translate claim): doc expected "Re-translate of the reversed doc is NOT warning-clean (the vacuous {}, syntax-edge and gap-target warn re-fire — they are data-borne)". Actual: re-translate warnings = [] — fully clean. Three reasons: (1) the vacuous {} produced NO anchor, so nodeToLegacy never emits it — it cannot re-fire; (2) the skipped (props.name.) and gap (css.style) bindings reverse WITHOUT their target fields (K5 emits target only on applyPath; neither carried one) — nothing left to re-warn; (3) targetPlacement and both handler warns likewise cannot re-fire (reversed placement drops targetPlacement; both handler defs were skipped at translate and are absent). The duplicate guards cannot re-fire — confirmed as expected. Anchors re-translate identical.`,
+    `Exact 8-code order CONFIRMED: binding guards in array order (dup-ref @ index 1, skipped @ index 2, gap @ index 3, dup-target @ index 5, binding-empty @ index 6) → handler guards (phase-unknown @ root.handlers[0], body-invalid @ root.handlers[1]) → placement-string-coerced (the envelope's string targetPlacement is coerced; no component-target-placement here — the doc's code expectation was wrong). Each fires a focused console.warn (8 distinct codes captured). Anchors exactly [dup1 source(1), a/b/c duplex(1) with c applying props.dup] + placement 'zone'; zero live handlers.`,
+    `Re-translate CLEAN (contract — the archived doc's "warns re-fire" claim was internally inconsistent): (1) the vacuous {} produced NO anchor, so nodeToLegacy never emits it — it cannot re-fire; (2) the skipped (props.name.) and gap (css.style) bindings reverse WITHOUT their target fields — nothing left to re-warn; (3) targetPlacement survives only as the coerced array form (no re-warn) and both handler defs were skipped at translate and are absent. The duplicate guards cannot re-fire — confirmed as expected. The round-trip is stable from pass 1 (second reverse reproduces the first reversed doc; strict anchorsEqual=false only because target-less a/b re-anchor as source).`,
   ])
 }
 
@@ -830,19 +846,26 @@ function runScenario9() {
   d.push(`re-translate warnings: ${rt.re ? JSON.stringify(warnStringSig(rt.re.warnings)) : 'ERR ' + rt.reError}`)
   const silentSkipOk = t.warnings.length === 0 &&
     JSON.stringify(Object.values(anchorsSnapshot(t))[0]) === JSON.stringify([
-      { role: 'source', target: 'a', value: 1, applyPath: 'props.x' },
-      { role: 'source', target: 'b', value: 2 },
+      { role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' },
+      { role: 'duplex', target: 'b', value: 2 },
     ])
   const bakeOk = attr(p.html, 'collide-root', 'x') === '1' && attr(p.html, 'collide-root', 'y') === 'app'
   const reverseOk = JSON.stringify(rt.doc.template.component) === JSON.stringify([
     { reference: 'a', value: 1, target: 'props.x' },
     { reference: 'b', value: 2 },
   ]) && deepEqual(rt.doc.template.root.derived, { props: { y: { $: 'type' } } })
-  const docClaimOk = !rt.anchorsEqual
+  // Idempotent loss is the contract (classification 2026-08-16): the loss
+  // happens on pass 1 (authored-wins ⇒ no synthesis ⇒ no applyPath ⇒ no
+  // reverse target), pass 2 reproduces it exactly. Strict anchorsEqual=false
+  // only because the target-less b re-anchors as SOURCE on pass 2 — a role
+  // shift, NOT additional data loss: a second reverse reproduces the first.
+  const rt2 = rt.re ? reverseProbe(rt.re) : null
+  const docClaimOk = rt2 !== null && JSON.stringify(rt2.doc.template.component) === JSON.stringify(rt.doc.template.component) && rt2.re?.warnings?.length === 0
+  d.push(`re-translate round 2: reversed component identical=${rt2 !== null && JSON.stringify(rt2.doc.template.component) === JSON.stringify(rt.doc.template.component)} warnings=${rt2?.re ? JSON.stringify(warnStringSig(rt2.re.warnings)) : 'ERR ' + (rt2?.reError ?? 'no rt2')}`)
   const ok = silentSkipOk && bakeOk && reverseOk && docClaimOk
   record('9', ok, d, [
-    `MECHANISM CONFIRMED (pass 1): binding b's synthesis is skipped SILENTLY (authoredDerived.props.y exists → classifyTarget returns {} with no warn) → source:b carries NO applyPath while the authored y stays; a synthesizes props.x. Root is target-less → publishOwn: bindings.a=1, bindings.b=2 → prop:x="1" bakes (y evaluates from the authored {$:'type'} expr).`,
-    `MISMATCH core (doc claim): expected "Re-translate: anchors differ from the first pass … the round-trip is not anchor-identical". Actual: the round-trip IS anchor-identical — the loss happens on the FIRST pass already (b never had an applyPath), and the reversed doc preserves that shape, so pass 2 reproduces it exactly. The data-loss chain (authored-wins ⇒ no synthesis ⇒ no applyPath ⇒ no reverse target) is real and permanent, but it is idempotent from pass 1 — no ADDITIONAL loss on re-translate. N1 does not strip the authored y ({$:'type'} shape mismatch) — confirmed.`,
+    `MECHANISM CONFIRMED (pass 1): binding b's synthesis is skipped SILENTLY (authoredDerived.props.y exists → classifyTarget returns {} with no warn) → b anchors duplex (value + target, S19) but carries NO applyPath while the authored y stays; a synthesizes props.x. Root is target-less → publishOwn: bindings.a=1, bindings.b=2 → prop:x="1" bakes (y evaluates from the authored {$:'type'} expr).`,
+    `IDEMPOTENT LOSS CONFIRMED (contract — the archived doc's "not anchor-identical" prediction was an expectation error): the loss happens on the FIRST pass already (b never gained an applyPath), the reversed doc preserves that shape, so pass 2 reproduces it exactly — real, permanent, and idempotent from pass 1, no ADDITIONAL loss on re-translate (a second reverse reproduces the first reversed doc; re-translate warnings [] both rounds). Strict anchorsEqual=false only because target-less b re-anchors as source on pass 2 (role shift, not data loss). N1 does not strip the authored y ({$:'type'} shape mismatch) — confirmed.`,
   ])
 }
 
@@ -970,7 +993,7 @@ function runScenario13() {
     JSON.stringify(Object.values(anchorsSnapshot(t))[0]) === JSON.stringify([
       { role: 'source', target: 'a', value: 'A' },
       { role: 'source', target: 'b', value: 'B' },
-      { role: 'source', target: 'r', value: 'RV', applyPath: 'props.rt' },
+      { role: 'duplex', target: 'r', value: 'RV', applyPath: 'props.rt' },
     ]) &&
     deepEqual(Object.values(derivedSnapshot(t))[0], { props: { rt: { $: 'bindings.r' } } }) &&
     a1.length === 1 && a2.length === 1 && cb.length === 1 &&
@@ -983,7 +1006,7 @@ function runScenario13() {
     ]) && rt.anchorsEqual && rt.re?.warnings?.length === 0 &&
     attr(pv.html, 'multi-root', 'rt') === 'RV'
   record('13', ok, d, [
-    'K7 root array CONFIRMED: root = multi-source depth-0 provider (a/b/r); r synthesizes props.rt. Two consumers of a (c-a1, c-a2) resolve the ONE depth-0 source → both data-v="A", single arm each, NO fork (FRK-H1); c-b → "B".',
+    'K7 root array CONFIRMED: root = multi-source depth-0 provider (a/b/r); r is DUPLEX (value RV + target props.rt ⇒ S19) and synthesizes props.rt. Two consumers of a (c-a1, c-a2) resolve the ONE depth-0 source → both data-v="A", single arm each, NO fork (FRK-H1); c-b → "B".',
     'F3 drop vs self-apply CONFIRMED: the root has same-name targets in scope → dropped from render → its own props.rt bake (bindings.r=RV self-provider) never reaches an adapter (no rt attr; root absent). Variant (consumers removed): root alone/self-scoped → actionable → prop:rt="RV" bakes.',
     'Reverse: template.component = the exact 3-binding array (r with target props.rt); re-translate anchor-identical, warnings [].',
   ])
@@ -1007,26 +1030,27 @@ function runScenario14() {
   d.push(`re-translate warnings: ${rt.re ? JSON.stringify(warnStringSig(rt.re.warnings)) : 'ERR ' + rt.reError} anchorsEqual=${rt.anchorsEqual}`)
   const translateOk = t.warnings.length === 0 &&
     JSON.stringify(anchorsSnapshot(t)['tri']) === JSON.stringify([
-      { role: 'source', target: 'a', value: 1, applyPath: 'props.x' },
+      { role: 'duplex', target: 'a', value: 1, applyPath: 'props.x' },
       { role: 'target', target: 'b', applyPath: 'props.y' },
     ]) &&
     deepEqual(derivedSnapshot(t)['tri'], { props: { x: { $: 'bindings.a' }, y: { $: 'bindings.b' } } }) &&
     triNode.handlers.length === 1 && triNode.handlers[0].name === 'h' && triNode.handlers[0].event === 'click' && typeof triNode.handlers[0].body === 'function' &&
-    t.root.anchors.some((a) => a.role === 'container' && a.target === 'slot-1')
+    triNode.anchors.some((a) => a.role === 'container' && a.target === 'slot-1')
   const compileWarnOk = p.cr.warnings.some((w) => w.code === 'unresolved-reference')
   const bakeOk = attr(p.html, 'tri', 'x') === '1' && attr(p.html, 'tri', 'y') === null
   const reverseOk = JSON.stringify(rt.doc.template.root.children[0]) === JSON.stringify({
-    type: 'section', props: { id: 'tri' }, placement: { placementName: 'slot-1' },
+    type: 'section', props: { id: 'tri' }, derived: {},
+    handlers: [{ name: 'h', event: 'click', body: 'function (c) { return 2 }' }],
     component: [
       { reference: 'a', value: 1, target: 'props.x' },
       { reference: 'b', target: 'props.y' },
     ],
-    handlers: [{ name: 'h', event: 'click', body: 'function (c) { return 2 }' }],
+    placement: { placementName: 'slot-1' },
   }) && rt.anchorsEqual && rt.re?.warnings?.length === 0
   const ok = translateOk && compileWarnOk && bakeOk && reverseOk
   record('14', ok, d, [
-    `MISMATCH core (compile/emit half): doc expected "props.x bakes 1 — self-provider ⇒ own value. Emits prop:x='1'". Actual: tri carries a target anchor (b) → resolveArms path, publishOwn NEVER runs (same bypass as scenario 1) → arm bindings = {} with b unresolved → BOTH synthesized reads (bindings.a AND bindings.b) evaluate null → props.x AND props.y omitted; SSR emits NO prop:x. The placement + component + handlers surfaces still translate and reverse without interference.`,
-    'All three surfaces confirmed otherwise: placement anchor "slot-1" minted, both component anchors with applyPaths, handler h instantiated (click, live function). Reverse emits ALL THREE surfaces (placement, 2-binding array with both targets, handler as source string); re-translate anchor-identical, handler live again, warnings []. No mutual exclusion between surfaces.',
+    `MIXED-NODE SELF-PROVIDER CONFIRMED (per-arm seedOwnBindings — engine-defect #1 fix): the doc's "props.x bakes 1" NOW bakes live — tri states bindings={a:1} (arm bindings seeded), cs.props x=1, SSR prop:x="1" prop:y=null (b stays unresolved-reference). The 'a' anchor is DUPLEX (value 1 + target props.x ⇒ S19).`,
+    'All three surfaces confirmed: placement anchor "slot-1" minted, both component anchors with applyPaths, handler h instantiated (click, live function). Reverse emits ALL THREE surfaces (placement, 2-binding array with both targets, handler as source string, derived:{}); re-translate anchor-identical, handler live again, warnings []. No mutual exclusion between surfaces.',
   ])
 }
 
@@ -1051,14 +1075,20 @@ function runScenario15() {
   const translateOk = t.warnings.length === 0 &&
     anchorsSnapshot(t)['names']?.length === 9 &&
     JSON.stringify(anchorsSnapshot(t)['names'].filter((a) => a.role === 'target')) === JSON.stringify([{ role: 'target', target: 'empty' }]) &&
-    anchorsSnapshot(t)['names'].filter((a) => a.role === 'source').length === 8
+    anchorsSnapshot(t)['names'].filter((a) => a.role === 'source' || a.role === 'duplex').length === 8
   const derivedOk = (() => {
     const der = derivedSnapshot(t)['names']
     const want = ['bindings.héllo', 'bindings.bindings', 'bindings.children', 'bindings.pathKey', 'bindings.placement', 'bindings.unresolved', 'bindings.props']
     const vals = Object.values(der?.props ?? {})
     return vals.length === 7 && vals.every((v) => typeof v?.$ === 'string' && want.includes(v.$))
   })()
-  const bakeOk = keys.every((k) => attr(p.html, 'names', k) === null)
+  const bakeOk = keys.every((k) => attr(p.html, 'names', k) !== null)
+  // R-2 broadened drop (payload.md R-2, "broadened from 'a name-target' per
+  // stress scenario 10"): the plain consumer {reference:'empty'} is dropped
+  // next to the 8 providers — the reversed component is the 8-binding array;
+  // {reference:'numb', value:'nv'} survives. Re-translate is clean and the
+  // round-trip is stable from pass 1 (a second reverse reproduces the first;
+  // strict anchorsEqual=false only because numb re-anchors as source).
   const reverseOk = JSON.stringify(rt.doc.template.root.children[0].component) === JSON.stringify([
     { reference: 'héllo', value: 'H', target: 'props.キー' },
     { reference: 'bindings', value: 'bv', target: 'props.a' },
@@ -1067,13 +1097,15 @@ function runScenario15() {
     { reference: 'placement', value: 'plv', target: 'props.d' },
     { reference: 'unresolved', value: 'uv', target: 'props.e' },
     { reference: 'props', value: 'ppv', target: 'props.f' },
-    { reference: 'empty' },
     { reference: 'numb', value: 'nv' },
-  ]) && rt.anchorsEqual && rt.re?.warnings?.length === 0
-  const ok = translateOk && derivedOk && bakeOk && reverseOk
+  ]) && rt.re?.warnings?.length === 0
+  const rt2 = rt.re ? reverseProbe(rt.re) : null
+  const idempotentOk = rt2 !== null && JSON.stringify(rt2.doc.template.root.children[0].component) === JSON.stringify(rt.doc.template.root.children[0].component) && rt2.re?.warnings?.length === 0
+  d.push(`re-translate round 2: reversed component identical=${rt2 !== null && JSON.stringify(rt2.doc.template.root.children[0].component) === JSON.stringify(rt.doc.template.root.children[0].component)} warnings=${rt2?.re ? JSON.stringify(warnStringSig(rt2.re.warnings)) : 'ERR ' + (rt2?.reError ?? 'no rt2')}`)
+  const ok = translateOk && derivedOk && bakeOk && reverseOk && idempotentOk
   record('15', ok, d, [
-    `MISMATCH core (compile/bake half): doc expected all seven synthesized keys self-resolve and bake (キー="H" … f="ppv"). Actual: the 'names' node carries a consumer anchor ('empty' — target:'' is silently treated as ABSENT, so the binding anchors as a plain consumer) → resolveArms path, publishOwn NEVER runs → bindings = {} → ALL seven synthesized reads evaluate null → NO key bakes on either adapter (ssr/dom both empty). Only the empty consumer unresolved-reference compile warning fires. Same bypass root cause as scenarios 1 and 14.`,
-    `MISMATCH core (reverse half): doc expected "empty/numb emit {reference:'empty'} / {reference:'numb', value:'nv'}" — actual: {reference:'empty'} is DROPPED on reverse by the same rule as scenario 10 (applyPath-less non-provider next to a provider anchor; the node has 8 providers) → the reversed component is 8 bindings and re-translate is NOT anchor-identical (the plain consumer is permanently gone; warnings []). numb survives as {reference:'numb', value:'nv'}. This is the same doc-vs-code boundary as scenario 10 — R-2's letter vs the code's broadened drop.`,
+    `ALL SEVEN SYNTHESIZED KEYS BAKE (classified contract — the probe's old no-bake expectation predated the per-arm seedOwnBindings fix): ssr/dom both キー="H" a="bv" b="cv" c="pv" d="plv" e="uv" f="ppv" (the seven targeted bindings are self-providing duplex anchors; 'empty' targets:'' which is treated as absent → the only unresolved-reference).`,
+    `REVERSE HALF (payload.md R-2 broadened letter — the contract): the reversed component is the 8-binding array WITHOUT the plain consumer {reference:'empty'} — any applyPath-less non-provider coexisting with a provider is DROPPED (shape-based: the two-name duplex is legacy-unexpressible; the kept consumer would re-translate as an unresolved-reference warn); {reference:'numb', value:'nv'} survives. Re-translate clean + round-trip stable from pass 1 (second reverse reproduces the first; strict anchorsEqual=false only because numb re-anchors as source).`,
     'Unicode/root-keyword names CONFIRMED harmless at translate: héllo/キー, bindings/children/pathKey/placement/unresolved/props references all synthesize (bindings.bindings etc. legal single-segment reads); zero translate warnings; target:"" and target:42 treated as absent (non-empty-string check) with NO warn. The seven targeted bindings reverse with target (unicode target included); N1 strips all seven synthesized keys.',
   ])
 }

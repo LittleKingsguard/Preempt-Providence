@@ -363,7 +363,14 @@ export class Supervisor {
           }
         }
         const nodeState = (node as Node).state
-        if (nodeState !== 'in-tree') {
+        // AUTH-SEAM nested (2026-08-16) — the family-adopted def child
+        // instance (runtimeMinted, delivered component data) is mutable
+        // even in a prototype chain (a nested seam consumer's adopted def
+        // children sit under a token-terminated def-root, so their state is
+        // 'prototype'); the def DATA is the authored truth, the runtime
+        // instance is the delivered component. 'unplaced'/'destroyed'
+        // rejections stay untouched.
+        if (nodeState !== 'in-tree' && !(nodeState === 'prototype' && (node as Node).runtimeMinted)) {
           return { status: 'no-usable-state', nodeState }
         }
         ;(node as Node).applySlice(mutation as never)
@@ -394,7 +401,18 @@ export class Supervisor {
         // explicit destroy: the node leaves the content source of truth too,
         // so the sweep finalizes it (content otherwise persists when detached)
         unregisterContentNode(node as Node)
-        ;(node as Node).destroy()
+        const target = node as Node
+        if (target.runtimeMinted) {
+          // AUTH-SEAM (2026-08-15) — RUNTIME-MINTED retention destroy: a
+          // family-adopted def child (or a clone-instance) is marked
+          // destroyed WITHOUT dissolving its family edge — the walk keeps
+          // the slot (the legacy view's children[i] positions stay stable,
+          // the sibling's shared family link is never touched) while the
+          // compile drops the node (destroyed ⇒ no state ⇒ no render).
+          target.markDestroyed()
+        } else {
+          target.destroy()
+        }
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [node!.id] })
         this.emitStructure('destroy', node!.id); this.markPass2(node!.id)
         return { status: 'applied', journalId: entry!.id, dirtied: [node!.id] }
@@ -486,7 +504,7 @@ export class Supervisor {
         return { status: 'applied', journalId: entry!.id, dirtied: [copy.id] }
       }
       if (op.kind === 'layer-apply') {
-        // ORIGIN-OWNER (legacy-handler-reuse-review §12.4) — the atomic
+        // ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4) — the atomic
         // mint-and-wire op: mints the NodeData set as family children of the
         // target, registers the minted set, and applies the anchor layer.
         // Idempotent (same layerId = no-op); the journal result persists the

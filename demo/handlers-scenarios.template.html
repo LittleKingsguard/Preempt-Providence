@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — handlers-scenarios: mocked real-world handler scenarios (blind test #5)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .scenario-card, .comments-panel, .weather-card, .product-list, .search-wrap,
+    .tabs, .newsletter-form, .broken-widget, .toast-stack, .multi-panel,
+    .site-header, .chip-slot, .user-auth-dropdown, .dropdown-menu, .toast,
+    .result-item, .comment, .tab, .tab-panel, .cart-badge, .cart-header {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .comment { background: #eef4ef; }
+    .result-item { background: #eef4ff; }
+    .toast { border: 1px solid #2a7; background: #e6f7ec; padding: 8px; display: inline-block; margin-left: 6px; }
+    .toast-stack { min-height: 2.2em; border-style: solid; }
+    .tab.is-active, .tab-panel.is-active { background: #cfe8ff; border-color: #267; }
+    .cart-badge { background: #ffe08a; border: 1px solid #b98; border-radius: 10px; padding: 0 8px; }
+    .auth-main-btn, .logout-btn, .add-btn, .small-btn, .weather-btn, .toast-trigger,
+    .toast-dismiss, #newsletter-submit { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; }
+    .dropdown-menu { border: 1px solid #789; box-shadow: 2px 2px 6px rgba(0,0,0,.15); background: #fff; width: 10em; }
+    .input-error { border-color: #c33 !important; background: #fdeaea !important; }
+    .is-cold { background: #dbe9ff; }
+    .is-warm { background: #fff0d6; }
+    .touched { border-color: #2a7 !important; background: #e6f7ec !important; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="handlers-scenarios">
+  <!--
+    ============================================================================
+    HANDLERS-SCENARIOS — blind test #5 (docs/specs/handlers-scenarios.md).
+    The page renders MOCKED real-world handler use cases through the LANDED
+    legacy-handler surface. The page input is a LEGACY JSON envelope
+    (translate.md §1 LegacyInitialData); handler bodies ship as function-STRING
+    data (the seam default 'legacy' format — the bridge wraps them so bodies
+    receive `(event, context)`, handlers.md §6). The page module
+    (demo/handlers-scenarios.js) is CORE ONLY (dist/core/*) + the envelope
+    data + the harness; there is NO page-side feature logic for any scenario —
+    a use case needing an outside script/function is a data-authoring mistake.
+
+    The harness mirrors the supervisor's after-compile phase dispatch by hand
+    (the render-new.mjs pattern): compile -> recordResolved -> dispatch
+    after-compile on every node whose handlers carry the phase -> recompile ->
+    emit. The page-load 'load' dispatch fires on every load-bound node before
+    the first render; the runner checks dispatch the click/input/submit events
+    with their args and assert the INTENDED OUTPUTS of the spec.
+
+    SECTION MAP (scenario -> mount -> documentation)
+    ----------------------------------------------------------------------------
+    1.  Auth dropdown (AUTH-SEAM)   #mount-s1-anon + #mount-s1-alice
+        (rendered TWICE: no-userData / userData {username:'alice'})
+                                    -- decisions.md AUTH-SEAM row; handlers.md §6;
+                                       legacy-bridge AU1-AU3 (the def phase entry
+                                       copies to the type-target consumer; def
+                                       children re-home in-tree; userData-driven
+                                       chip conversion; retention destroy)
+    2.  Comments panel (mocked)     #mount-main s2-card
+                                    -- handlers.load + layer-apply children
+                                       injection (ops.md §2.8 OO-7), idempotent
+                                       re-injection (OO-2); teardown is
+                                       engine-side only (OO-5 removeLayer — no
+                                       body op kind invokes it; Clear destroys
+                                       each minted comment via clientAPI)
+    3.  Weather card (mocked API)   #mount-main s3-card
+                                    -- event args (event.value), state-slice
+                                       content/props/css writes, NodeView css read
+    4.  Cart badge counter          #mount-main s4-card
+                                    -- parent walk + findNode honest classes
+                                       query, content read + write
+    5.  Search filter (mocked data) #mount-main s5-card
+                                    -- input event + event.value; the FIRST
+                                       dispatch injects the filtered set,
+                                       re-dispatch never accumulates (the
+                                       OO-2 layer-apply no-op)
+    6.  Tabs is-active toggling     #mount-main s6-card
+                                    -- event stub target, family-children
+                                       iteration, css class writes
+    7.  Form submit validation      #mount-main s7-card
+                                    -- preventDefault, args, two targets in one
+                                       body (findNode + writes)
+    8.  Throwing-handler containment #mount-main s8-card
+                                    -- pre-throw write lands; the dispatch
+                                       result carries the contained Error
+    9.  Toast + authored dismiss    #mount-main s9-card
+                                    -- layer-minted LEAF child (the mint
+                                       drops nested children AND anchors — the
+                                       dismiss binding is AUTHORED beside the
+                                       stack); destroy (retention)
+    10. Multi-handler node          #mount-main s10-card
+                                    -- load + click on ONE node (D16
+                                       append-with-override merge)
+    ============================================================================
+  -->
+
+  <main>
+    <h1>handlers-scenarios — mocked real-world handler scenarios (blind test #5)</h1>
+    <p class="goals">
+      Ten mocked real-world use cases driven ENTIRELY from LEGACY JSON envelopes
+      + the documented core interfaces (<code>translateLegacy → Supervisor →
+      EventBridge → compile → recordResolved → dispatchPhase/dispatchEvent →
+      emitElements / diffMinimal / applyOps (DomAdapter)</code>). Handler bodies
+      are function-STRING data (the seam's <code>(event, context)</code>
+      legacy format); the harness dispatches <code>after-compile</code> on the
+      AUTH-SEAM phase targets and <code>load</code> on every load-bound node at
+      page load, then the runner checks dispatch the rest and assert the
+      spec's intended outputs. The banner is <code>handlers-scenarios</code>;
+      a profile line (<code>[handlers-scenarios:profile]</code>) mirrors the
+      other pages' <code>acc()</code> instrumentation.
+    </p>
+
+    <!-- Framework input: the LEGACY envelopes (translateLegacy input), keyed
+         by mount: anon / alice (scenario 1's two userData variants) + main
+         (scenarios 2–10). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <section>
+      <h2>Scenario 1 — Auth dropdown: login/profile button + logout (AUTH-SEAM)</h2>
+      <p class="expect">
+        The corpus auth pattern through the AUTH-SEAM consumer model: the def
+        <code>userAuth</code> carries <code>{target: 'handlers.afterAssembly',
+        reference: 'AuthInit'}</code> — the N5 carve-out that plans the
+        after-compile PHASE; the chip-slot div type-targets the def; the
+        compiled phase entry copies onto the consumer and the def children
+        (auth button + dropdown menu) re-home in-tree. <code>AuthInit</code>
+        reads the read-only <code>supervisor.userData</code> passthrough:
+        WITHOUT userData the chip converts to the Sign-In LINK
+        (<code>&lt;a href="/api/oauth/login"&gt;Sign In&lt;/a&gt;</code>) and
+        the dropdown is destroyed-but-retained (walk slot kept, destroyed
+        flag set — its ELEMENT still emits: the def-fill emit sources def
+        children from def data, so a destroyed flag is NOT a render-removal,
+        defects.md OPEN #20; the checks pin the retention half);
+        WITH <code>{username: 'alice'}</code> the chip is the
+        <code>Profile ▼</code> button and the dropdown survives. The logout
+        control is an AUTHORED header button (the spec's logout button sat
+        inside the def — def-child bindings are a docs-silent dead surface,
+        see the writer notes); its click destroys the dropdown menu
+        (retention) — the page still renders. Rendered twice, one envelope per
+        variant (userData is per-translate, first payload wins).
+      </p>
+      <h3>Variant 1a — no userData (not signed in)</h3>
+      <div class="card-mount" id="mount-s1-anon"></div>
+      <h3>Variant 1b — userData {username: 'alice'} (signed in)</h3>
+      <div class="card-mount" id="mount-s1-alice"></div>
+    </section>
+
+    <section>
+      <h2>Scenarios 2–10 — the main envelope (one legacy envelope, a card per scenario)</h2>
+      <p class="expect">
+        Every card below is framework-rendered from the main envelope: the
+        comments panel loads its mocked comments on page load (idempotent
+        re-injection; Clear destroys the minted comments — the empty-children
+        payload is a documented no-op), the weather card is written by a click
+        dispatched with the city as the event arg, the cart badge counts
+        clicks across both product buttons, the search box filters a
+        body-local dataset (the first dispatch injects; re-dispatch never
+        accumulates — the OO-2 no-op), the tabs shuffle
+        <code>is-active</code>, the form validates on submit, the broken
+        widget contains its throwing handler (fallback lands, Error
+        contained), the toast stack mints a leaf toast on "Show toast" and the
+        AUTHORED dismiss button destroys it (the layer-apply mint drops the
+        payload's own anchors — re-expressed per the spec's data-fix rule),
+        and the multi-handler panel keeps BOTH its load and click entries. All
+        mutation logic lives in the string bodies; the page only dispatches
+        and re-renders.
+      </p>
+      <div class="card-mount" id="mount-main"></div>
+    </section>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="handlers-scenarios.js"></script>
+</body>
+</html>
