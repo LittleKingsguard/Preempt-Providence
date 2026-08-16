@@ -863,3 +863,78 @@ describe('PARS-* parity & hydration', () => {
     expect(typeof (dom as unknown as { compile?: unknown }).compile).toBe('undefined')
   })
 })
+
+describe('DOM-B* — the detached INITIAL-BUILD batch (A, 2026-08-16)', () => {
+  let mount: Mount
+  let adapter: DomAdapter
+
+  beforeEach(() => {
+    installDom()
+    mount = makeMount()
+    adapter = new DomAdapter(mountEl(mount))
+  })
+  afterEach(() => {
+    uninstallDom()
+  })
+
+  it('DOM-B1 created elements are HELD BACK from the mount during a batch; endBatch mounts ONLY the roots, in creation order', () => {
+    adapter.beginBatch()
+    const root = adapter.createEl('div', 'root')
+    const a = adapter.createEl('div', 'a')
+    const b = adapter.createEl('div', 'b')
+    // nothing touched the live mount yet
+    expect(mount.children).toEqual([])
+    // appends re-parent under owners (a, b under root)
+    adapter.appendChild(root, a)
+    adapter.appendChild(root, b)
+    adapter.endBatch()
+    // only the unparented root mounted; a/b nested under it, NOT on the mount
+    expect(mount.children).toEqual([root])
+    expect(root.children).toEqual([a, b])
+    expect((a as unknown as { parent: unknown }).parent).toBe(root)
+  })
+
+  it('DOM-B2 an element re-parented by an append op during the batch is not a root; a true multi-root batch mounts both roots', () => {
+    adapter.beginBatch()
+    const r1 = adapter.createEl('div', 'r1')
+    const r2 = adapter.createEl('div', 'r2')
+    const kid = adapter.createEl('div', 'kid')
+    adapter.appendChild(r1, kid)
+    adapter.endBatch()
+    expect(mount.children).toEqual([r1, r2])
+    expect(r1.children).toEqual([kid])
+    expect(mount.children).not.toContain(kid)
+  })
+
+  it('DOM-B3 the batch is one-shot and non-leaky: after endBatch, creates attach immediately again (DOM-H1 path)', () => {
+    adapter.beginBatch()
+    adapter.createEl('div', 'held')
+    adapter.endBatch()
+    expect(mount.children).toHaveLength(1)
+    const live = adapter.createEl('div', 'live')
+    expect(mount.children).toContain(live)
+    // a second beginBatch/endBatch still works
+    adapter.beginBatch()
+    const r = adapter.createEl('div', 'r2')
+    adapter.endBatch()
+    expect(mount.children).toEqual([adapter.wires.get('held')!, live, r])
+  })
+
+  it('DOM-B4 a full applyOps op stream inside the batch builds the tree detached and mounts it whole at endBatch', () => {
+    adapter.beginBatch()
+    applyOps(adapter, [
+      { kind: 'create', wire: 'root', type: 'div' },
+      { kind: 'set', wire: 'root', name: 'text', value: 'title' },
+      { kind: 'create', wire: 'c1', type: 'section' },
+      { kind: 'create', wire: 'c2', type: 'section' },
+      { kind: 'append', owner: 'root', child: 'c1' },
+      { kind: 'append', owner: 'root', child: 'c2' },
+    ])
+    expect(mount.children).toEqual([])
+    adapter.endBatch()
+    const root = elOf(adapter, 'root')!
+    expect(mount.children).toEqual([root])
+    expect(root.children.map((c) => elOf(adapter, 'c1')! === c || elOf(adapter, 'c2')! === c)).toHaveLength(2)
+    expect(root.textContent).toBe('title')
+  })
+})

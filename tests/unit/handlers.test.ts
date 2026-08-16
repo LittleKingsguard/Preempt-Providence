@@ -204,3 +204,36 @@ describe('handlers — dispatchPhase / dispatchPhaseForNodes', () => {
     expect(results[1]).toBeInstanceOf(Error)
   })
 })
+
+describe('supervisor — hasPendingWork (the non-draining settle-check, 2026-08-16)', () => {
+  it('true while the pass-2 flush is scheduled/dirty, false after the cascade drains', async () => {
+    const { supervisor, clientAPI, root } = newSystem()
+    const kid = childOf(root, makeNode({ type: 'div' }), 0)
+    supervisor.registerNode(kid)
+    expect(supervisor.hasPendingWork()).toBe(false)
+    const res = clientAPI.apply(kid.id, { kind: 'state-slice', mutation: [{ targetProp: 'content', mode: 'replace', value: 'x' }] })
+    expect(res.status).toBe('applied')
+    expect(supervisor.hasPendingWork()).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(supervisor.hasPendingWork()).toBe(false)
+  })
+
+  it('false again after a full cascade that schedules follow-up work through handlers', async () => {
+    const { supervisor, clientAPI, root } = newSystem()
+    const kid = childOf(root, makeNode({
+      type: 'div',
+      handlers: [{ name: 'h', event: 'click', body: () => {
+        clientAPI.apply(kidId, { kind: 'state-slice', mutation: [{ targetProp: 'props.tick', mode: 'replace', value: 1 }] })
+        return 'ok'
+      } }],
+    } as never), 0)
+    const kidId = (kid as { id: string }).id
+    supervisor.registerNode(kid)
+    root.compile([root, kid])
+    const results = dispatchEvent(kid, makeHandlerContext(supervisor, clientAPI), 'click')
+    expect(String(results[0])).toBe('ok')
+    expect(supervisor.hasPendingWork()).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(supervisor.hasPendingWork()).toBe(false)
+  })
+})

@@ -264,6 +264,24 @@ this.wires.delete(wireKey(wire, forkKey)) }` — unknown composite key is a sile
 facto; DOM-F3). With a `forkKey` present on the op, only that arm is removed; the other
 arms' elements stay mounted.
 
+### 3.5b `beginBatch()` / `endBatch()` — the DETACHED INITIAL-BUILD batch (A, 2026-08-16)
+
+`beginBatch()` opens a detached build: created elements are HELD BACK from the live
+mount (`createEl` pushes them into a pending set instead of `mount.appendChild`);
+`appendChild` re-parents them under their owners (removing the child from the pending
+set — a re-parented element is no longer a root candidate); `removeEl` clears a batch
+element from the pending set too (a create+remove within one batch — the re-type
+shape — must not mount the removed element). `endBatch()` mounts ONLY the roots
+(elements never re-parented by an append op) in creation order and restores the
+immediate-attach behavior (DOM-H1 path). Every demo page's INITIAL render wraps its
+single `applyOps` call in the pair — the ops nest the whole tree inside the batch, so
+the first render performs ONE live-tree attachment per root instead of the
+create-then-move churn (every element was previously mount-appended at creation and
+then MOVED under its owner by the append op — 4095 useless live attachments on a
+4095-element first render, each triggering the browser's incremental style machinery).
+Non-batched calls are unchanged; the pair is one-shot (a `beginBatch` while one is
+open resets the pending set). Tests: tests/unit/adapters.test.ts DOM-B1..B4.
+
 ### 3.6 `hydrate(rootWire, vdom)` — the §5.1 seam
 
 `rootWire` is unused. Hydration keeps the DOM/reused state consistent so a later

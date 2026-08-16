@@ -36,15 +36,17 @@ Context management guidelines for agents working in this repository:
    looser 2.5× CI-safe bound, demo-smoke.mjs — the ~1.5× here is the human
    watch; the asserted guard is the tripwire that catches pipeline
    blow-ups.)
-   **Path-fork baseline (placement-path-spec §8 Q6 / §10.ad — implemented):**
-   the STATIC fork-stress page has no method variants — its single d12 total
-   is its OWN placement baseline, recorded by the smoke as
-   `[path-fork:baseline]` with the §8-Q6 re-baseline TODO marker (re-pin the
-   runtime guard after testing confirms no explosive time issues; the static
-   page's ONE path-enumeration bootstrap replaces the runtime page's 4094
-   per-node passes, so the guard's intent — no pass-2 explosion — is what
-   the path-fork totals must preserve). The runtime fork-stress pages keep
-   the ~1.5× method-ratio watch as before.
+   **Path-fork family baseline (derived-fork-variants-review §5.2 — the
+   §8-Q6 split):** the static fork-stress pages are a THREE-variant derived
+   family (placement/values/link — placement-path-spec §8 Q6 / §10.ad,
+   RE-SPLIT 2026-08-16): the placement-derived page's per-region totals
+   (emit/diff/apply) are recorded by the smoke as `[derived-fork:baseline]`
+   (the former `[path-fork:baseline]` single-total marker), and the
+   values/link-derived pages pin each REGION within 2.5× of it
+   (`[derived-fork:pin]`) — NOT totals, which are compile-enumeration-
+   dominated (~2.8s baseline) and insensitive to EMIT-side blow-ups. The
+   runtime fork-stress pages keep the ~1.5× method-ratio watch (totals,
+   asserted 2.5×) + the 2× tripwire against the placement-derived total.
 
 5. **Specs and decision records**: behavior contracts live in
    `docs/specs/*.md`; design decisions are recorded in

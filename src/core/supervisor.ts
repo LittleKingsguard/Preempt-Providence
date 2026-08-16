@@ -184,6 +184,29 @@ export class Supervisor {
     return out
   }
 
+  /** HARNESS settle-check (2026-08-16) — is the pass-2 pipeline still
+   *  holding work (a scheduled flush, dirty nodes, pending placement
+   *  triggers)? NON-draining — the renderer's takePass2States stays the
+   *  drain. Lets a page harness replace blind timer-yield bursts (8×
+   *  setTimeout(0)) with an adaptive settle loop: the flush cascade is
+   *  microtask-bound, so one task boundary drains it; the check confirms
+   *  completion without consuming state. */
+  hasPendingWork(): boolean {
+    return this.flushScheduled || this.pass2Dirty.size > 0 || this.pendingTriggers.size > 0
+  }
+
+  /** TIMING (2026-08-16) — the SYNCHRONOUS pass-2 engine work accumulated
+   *  across flushes (measured around runPass2AndFlush only, excluding the
+   *  scheduler windows a page harness's awaits occupy). A profile can split
+   *  its wall-time pass2Ms into engine work (this) vs scheduler idle
+   *  (pass2Ms − this): the fork-stress pages' flush cascades run inside the
+   *  await windows, so a wall-only number cannot tell the two apart. */
+  private flushWorkMs = 0
+
+  pass2WorkMs(): number {
+    return this.flushWorkMs
+  }
+
   /** Group compiled states per node (fork arms preserved per node). */
   private groupByNode(actionable: CompiledState[]): Map<NodeId, CompiledState[]> {
     const grouped = new Map<NodeId, CompiledState[]>()
@@ -247,7 +270,9 @@ export class Supervisor {
     this.flushScheduled = true
     queueMicrotask(() => {
       this.flushScheduled = false
+      const t0 = performance.now()
       this.runPass2AndFlush()
+      this.flushWorkMs += performance.now() - t0
     })
   }
 

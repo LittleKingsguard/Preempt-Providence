@@ -67,6 +67,28 @@ export function linkDef(cycle) {
   }
 }
 
+/** The component-def (prototype-as-child link) for a SINGLE-METHOD link layer:
+ *  the consumer's OWN children ARE the next layer's clones, and the def
+ *  re-types them (type div, def content) at emit time. Pure JSON data — rides
+ *  in the envelope as the prototype's `component.value`. NOTE (2026-08-16,
+ *  review item 6): for covered REAL children the emitted element keeps the
+ *  child's OWN authored css/props — the def spec's css/props are a fallback
+ *  for synthetic children only (no graph node behind them), so the def css
+ *  here is effectively dead for covered re-types (asserted via the child's
+ *  own props on the derived link page). */
+export function linkDefForLevel(layer) {
+  return {
+    type: 'div',
+    label: `component: link-${layer} — prototype linked as children`,
+    childLayersSuffix: `L${layer}:link`,
+    childOffset: 0,
+    children: [
+      { bind: 'a', type: 'div', content: `link-${layer}.a`, css: levelCss(layer, 'a'), props: { 'stress:kind': `link:${layer}`, 'data-depth': String(layer) } },
+      { bind: 'b', type: 'div', content: `link-${layer}.b`, css: levelCss(layer, 'b'), props: { 'stress:kind': `link:${layer}`, 'data-depth': String(layer) } },
+    ],
+  }
+}
+
 /** The handler marker: a child node created by a handler layer carries
  *  props['stress:handler'] === the layer name, and the handler only runs
  *  when no such child exists (idempotency — the default guard against

@@ -1,39 +1,50 @@
 /**
- * Static placement-path page + data envelope module — the static re-expression
+ * Static derived-family page + data envelope module — the static re-expression
  * of the fork-stress tree (placement-path-spec §5): the SAME 22-prototype
  * binary topology compiled by the §2 path enumeration instead of runtime
- * clone-instance assembly.
+ * clone-instance assembly. THREE method variants (the derived trio,
+ * derived-fork-variants-review §5.1): placement (the original static page),
+ * values (component-provided scalar values on every prototype), link (the
+ * component def on every prototype — the recursive def chain over
+ * path-states). Same 23-node topology, ONE compilePath bootstrap, ZERO
+ * clone-instance ops, 4095 elements for every method (the link census holds
+ * post the covered-leaf def-fill gate — render.md P-EMIT-3 carve-out letter).
  *
  * One module, three roles:
  *
- *  1. DATA (`pathForkLegacyData()`, exported): the LEGACY envelope carrying
- *     the root + TWO prototype nodes per layer 1..11 (22 prototypes, 23 graph
- *     nodes — the R2.2 sibling-shared owner-name topology, path-fork-review.md
- *     R2.2). Each prototype declares `placement: { placementName: 'zone-<k>' }`
- *     (producer — the 'container' role); layers ≥ 2 additionally declare
+ *  1. DATA (`pathForkLegacyData(method)`, exported): the LEGACY envelope
+ *     carrying the root + TWO prototype nodes per layer 1..11 (22 prototypes,
+ *     23 graph nodes — the R2.2 sibling-shared owner-name topology,
+ *     path-fork-review.md R2.2). Each prototype declares
+ *     `placement: { placementName: 'zone-<k>' }` (producer — the 'container'
+ *     role); layers ≥ 2 additionally declare
  *     `placement: { targetPlacement: ['zone-<k-1>'] }` (consumer — one
  *     requested name, the chosen name; BOTH level-(k−1) prototypes own the
  *     shared zone name, so the chosen name's two containers fan out the path
  *     per hop — §1.2/§2.2). NO handler bodies, NO clone-instance: the tree is
  *     compiled by the path enumeration (Σ 2^k for k=1..11 + root = 2^12 − 1 =
- *     4095 path-states pinned to 23 nodes — E2E-1 by construction).
+ *     4095 path-states pinned to 23 nodes — E2E-1 by construction). The
+ *     per-method component fields (values/link) are pure data on the
+ *     prototypes — the fork-stress-data.js:125-132 shapes, minus the
+ *     `handlers`/`stress:handler` residue (the derived model has no
+ *     after-compile expansion).
  *
- *  2. NODE side (builder): `buildPathForkSurface()` compiles the envelope once
- *     (translate → register → compilePath per node → emitElements →
- *     diffMinimal) and returns the full surface; `pathForkServerData()` is the
- *     server reference (expected census + the hashed PAR-5 shape signature);
- *     `pathForkSsrSample()` renders the FIRST ops through the REAL
- *     SSRFragmentAdapter (PAR-5 parity sample — the full 4095-element fragment
- *     is ~190MB and is never embedded; parity is the signature). Used by
- *     scripts/path-fork-page.mjs.
+ *  2. NODE side (builder): `buildPathForkSurface(method)` compiles the
+ *     envelope once (translate → register → compilePath per node →
+ *     emitElements → diffMinimal) and returns the full surface;
+ *     `pathForkServerData(method)` is the server reference (expected census +
+ *     the hashed PAR-5 shape signature); `pathForkSsrSample(method)` renders
+ *     the FIRST ops through the REAL SSRFragmentAdapter (PAR-5 parity sample
+ *     — the full 4095-element fragment is ~190MB and is never embedded;
+ *     parity is the signature). Used by scripts/path-fork-page.mjs.
  *
  *  3. PAGE (browser, guarded by `typeof document !== 'undefined'` so the
  *     builder can import the data without a DOM): CORE-ONLY imports
  *     (dist/core/*) — translate → register → ONE compilePath bootstrap →
  *     emitElements / diffMinimal / applyOps (DomAdapter) → render. NO
  *     clone-instance ops, NO after-compile expansion. The only shared helpers
- *     are the pure data-derivation `levelCss`/`cssPropForLevel` from
- *     fork-stress-fixture (demo-only, NOT core APIs).
+ *     are the pure data-derivation `levelCss`/`cssPropForLevel`/`linkDefForLevel`
+ *     from fork-stress-fixture (demo-only, NOT core APIs).
  *
  * The runtime fork-stress-data page (clone-based) is KEPT alongside as the
  * runtime proof (placement-path-spec §5.1 — Q4: both ship).
@@ -46,7 +57,7 @@ import { emitElements, applyOps, treeFromOps, treeSig, wireKey } from '../dist/c
 import { diffMinimal } from '../dist/core/render.js'
 import { setCompilePassLogging } from '../dist/core/debug.js'
 import { makeRunner } from './lib/runner.js'
-import { levelCss, cssPropForLevel } from './fork-stress-fixture.js'
+import { levelCss, cssPropForLevel, linkDefForLevel } from './fork-stress-fixture.js'
 
 // ============================================================================
 // DATA — the LEGACY envelope (pure data derivation, no graph construction).
@@ -65,8 +76,19 @@ import { levelCss, cssPropForLevel } from './fork-stress-fixture.js'
  *
  * Census (placement-path-spec §5.2): 23 nodes → 4095 path-states (Σ 2^k,
  * k=1..11, + root), one per (prototype, owner-path) pair back to root.
+ *
+ * `method` picks the SINGLE mechanism the whole tree relies on — the derived
+ * trio (placement / values / link — derived-fork-variants-review §5.1):
+ * 'placement' = the current shape (no component fields); 'values' adds the
+ * component-provided scalar VALUE on every prototype (`component: {reference:
+ * 'values-<k>.<slot>', value: 'value-<SLOT>-<k>'}` — the fork-stress-data.js
+ * values shape); 'link' adds the component DEF on every prototype
+ * (`component: {reference: 'link-<k>', value: linkDefForLevel(k)}` — the
+ * fork-stress-data.js link shape). NO handlers, NO stress:handler residue,
+ * NO clone-instance: the derived model has no after-compile expansion — the
+ * per-method fields are pure data on the prototypes.
  */
-export function pathForkLegacyData() {
+export function pathForkLegacyData(method = 'placement') {
   const children = []
   const payload = []
   for (let k = 1; k <= 11; k += 1) {
@@ -106,6 +128,15 @@ export function pathForkLegacyData() {
           },
         },
       }
+      if (method === 'values') {
+        // every path-state provides (and renders) its own scalar value
+        proto.component = { reference: `values-${k}.${slot}`, value: `value-${slot.toUpperCase()}-${k}` }
+      }
+      if (method === 'link') {
+        // every path-state provides the component DEF that re-types its
+        // children — the recursive def chain over path-states
+        proto.component = { reference: `link-${k}`, value: linkDefForLevel(k) }
+      }
       if (k === 1) children.push(proto)
       else payload.push(proto)
     }
@@ -127,7 +158,7 @@ export function pathForkLegacyData() {
         children,
       },
     },
-    content: [{ metadata: { title: 'static placement-path prototypes' }, content: payload }],
+    content: [{ metadata: { title: `static ${method}-derived prototypes` }, content: payload }],
     clientConfig: { runInstantiation: false, runMonitoring: true },
   }
 }
@@ -139,8 +170,8 @@ export function pathForkLegacyData() {
 
 /** Compile the static envelope: translate → register → ONE path-enumeration
  *  pass (compilePath per node) → emitElements → diffMinimal. */
-export function buildPathForkSurface() {
-  const doc = pathForkLegacyData()
+export function buildPathForkSurface(method = 'placement') {
+  const doc = pathForkLegacyData(method)
   const translated = translateLegacy(doc)
   const events = new EventBridge()
   const supervisor = new Supervisor({ events })
@@ -200,9 +231,10 @@ export function pathForkShapeSig(ops) {
 }
 
 /** Expected census + parity reference embedded in the page (server-data). */
-export function pathForkServerData() {
-  const s = buildPathForkSurface()
+export function pathForkServerData(method = 'placement') {
+  const s = buildPathForkSurface(method)
   return {
+    method,
     expected: {
       nodes: 23,
       states: 4095,
@@ -220,8 +252,8 @@ export function pathForkServerData() {
  *  structure) through the SSRFragmentAdapter. The full 4095-element fragment
  *  is ~190MB (nested binary tree — O(n·depth) serialization) and is NEVER
  *  rendered for embedding; parity is the hashed shape signature. */
-export function pathForkSsrSample(maxOps = 300) {
-  const { ops } = buildPathForkSurface()
+export function pathForkSsrSample(method = 'placement', maxOps = 300) {
+  const { ops } = buildPathForkSurface(method)
   const adapter = new SSRFragmentAdapter()
   applyOps(adapter, ops.slice(0, maxOps))
   return adapter.toString()
@@ -242,6 +274,8 @@ if (typeof document !== 'undefined') {
   const envelope = JSON.parse(document.getElementById('preempt-initial-data').textContent)
   const serverData = JSON.parse(document.getElementById('server-data').textContent)
   const expected = serverData.expected
+  // the derived-family method: 'placement' (baseline) | 'values' | 'link'
+  const method = serverData.method ?? 'placement'
 
   // ---- profiling -----------------------------------------------------------
   // Measured sections: load (translate), compile (the ONE path-enumeration
@@ -284,15 +318,24 @@ if (typeof document !== 'undefined') {
   const els = acc('emitMs', () => emitElements(actionable, byNode))
   const ops = acc('diffMs', () => diffMinimal(null, els))
   const adapter = new DomAdapter(document.getElementById('app'))
-  acc('applyMs', () => applyOps(adapter, ops))
+  acc('applyMs', () => {
+    adapter.beginBatch()
+    applyOps(adapter, ops)
+    adapter.endBatch()
+  })
   PROFILE.renderCount = 1
 
   const stateByWire = new Map(actionable.map((s) => [s.pathKey, s]))
   const layerOfState = (s) => byNode.get(s.nodeId)?.props?.['stress:layer']
-  // every path-state element is stored under the composite key
+  // every STANDALONE path-state element is stored under the composite key
   // wireKey(pathKey, forkKey) = `pathKey\x00pathKey` (forkKey = pathKey) —
-  // bare pathKey lookups miss (the same composite-key contract as fork arms)
-  const domElOf = (pathKey) => adapter.wires.get(wireKey(pathKey, pathKey))
+  // bare pathKey lookups miss (the same composite-key contract as fork arms).
+  // Re-typed def-chain children (the LINK-derived page's covered path-states)
+  // are built WITHOUT a forkKey (render-helpers.ts reTyped — the adapter-key
+  // asymmetry, derived-fork-variants-review §3.3/§4.4) → stored under the
+  // BARE pathKey. `elOfWire` tries bare first then the composite — the checks
+  // must NEVER use the composite-only `domElOf` lookup on the link page.
+  const elOfWire = (pathKey) => adapter.wires.get(pathKey) ?? adapter.wires.get(wireKey(pathKey, pathKey))
   function wireOf(el) {
     return el?.getAttribute?.('data-wire') ?? el?.dataset?.wire ?? ''
   }
@@ -343,7 +386,10 @@ if (typeof document !== 'undefined') {
       for (const e of els) {
         const s = stateByWire.get(e.wire)
         if (!s) throw new Error(`element wire ${e.wire} has no path-state`)
-        if (e.wire !== e.forkKey) throw new Error(`element ${e.wire}: forkKey ${e.forkKey} ≠ wire`)
+        // the link-derived page's re-typed def-chain children carry NO forkKey
+        // (built without one — the adapter-key asymmetry) — legitimately
+        // different from the standalone forkKey = pathKey contract
+        if (e.forkKey !== undefined && e.forkKey !== e.wire) throw new Error(`element ${e.wire}: forkKey ${e.forkKey} ≠ wire`)
         const k = layerOfState(s)
         perLevel[k] = (perLevel[k] ?? 0) + 1
       }
@@ -351,7 +397,9 @@ if (typeof document !== 'undefined') {
         const n = 2 ** k
         if (perLevel[k] !== n) throw new Error(`level ${k}: expected ${n} elements, got ${perLevel[k]}`)
       }
-      // the DOM mirrors the element set (every path-state rendered once)
+      // the DOM mirrors the element set (every path-state rendered once) —
+      // re-typed elements keep the child's OWN stress:layer attr, so the
+      // per-level DOM counts hold for every method
       const domLevels = {}
       for (const [, el] of adapter.wires) {
         const attr = el.getAttribute?.('stress:layer')
@@ -360,7 +408,7 @@ if (typeof document !== 'undefined') {
       for (let k = 1; k <= 11; k += 1) {
         if (domLevels[k] !== 2 ** k) throw new Error(`DOM level ${k}: expected ${2 ** k} elements, got ${domLevels[k]}`)
       }
-      if (domElOf('root') == null) throw new Error('root element missing')
+      if (elOfWire('root') == null) throw new Error('root element missing')
     })
 
     // ---- css stress (per-level property + per-slot value pairs) -------------
@@ -400,12 +448,76 @@ if (typeof document !== 'undefined') {
         if (s.props?.['stress:expanded'] !== nonLeaf) {
           throw new Error(`state ${s.pathKey} (L${k}): stress:expanded ${s.props?.['stress:expanded']}, expected ${nonLeaf}`)
         }
-        const el = domElOf(s.pathKey)
+        // ELEMENT assertion scoped to standalone-emitted path-states: the
+        // link-derived page's covered path-states are RE-TYPED from pass-1
+        // node props and legitimately lack the derived bake (the runtime
+        // page's method !== 'link' exemption pattern, fork-stress-data.js:594)
+        if (method === 'link') continue
+        const el = elOfWire(s.pathKey)
         if (el?.getAttribute?.('stress:expanded') !== String(nonLeaf)) {
           throw new Error(`element ${s.pathKey} (L${k}): baked stress:expanded ${el?.getAttribute?.('stress:expanded')}`)
         }
       }
     })
+
+    // ---- per-method mechanism checks (the runtime bodies re-expressed as
+    // path-state assertions — derived-fork-variants-review §6.1) -------------
+    if (method === 'values') {
+      await runner.check('values-derived: every path-state renders its component-provided value as text', () => {
+        for (const s of actionable) {
+          const k = layerOfState(s)
+          if (k === undefined) continue // the root carries no source
+          const slot = byNode.get(s.nodeId)?.props?.['stress:slot']
+          const expected = `value-${slot.toUpperCase()}-${k}`
+          const el = elOfWire(s.pathKey)
+          if (!el) throw new Error(`no element for ${s.pathKey}`)
+          if (!elText(el).includes(expected)) {
+            throw new Error(`state ${s.pathKey} (L${k}${slot}): text "${elText(el)}" lacks "${expected}"`)
+          }
+        }
+      })
+    }
+
+    if (method === 'link') {
+      await runner.check('link-derived: every path-state renders via its parent def (div type, def content for k>1); re-typed children assert the child\'s OWN node props (review item 6)', () => {
+        for (const s of actionable) {
+          const k = layerOfState(s)
+          if (k === undefined) continue // the root carries no def
+          const el = elOfWire(s.pathKey)
+          if (!el) throw new Error(`no element for ${s.pathKey}`)
+          if ((el.tagName ?? '').toLowerCase() !== 'div') {
+            throw new Error(`state ${s.pathKey} (L${k}): expected div (def type), got ${el.tagName}`)
+          }
+          const slot = byNode.get(s.nodeId)?.props?.['stress:slot']
+          // level-1 path-states are re-typed by their OWN def (no def CONTENT
+          // — content lives on the re-typed children); k ≥ 2 states are
+          // re-typed by the level-(k−1) parent's def and carry its content
+          if (k > 1) {
+            const expected = `link-${k - 1}.${slot}`
+            if (!elText(el).includes(expected)) {
+              throw new Error(`state ${s.pathKey} (L${k}): text "${elText(el)}" lacks def content "${expected}"`)
+            }
+          }
+          // explicit child-prop assertions: a covered re-type keeps the
+          // CHILD's OWN authored props (the def spec's props are a fallback
+          // for synthetic children only) — data-depth/stress:layer are the
+          // child's level, NOT the parent def's layer
+          if (el.getAttribute?.('data-depth') !== String(k)) {
+            throw new Error(`state ${s.pathKey} (L${k}): data-depth ${el.getAttribute?.('data-depth')} ≠ own level ${k}`)
+          }
+          if (el.getAttribute?.('stress:layer') !== String(k)) {
+            throw new Error(`state ${s.pathKey} (L${k}): stress:layer ${el.getAttribute?.('stress:layer')} ≠ own level ${k}`)
+          }
+        }
+        // the adapter-key asymmetry pin: exactly the covered layers' elements
+        // (L2..L11 = 4094 − 2) are re-typed (no forkKey, bare-wire keys); the
+        // root + L1 (3) are standalone (forkKey = pathKey)
+        const retyped = els.filter((e) => e.forkKey === undefined)
+        if (retyped.length !== 4092) {
+          throw new Error(`link-derived: expected 4092 re-typed def-chain elements (no forkKey), got ${retyped.length}`)
+        }
+      })
+    }
 
     // ---- treeFromOps reconstructs the binary shape --------------------------
     await runner.check('treeFromOps: one root; full binary tree (2 children per non-leaf); 2048 leaves at depth 11; 4095 nodes total', () => {
@@ -442,7 +554,8 @@ if (typeof document !== 'undefined') {
     })
     PROFILE.checksMs = now() - checksT0
 
-    runner.summary('Path Fork (static) — 23 nodes / 4095 path-states')
+    const methodLabel = { placement: 'static', values: 'values-derived', link: 'link-derived' }[method] ?? 'static'
+    runner.summary(`Path Fork (${methodLabel}) — 23 nodes / 4095 path-states`)
 
     // ---- census published for the smoke guard -------------------------------
     const censusNodes = supervisor.allNodes()
@@ -459,7 +572,7 @@ if (typeof document !== 'undefined') {
       PROFILE.loadMs + PROFILE.compileMs + PROFILE.emitMs + PROFILE.diffMs + PROFILE.applyMs + PROFILE.checksMs
     const f = (v) => v.toFixed(1)
     console.log(
-      `[path-fork:profile] states=${PROFILE.states} passes=${PROFILE.passes} elements=${PROFILE.elements} ` +
+      `[derived-fork:profile] method=${method} states=${PROFILE.states} passes=${PROFILE.passes} elements=${PROFILE.elements} ` +
       `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
       `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms checks=${f(PROFILE.checksMs)}ms ` +
       `renders=${PROFILE.renderCount} ` +

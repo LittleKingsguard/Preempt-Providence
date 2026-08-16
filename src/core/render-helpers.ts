@@ -405,9 +405,19 @@ export function emitElements(
     // emit its own defChildren, else the whole subtree below the covered node
     // vanishes from the element set. D8/DFC-1..3 — real children with a
     // standalone emission keep their OWN element (the blocked def branch
-    // never double-emits a wire).
+    // never double-emits a wire). COVERED-CHILDLESS GATE (DEFECT #21 — the
+    // covered-leaf def-fill): a covered state with NO children fires ONLY the
+    // P-EMIT-3 fill (its defChildren are all synthetic `` `${wire}:${bind}` ``
+    // orphans — the fork-stress link leaves) and its standalone element is
+    // already skipped above; emitting the fill's defChildren would plant
+    // never-attached phantom elements. A covered state WITH children fires the
+    // RE-TYPING branch (its defChildren are the re-typed real children — must
+    // keep pushing, the subtree invariant above). The gate is scoped to
+    // covered CHILDLESS states only — a non-covered childless host keeps the
+    // standalone P-EMIT-3 fill (its synthetic children are its ONLY children).
+    const coveredChildless = covered && (states[0]!.children ?? []).length === 0
     for (const c of emitted.defChildren ?? []) {
-      if (!standaloneWires.has(c.wire)) els.push(c)
+      if (!coveredChildless && !standaloneWires.has(c.wire)) els.push(c)
     }
   }
   return els

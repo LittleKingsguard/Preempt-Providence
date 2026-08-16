@@ -1184,6 +1184,15 @@ is recorded here and encoded in the specs listed.
   materializes through the D7 seam when wired by component assembly.
   Encoding: `docs/specs/render.md` §3.4.2/§10.6 DFC-1..3;
   `docs/specs/translate.md` §2 (D8 row); `docs/specs/ops.md` §2.7 (D8 note).
+- **DECIDED (DETACHED INITIAL-BUILD BATCH — A, 2026-08-16):** the `DomAdapter`
+  gains `beginBatch()`/`endBatch()`; the first-render `applyOps` runs inside
+  the pair so created elements stay out of the live mount (the append ops
+  nest the tree detached; `endBatch` mounts only the unparented roots —
+  one live-tree attachment per root instead of the create-then-move churn
+  on the 4095-element fork pages). Adapter-level only — the RenderOp stream
+  is unchanged (the set-batching variant stays parked, pending.md). Tests:
+  adapters.test.ts DOM-B1..B4. Encoding: adapters.md §3.5b; decisions.md
+  DETACHED INITIAL-BUILD BATCH row; designing-pages §14.8 lesson.
 - **DECIDED (AUTH-SEAM — the def phase handler copies to the TYPE-target
   consumer; N5 carve-out for afterAssembly, 2026-08-16):**
   `handlers.afterAssembly` is the ONE legacy lifecycle name with a semantic

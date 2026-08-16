@@ -862,6 +862,41 @@ describe('emitElements — component-link (prototype-as-child) def chains', () =
     expect(els.find((e) => e.wire === 'c1')!.props['text']).toBe('2.a')
     expect(els.find((e) => e.wire === 'c1')!.childOrder).toEqual([])
   })
+
+  it('COVERED CHILDLESS gate: a def-covered leaf with its own def binding emits NO def-fill defChildren (no `${wire}:a`/`:b` orphans) — P-EMIT-3 carve-out scoped to NOT-covered hosts', () => {
+    const els = emitElements([
+      { nodeId: 'p', type: 'span', children: ['c1', 'c2'], bindings: { 'link-1': def('1') } },
+      { nodeId: 'c1', type: 'span', children: [], bindings: { 'link-2': def('2') } },
+      { nodeId: 'c2', type: 'span', children: [], bindings: { 'link-2': def('2') } },
+    ])
+    // pre-gate: p + re-typed c1/c2 (from p's defChildren) + 4 fill orphans
+    // (c1:a, c1:b, c2:a, c2:b) = 7 elements; post-gate exactly 3.
+    expect(els.map((e) => e.wire).sort()).toEqual(['c1', 'c2', 'p'])
+    for (const e of els) expect(e.wire).not.toContain(':')
+    // the covered leaves' elements are the PARENT's re-typed children: the
+    // def re-type of the covered real child, not the child's own fill
+    const c1 = els.find((e) => e.wire === 'c1')!
+    expect(c1.type).toBe('div')
+    expect(c1.props['text']).toBe('1.a')
+    expect(c1.childOrder).toEqual([])
+    // treeFromOps: exactly ONE root, 2^2 − 1 = 3 nodes (the binary shape
+    // without orphan roots)
+    const trees = treeFromOpsReal(diffMinimal(null, els))
+    expect(trees).toHaveLength(1)
+    expect(trees[0]!.wire).toBe('p')
+    expect(trees[0]!.children.map((c) => c.wire).sort()).toEqual(['c1', 'c2'])
+  })
+
+  it('COVERED CHILDLESS gate does NOT fire for standalone (non-covered) childless def hosts: the P-EMIT-3 fill still emits its synthetic def children', () => {
+    const els = emitElements([
+      { nodeId: 'c', type: 'span', bindings: { 'link-1': def('1') } },
+    ])
+    expect(els.map((e) => e.wire).sort()).toEqual(['c', 'c:a', 'c:b'])
+    const c = els.find((e) => e.wire === 'c')!
+    expect(c.type).toBe('div')
+    expect(c.childOrder).toEqual(['c:a', 'c:b'])
+    expect(els.find((e) => e.wire === 'c:a')!.props['text']).toBe('1.a')
+  })
 })
 
 // ---------------------------------------------------------------------------

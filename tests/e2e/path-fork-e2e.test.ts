@@ -24,8 +24,10 @@
  * Plus the consolidated guards: the static census (23/4095/0/0 + per-level
  * 2^k), the runtime re-pins (F-13: in-tree = 4117 = 4095 + 22 prototypes,
  * cloneOps = 4094), the `component-source-duplicate` guard pin, and the
- * §8-Q6 ratio-baseline TODO pin (demo-smoke's static placement baseline +
- * the re-baseline TODO marker).
+ * §8-Q6 split pins: the derived-family per-region baseline + pins and the
+ * unchanged runtime 2× tripwire (demo-smoke's [derived-fork:baseline] marker
+ * supersedes the single-total [path-fork:baseline] framing — §10.ad N-5/R-5,
+ * derived-fork-variants-review §5.2).
  *
  * TDD: RED first — E2E-1/2/4 and the guard pins land against the Units 4–11
  * machinery; E2E-3's pressure + precision cases are expected red (the
@@ -605,11 +607,14 @@ describe('consolidated guards — census re-pins, duplicate-source, ratio-baseli
     expect(link.anchorsOf('source')).toHaveLength(1)
   })
 
-  it('ratio-baseline TODO pin (§8-Q6/§10.ad): the smoke carries the static placement baseline + the re-baseline TODO', () => {
+  it('ratio-baseline pins (§8-Q6 split / derived-fork-variants-review §5.2): the smoke carries the derived FAMILY baseline (per-region, placement-derived) + the per-region pins + the unchanged runtime 2× tripwire', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const smoke = readFileSync(join(here, '../../scripts/demo-smoke.mjs'), 'utf8')
-    expect(smoke).toContain('[path-fork:baseline]')
-    expect(smoke).toContain('static placement baseline recorded')
-    expect(smoke).toContain('TODO: re-baseline the runtime ratio guard')
+    expect(smoke).toContain('[derived-fork:baseline]')
+    expect(smoke).toContain('derived FAMILY baseline recorded')
+    expect(smoke).toContain('[derived-fork:pin]')
+    expect(smoke).toContain('runtime 2× total tripwire')
+    // the former single-baseline framing is superseded by the family structure
+    expect(smoke).not.toContain('`[path-fork:baseline]`')
   })
 })

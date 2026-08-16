@@ -857,7 +857,11 @@ if (typeof document !== 'undefined') {
       const byNode = new Map(sup.allNodes().map((n) => [n.id, n]))
       const els = acc('emitMs', () => emitElements(actionable, byNode))
       const ops = acc('diffMs', () => diffMinimal(prevMap, els))
-      acc('applyMs', () => applyOps(adapter, ops))
+      acc('applyMs', () => {
+        adapter.beginBatch()
+        applyOps(adapter, ops)
+        adapter.endBatch()
+      })
       prevMap = new Map(els.map((e) => [e.wire, e]))
       elsRef.els = els
       PROFILE.renderCount += 1

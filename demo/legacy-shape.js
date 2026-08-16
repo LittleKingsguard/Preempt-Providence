@@ -412,7 +412,11 @@ if (typeof document !== 'undefined') {
   const ops = acc('diffMs', () => diffMinimal(null, els))
   const adapter = new DomAdapter(document.getElementById('app'))
   const appEl = adapter.mount ?? document.getElementById('app')
-  acc('applyMs', () => applyOps(adapter, ops))
+  acc('applyMs', () => {
+    adapter.beginBatch()
+    applyOps(adapter, ops)
+    adapter.endBatch()
+  })
 
   // ---- K4 side cards: pure DATA envelopes through the same core pipeline ---
   const sideCards = serverData.sideCards

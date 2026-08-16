@@ -252,7 +252,11 @@ function render() {
     const els = acc('emitMs', () => emitElements(actionable, wireToNode))
     const ops = acc('diffMs', () => diffMinimal(prevMap, els))
     PROFILE.appends += ops.filter((o) => o.kind === 'append').length
-    acc('applyMs', () => applyOps(adapter, ops))
+    acc('applyMs', () => {
+      adapter.beginBatch()
+      applyOps(adapter, ops)
+      adapter.endBatch()
+    })
     prevMap = new Map(els.map((e) => [e.wire, e]))
     PROFILE.renderCount += 1
     return { els, ops }
@@ -275,10 +279,23 @@ function recompileFocusedFor(node) {
   return cr
 }
 
+let flushYields = 0
+let flushIdleMs = 0
+
 function flushMicrotasks() {
-  const waits = []
-  for (let i = 0; i < 8; i += 1) waits.push(new Promise((r) => setTimeout(r, 0)))
-  return Promise.all(waits)
+  // 2026-08-16 — the MICROTASK drain (no timer yields): the pass-2 cascade
+  // is microtask-bound, so `await Promise.resolve()` checkpoints drain it;
+  // timer yields (setTimeout(0)) were the pass2Ms inflator — 0ms timers are
+  // clamped/throttled (0.5s+ per yield in Node, seconds in browsers).
+  return (async () => {
+    for (let i = 0; i < 100; i += 1) {
+      const y0 = performance.now()
+      await Promise.resolve()
+      flushIdleMs += performance.now() - y0
+      flushYields += 1
+      if (!supervisor.hasPendingWork()) return
+    }
+  })()
 }
 
 /** Drain the supervisor until no pass-2 work remains (each attach/apply
@@ -585,6 +602,7 @@ async function main() {
     `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
     `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms ` +
     `pass2=${f(PROFILE.pass2Ms)}ms pageMs=${f(PROFILE.pageMs)}ms handlerMs=${f(PROFILE.handlerMs)}ms ` +
+    `flush=${flushYields}y/${f(flushIdleMs)}ms work:${f(supervisor.pass2WorkMs())}ms ` +
     `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls ?? 0} appends=${PROFILE.appends} ` +
     `covered=${f(PROFILE.coveredMs)}ms total=${f(PROFILE.totalMs)}ms ` +
     `unmeasured=${f(PROFILE.totalMs - PROFILE.coveredMs)}ms`,

@@ -631,6 +631,24 @@ KEPT for the runtime pages, re-pinned per the F-13 reading below):
 | incremental contract | bootstrap = one path-enumeration compile; post-render ops (E2E-2/3/4 cases) = bounded slices only |
 | profile | census fields published to the profile line (fork-stress-data.js:592-618 pattern) + smoke ratio guard (demo-smoke.mjs:284-295 — placement baseline + TODO, §8 Q6/§10.ad) |
 
+**The derived-family census (derived-fork-variants-review §5.1 — the static
+page is now a THREE-variant family, all IDENTICAL per-method):**
+
+| Page (method) | registered | states | elements | cloneOps | passes |
+| --- | --- | --- | --- | --- | --- |
+| `path-fork-data.html` (placement-derived — the family baseline) | 23 | 4095 | 4095 | 0 | 1 |
+| `path-fork-data-values-d12.html` (values-derived) | 23 | 4095 | 4095 | 0 | 1 |
+| `path-fork-data-link-d12.html` (link-derived) | 23 | 4095 | 4095 (post the covered-leaf def-fill gate, DEFECT #21 — render.md DFC-1) | 0 | 1 |
+
+The link-derived element census holds ONLY because the covered-childless
+def-fill gate (render-helpers.ts `coveredChildless`) suppresses the covered
+leaves' synthetic fill orphans — pre-gate the runtime link page shipped
+8191 elements (4096 never-attached phantoms, unasserted — its checks are
+node-based). §8-Q6 note: the §5.2 checks describe the page family; the
+values/link variants add their mechanism checks (fork-stress-data.md §4
+bodies re-expressed as path-state assertions + the §4.4/§4.5 scope rules —
+adapter-key asymmetry, derived-bake exemption).
+
 **Runtime re-pin (F-13 chosen reading — §10.af.1):** with the
 translate-global contentNodes-ownership minting (§6.2 translate row), the
 RUNTIME page's 22 prototypes are in-tree too, so its census asserts re-pin
@@ -688,7 +706,7 @@ the PRE-minting runtime record (annotated).
 | serialize / derived order tests | `targetPlacement` preference order survives the serialize round-trip (content anchors excluded from the target sort); per-path `placement` root reads the final zone name. |
 | validation tests | `placement-name-invalid` `#` warn at the minting site; `#`-check on authored ids. |
 | incremental E2E cases | E2E-2 (shallow props/text/css update: one node compiles — compile-scope assertion — element object reused; fixture proceeds via contentNodes minting, §3.1); E2E-3 (all-consumers + half-consumers precision case); E2E-4 (post-render third depth-4 placement add via placement-attach: no depth>4 recalc; container + node only). |
-| static fork census (unit or e2e) | registered=23, in-tree=23, path-viable=4095, unplaced=0, states=2^12−1, elements=2^12−1, cloneOps=0, per-path `forkKey` = pathKey (F-7). |
+| static fork census (unit or e2e) | registered=23, in-tree=23, path-viable=4095, unplaced=0, states=2^12−1, elements=2^12−1, cloneOps=0, per-path `forkKey` = pathKey (F-7). **Family qualification (derived-fork-variants-review §5.1):** the census is IDENTICAL for the three derived methods (placement/values/link — the smoke asserts it per page via `assertStaticPathCensus`); the link method's 4095 element count additionally pins the covered-leaf def-fill gate (DEFECT #21 — the runtime link page's pre-gate 8191 element output, never asserted). |
 
 ### 6.4 DEMOS / SMOKE
 
@@ -742,7 +760,7 @@ implementation: the final review returned **PROCEED-TO-IMPLEMENT**
 | Q3 | **Per-path event emission.** | per-path events for the affected set; the focused-node filter lifts to the affected set; the "≤1 `state` event per node per tick" letter dies — per-path keys fall out of `forkKey = pathKey` (events.ts needs no code change). | §9 Q3, §10.ac.4 |
 | Q4 | **The runtime fork-stress page's fate.** | both ship: the runtime page is kept (census asserts kept, re-pinned per F-13) and the static page is added alongside. | §9 Q4, §10.af.1 F-13 |
 | Q5 | **Legacy first-match-break nuance.** | preference-ordered first-match-with-known-container wins; every zone of the chosen name gets an instance; silent abort on less-favored update alerts (trigger identity + relevance pre-check). | §9 Q5, §10.z C-2/C-3 |
-| Q6 | **Bootstrap cost shape.** | DEFERRED at round 1; decided at round 4: the static page's d12 ratio guard starts with **placement as the baseline** + a TODO to update the baseline after testing confirms the absence of explosive time issues. | §9 Q6, §10.ad |
+| Q6 | **Bootstrap cost shape.** | DEFERRED at round 1; decided at round 4; RE-SPLIT 2026-08-16 (derived-fork-variants-review §5.2): the static page became a THREE-variant family — the RUNTIME family keeps its total-ratio guard (2.5× asserted vs the placement baseline, demo-smoke.mjs:290-301) and the 2× tripwire against the placement-derived total; the DERIVED family pins **per-region emit/diff/apply ratios vs the placement-derived page** (NOT totals — totals are compile-enumeration-dominated and insensitive to EMIT-side blow-ups), recorded as `[derived-fork:baseline]` + `[derived-fork:pin]` lines. The former "static page is its own reference, no method variants" framing is SUPERSEDED (§10.ad N-5, §10.af R-5). | §9 Q6, §10.ad |
 | Q7 | **Path-key stability under moves.** | relocation cost accepted: any re-zone/move re-compiles downstream (subtree re-key ⇒ element re-create); documented as a known performance drain, optimizable later; the incremental guarantees apply to non-placement mutations (E2E-2/3) and additions (E2E-4). | §9 Q7 |
 | Q8 | **Component resolution inside path-states.** | path-only resolution (the state's own single-parent chain to root); verified: identical ancestor trees ⇒ identical bindings ⇒ identity = pathKey alone (§2.2). | §9 Q8, §10.aa R2-Q4, §10.ab |
 
@@ -1478,7 +1496,7 @@ surface work remains), **SUPERSEDED** (decision is the fix verbatim),
 | N-2 | **§10.ab "re-express as two provider NODES" cannot fork.** Nearest-wins walk (own→descendants→ancestors, first-with-providers; resolve.ts:140-160) + single parent chain ⇒ two provider NODES yield ONE binding. Only "drop the fork claim" is coherent — the theme/panel/feed forks are four DEMO-ROUND-TRIP sites (feature-matrix-fixture.js:206-207, component-fixture.js:82-83, pane-fixture.js:13-14; asserts at feature-matrix-tests.js:470-483, components.js:353-367/404-406, build-demo.mjs:76-81), not one. | resolve.ts:140-160; fixtures above | HIGH — re-expression scope correction |
 | N-3 | **`component-source-duplicate` guard vs the four demo sites + seeded tests.** The guard (node.ts:413) fires on the theme/panel/feed demos (their fork claims are being dropped — OK) AND on the constructor seed path (node.ts:164-192 — no dedup) where tests construct forks from serialized anchors (node.test.ts:475/615/957, graph.test.ts:433, render.test.ts:579) — warn-count assertions in those suites are at risk; the guard needs a seed-path policy + warn-only-vs-block decision. | node.ts:413, 164-192, 783-786 | MEDIUM |
 | N-4 | **Spec-internal contradiction: §5.2 census row still says `unplaced = 22`** (line 436) vs §10.aa (in-tree=23, prototypes never unplaced). Also §6.4 demo-smoke row frames the round-1 census guard as "replaced" — it is KEPT for the runtime pages; a NEW assert block is added. | spec §5.2 vs §10.aa; demo-smoke.mjs:196-223 | HIGH (spec text) |
-| N-5 | **Ratio guard baseline gap.** AGENTS item-4/demo-smoke.mjs:284-295 compares runtime placement/values/link d12 totals; the static page has no method variants — the "re-baseline" has no defined baseline. Plus the still-unreconciled 2.5× (demo-smoke.mjs:291) vs ~1.5× (AGENTS.md:29-35) bound. | demo-smoke.mjs:284-295; AGENTS.md:29-35 | MEDIUM |
+| N-5 | **Ratio guard baseline gap.** AGENTS item-4/demo-smoke.mjs:284-295 compares runtime placement/values/link d12 totals; the static page has no method variants — the "re-baseline" has no defined baseline. Plus the still-unreconciled 2.5× (demo-smoke.mjs:291) vs ~1.5× (AGENTS.md:29-35) bound. **SUPERSEDED 2026-08-16** — the static page became a THREE-variant derived family (derived-fork-variants-review §5.1): the placement-derived page is the FAMILY BASELINE (`[derived-fork:baseline]`, per-region emit/diff/apply recorded by the smoke) and the values/link-derived pages pin their per-region ratios against it (`[derived-fork:pin]`, 2.5× asserted); the runtime family keeps its total-ratio guard + the 2× tripwire. §8-Q6 carries the split. | demo-smoke.mjs:284-295; AGENTS.md:29-35 | MEDIUM → RESOLVED (family structure, §5.2) |
 | N-6 | **`#`-freedom remains unvalidated (C-5/R2-Q2).** No name/id validation exists (translate.ts:459, 136-144; node.ts:143); `placement-name-invalid` warn placement now verified (§10.ac.2 #6) — decision still pending. | translate.ts:459/479-495; node.ts:143 | MEDIUM |
 | N-7 | **DEFECT #1 cite drift.** archive/findings/2026-08-15/2026-08-15-test-findings.md:441-442 cites `dist/core/render-helpers.js:212-273`; current source is render-helpers.ts:292-351 (line drift only — no behavioral conflict; the fix shape is confirmed correct). | archive/findings/2026-08-15/2026-08-15-test-findings.md:441 vs render-helpers.ts:292-351 | LOW (record-keeping) |
 | N-8 | **C-4 stale bullet still live (R2-Q7 unanswered).** §1.2 lines 128-133 ("a name that matches NO zone … the node's OTHER names still fork") still contradicts first-match (no-match names skipped; whole-array miss ⇒ nothing forks). | spec §1.2 lines 128-133 | LOW-MEDIUM |
@@ -1744,7 +1762,7 @@ independent in parallel.
 | R-2 | **Unconditional guard vs seeded fork-construction tests** (N-3): node.test.ts:475/615/957, graph.test.ts:433, render.test.ts:579 build forks via constructor seed — keep-first now drops the second anchor; warn-count assertions at risk; re-expression is not itemized in the 126 rows | Unit 8 includes the seed-path policy test; Unit 12 re-expresses the five sites |
 | R-3 | **forkKey = pathKey on EVERY state** changes wire keys / serialized output / prevMap reuse for all existing pages and ssr fixtures (not just path-states) | Unit 1's red test asserts forwarding; ssr-render fixtures regenerated in Unit 3/12 |
 | R-4 | **Preference-order preservation** — serialize sort is the known order-killer; other order-breaking paths (ops-time anchor insertion, materializeAnchors dedup, `makeCs` copy) are unverified | Unit 9 includes the round-trip order test; Unit 4 asserts mint-order first-match |
-| R-5 | **Ratio-guard baseline**: static page has no method variants (single total); AGENTS ~1.5× vs demo-smoke 2.5× unreconciled; page profiler does not time pass-2 — the exact blow-up mode AGENTS item 4 warns about | §10.ad placement-baseline + TODO; Unit 11 adds the baseline decision + re-baseline note |
+| R-5 | **Ratio-guard baseline**: static page has no method variants (single total); AGENTS ~1.5× vs demo-smoke 2.5× unreconciled; page profiler does not time pass-2 — the exact blow-up mode AGENTS item 4 warns about. **RESOLVED 2026-08-16**: the three-variant derived family (derived-fork-variants-review §5.2) — the placement-derived page records `[derived-fork:baseline]` per-region (emit/diff/apply — NOT totals, which are compile-enumeration-dominated); values/link-derived pages pin each region within 2.5×; the RUNTIME family keeps the total-ratio guard + the 2× tripwire (pass-2 pipeline concern — totals ARE meaningful there, the 4094 per-node passes). | §10.ad placement-baseline + §8-Q6 split; Unit 11 baseline decision + the family marker landed in demo-smoke.mjs |
 | R-6 | **4095-state single-pass enumeration perf unknown** (Q6): the R2.2 bijection is arithmetic; the profile-ratio watch is the tripwire, not a guarantee | Unit 4 census test + Unit 11 ratio guard; flag any `total − Σ(measured)` dominance |
 | R-7 | **`#`-freedom validation is new code**: shipped demo zone names/ids must be audited for `#` before the warn lands (feature-matrix 'content' zone is safe; sweep others) | Unit 2 `#` warn + repo grep in Unit 13 |
 | R-8 | **Role-token wording collisions** (content role vs content value/array/contentNodes/legacy target path): prose-only but doc-wide; quoted+backticked convention is the mitigation | Unit 13 sweep per §10.x res-5 |

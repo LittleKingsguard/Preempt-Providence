@@ -149,15 +149,23 @@ async function emitPage(templateName, outName, doc, serverData) {
   }
 }
 
-// ---- page 17: static placement-path page (22 prototypes, ONE enumeration) ----
+// ---- page 17: static derived trio (placement / values / link) --------------
 // The static re-expression (placement-path-spec §5): the fork-stress topology
 // compiled by the §2 path enumeration — 4095 path-states from 23 graph nodes,
-// NO clone-instance, NO after-compile expansion. Builder embeds the legacy
-// envelope + the expected census/parity reference + the SSR fragment.
+// NO clone-instance, NO after-compile expansion. Three method variants (the
+// derived trio, derived-fork-variants-review §5.1): placement (the family
+// baseline, no component fields), values (+ component value on every
+// prototype), link (+ component def on every prototype — the recursive def
+// chain over path-states, 4095 elements post the covered-leaf gate). Builder
+// embeds the legacy envelope + the expected census/parity reference + the SSR
+// fragment.
 {
-  const { html } = await buildPathForkPage()
-  await writeFile(join(ROOT, 'demo', 'path-fork-data.html'), html)
-  console.log('built demo/path-fork-data.html (23 nodes, 4095 path-states, ONE compile pass)')
+  for (const method of ['placement', 'values', 'link']) {
+    const { html } = await buildPathForkPage(method)
+    const outName = method === 'placement' ? 'path-fork-data.html' : `path-fork-data-${method}-d12.html`
+    await writeFile(join(ROOT, 'demo', outName), html)
+    console.log(`built demo/${outName} (23 nodes, 4095 path-states, ONE compile pass, ${method}-derived)`)
+  }
 }
 
 // ---- page 18: feature showcase (DATA-DRIVEN, legacy JSON input only) ---------

@@ -10,9 +10,13 @@ Status: spec for a REWRITE of the fork-stress demo page. Companion:
 > the new STATIC page. The static re-expression — the SAME 22-prototype
 > topology compiled by path enumeration instead of clone assembly — is the
 > placement-path model: see `docs/specs/placement-path-spec.md` §5 (page
-> re-expression + the §5.2 static census 23/4095/0/0) and the shipped page
-> `demo/path-fork-data.*` (designing-pages.md §11/§12). With the
-> translate-global contentNodes-ownership minting (P3 §10.ad/F-13), THIS
+> re-expression + the §5.2 static census 23/4095/0/0) and the shipped pages
+> `demo/path-fork-data.*` (designing-pages.md §11/§12). The static page is
+> now a THREE-method derived family (placement / values / link —
+> `docs/specs/derived-fork-variants-review.md` §5.1); the METHOD census (one
+> element per path-state, 4095) holds for every variant — for link only
+> after the covered-leaf def-fill gate (DEFECT #21, render.md DFC-1). With
+> the translate-global contentNodes-ownership minting (P3 §10.ad/F-13), THIS
 > runtime page's census asserts are re-pinned: in-tree = 2^depth − 1 +
 > prototypes, unplaced = 0 (the prototypes never compile/render — the token
 > terminates the walk); `cloneOps` stays the journaled clone count.
@@ -184,7 +188,15 @@ the layer-plan column and the `stress:kind` check use the method; the
 values/link pages add method-specific checks (per-node element text vs the
 resolved source value / def content). The root carries NO sources, so it is
 emitted like every other node — the nesting check walks from the root and
-expects 2^depth − 1 elements for every variant.
+expects 2^depth − 1 elements. **Method qualification (2026-08-16, DEFECT
+#21):** 2^depth − 1 holds for every variant ONLY after the covered-leaf
+def-fill gate: the PRE-gate runtime link page emitted 2 elements PER LEAF
+in addition (the fill's synthetic `` `${wire}:${bind}` `` phantoms — 4096
+never-attached elements at depth 12, 8191 total, unasserted: the runtime
+page's link/nesting checks iterate graph nodes, never `els.length`). The
+covered-childless gate (render-helpers.ts `coveredChildless`, render.md
+DFC-1) suppresses the fill for COVERED childless states — the runtime link
+page now emits exactly 4095.
 
 ## Constraints
 
@@ -265,6 +277,49 @@ expects 2^depth − 1 elements for every variant.
    pure (layer, slot) → css functions, not graph construction, so importing
    them from the fixture module is not a "helper function" violation. They
    remain demo-only (design skill §14.3).
+
+8. **The def's css/props on a covered re-type are DEAD data** (2026-08-16,
+   derived-trio pass): `linkDefForLevel`'s per-child `css`/`props` never
+   reach a covered REAL child — the re-typed element sources the CHILD's OWN
+   authored css/props first (`childNode.css/props ?? spec.css/props`,
+   render-helpers.ts) — the spec fields are a fallback for SYNTHETIC fill
+   children only. The def's header comment claimed "applies each child's
+   css" — inaccurate for covered children. Assert re-typed elements by the
+   child's OWN props (the derived link page does: `data-depth`/`stress:layer`
+   = the child's level, not the def's). Related: a covered re-type carries NO
+   forkKey and NO derived bake (pass-1 node props only — the derived link
+   page scopes its element assertions to standalone-emitted path-states,
+   mirroring the `method !== 'link'` exemption at :594).
+
+9. **Bare-vs-composite element keys are observable** (2026-08-16,
+   derived-trio pass): re-typed def-chain children live in the adapter under
+   BARE pathKey keys while standalone path-states use `wireKey(pathKey,
+   pathKey)` — the page's element lookups must try bare first then composite
+   (`elOfWire`), never the composite-only `domElOf`. Side effect: bare keys
+   make `treeFromOps`/`findEl` edge resolution EXACT instead of prefix-
+   scanned — the link-derived page's treeFromOps/apply runs ~100× faster in
+   the headless shim than the composite-keyed placement page (a measured
+   asymmetry, not a defect — both stay within the derived-family pins).
+
+10. **A def-fill is the ONLY synthetic-wire site, and it must be covered-
+    gated** (2026-08-16 — the DEFECT #21 lesson): a childless def-carrying
+    state's fill emits `` `${wire}:${bind}` `` elements whose WIRE is not a
+    real state — when the state is ALSO def-covered (re-typed by a parent),
+    those phantoms are never attached to anything. The node-based runtime
+    checks never see them (they mask an 8191-vs-4095 divergence); count-
+    based element censuses do. The emit-side gate (render-helpers.ts
+    `coveredChildless`) is the canonical fix — the census letter now holds
+    for every variant.
+
+11. **Nits (document-only, 2026-08-16):** (a) `scalarBinding` prefers a
+    `bindings['theme']` entry over the FIRST scalar value — the values
+    mechanism checks must assert the RENDERED text (they do), not assume
+    which binding wins, and a values-page prototype carrying a `theme`
+    binding would silently change the text source; (b) the def
+    `childLayersSuffix` strings (`L<k>:link`) share no separator with path
+    traces (`/`) or `stress:layers` chains (`|`) — but the derived envelope
+    carries NO `stress:layers`, so the suffix never applies there; keep the
+    three separators distinct when authoring data that carries all three.
 
 ## Docs to update
 

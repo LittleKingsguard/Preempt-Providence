@@ -39,6 +39,16 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   private readonly mount: HTMLElement
   private readonly onEvent: ((wire: NodeRef, event: Event) => void) | undefined
   private stylesEl: HTMLElement | null = null
+  /** A (2026-08-16) — the DETACHED INITIAL-BUILD batch: while a batch is
+   *  open, created elements are HELD BACK from the live mount; the append
+   *  ops re-parent them under their owners; `endBatch` mounts ONLY the roots
+   *  (elements never re-parented by an append op) — one live-tree attachment
+   *  per root instead of the create-then-move churn (every element was
+   *  previously mount-appended at creation and then MOVED under its owner by
+   *  the append op — 4095 useless live attachments on a 4095-node first
+   *  render, each triggering the browser's incremental style machinery).
+   *  Non-batched calls keep the immediate-attach behavior (DOM-H1). */
+  private batchEls: HTMLElement[] | null = null
   /** D4 (DOM-H29) — per-adapter-instance rule-signature dedup set: a rule
    *  string whose exact signature was already appended is SKIPPED (the emit
    *  side already dedups per sweep; this is the boundary's defensive half). */
@@ -52,11 +62,28 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
     this.onEvent = opts.onEvent
   }
 
+  /** A — open a detached build batch (see the batchEls doc). Idempotent per
+   *  pair: a beginBatch while one is open resets the pending set (the caller
+   *  owns the pair). */
+  beginBatch(): void {
+    this.batchEls = []
+  }
+
+  /** A — close the batch: mount the roots (elements never re-parented by an
+   *  append op) in creation order. Non-batched state is restored afterwards. */
+  endBatch(): void {
+    if (this.batchEls) {
+      for (const el of this.batchEls) this.mount.appendChild(el)
+      this.batchEls = null
+    }
+  }
+
   createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): HTMLElement {
     const el = document.createElement(type)
     el.dataset.wire = wire
     this.wires.set(wireKey(wire, forkKey), el)
-    this.mount.appendChild(el)
+    if (this.batchEls) this.batchEls.push(el)
+    else this.mount.appendChild(el)
     return el
   }
 
@@ -112,12 +139,20 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   }
 
   appendChild(owner: HTMLElement, child: HTMLElement): void {
+    if (this.batchEls) {
+      const i = this.batchEls.indexOf(child)
+      if (i !== -1) this.batchEls.splice(i, 1)
+    }
     owner.appendChild(child)
   }
 
   removeEl(wire: NodeRef, forkKey?: ForkPathKey): void {
     const el = this.wires.get(wireKey(wire, forkKey))
     if (el) {
+      if (this.batchEls) {
+        const i = this.batchEls.indexOf(el)
+        if (i !== -1) this.batchEls.splice(i, 1)
+      }
       el.remove()
       this.wires.delete(wireKey(wire, forkKey))
     }

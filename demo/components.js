@@ -292,7 +292,9 @@ function render() {
   bootstrapped = true
   const els = buildElementsFrom()
   const ops = diffMinimal(prevMap, els)
+  adapter.beginBatch()
   applyOps(adapter, ops)
+  adapter.endBatch()
   prevMap = new Map(els.map((e) => [e.wire, e]))
   return { els }
 }

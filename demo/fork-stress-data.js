@@ -63,7 +63,7 @@ import { emitElements, applyOps } from '../dist/core/render-helpers.js'
 import { diffMinimal } from '../dist/core/render.js'
 import { setCompilePassLogging } from '../dist/core/debug.js'
 import { makeRunner } from './lib/runner.js'
-import { LAYER_METHODS, layerName, levelCss, cssPropForLevel } from './fork-stress-fixture.js'
+import { LAYER_METHODS, layerName, levelCss, cssPropForLevel, linkDefForLevel } from './fork-stress-fixture.js'
 
 // ============================================================================
 // DATA — the LEGACY envelope (pure data derivation, no graph construction).
@@ -137,23 +137,6 @@ export function forkStressLegacyData(depth, method) {
     template: { root: { type: 'app', props: { id: 'stress-root' } } },
     content: [{ metadata: { title: 'fork-stress prototypes' }, content: prototypes }],
     clientConfig: { runInstantiation: false, runMonitoring: true },
-  }
-}
-
-/** The component-def (prototype-as-child link) for a link-only layer: the
- *  consumer's OWN children ARE the next layer's clones, and the def re-types
- *  them (type div, def content) at emit time. Pure JSON data — rides in the
- *  envelope as the prototype's `component.value`. */
-function linkDefForLevel(layer) {
-  return {
-    type: 'div',
-    label: `component: link-${layer} — prototype linked as children`,
-    childLayersSuffix: `L${layer}:link`,
-    childOffset: 0,
-    children: [
-      { bind: 'a', type: 'div', content: `link-${layer}.a`, css: levelCss(layer, 'a'), props: { 'stress:kind': `link:${layer}`, 'data-depth': String(layer) } },
-      { bind: 'b', type: 'div', content: `link-${layer}.b`, css: levelCss(layer, 'b'), props: { 'stress:kind': `link:${layer}`, 'data-depth': String(layer) } },
-    ],
   }
 }
 
@@ -329,7 +312,11 @@ if (typeof document !== 'undefined') {
       const byNode = new Map(supervisor.allNodes().map((n) => [n.id, n]))
       const els = acc('emitMs', () => emitElements(actionable, byNode))
       const ops = acc('diffMs', () => diffMinimal(prevMap, els))
-      acc('applyMs', () => applyOps(adapter, ops))
+      acc('applyMs', () => {
+        adapter.beginBatch()
+        applyOps(adapter, ops)
+        adapter.endBatch()
+      })
       prevMap = new Map(els.map((e) => [e.wire, e]))
       PROFILE.renderCount += 1
       return { els, ops }
@@ -338,10 +325,27 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  let flushYields = 0
+  let flushIdleMs = 0
   function flushMicrotasks() {
-    const waits = []
-    for (let i = 0; i < 8; i += 1) waits.push(new Promise((r) => setTimeout(r, 0)))
-    return Promise.all(waits)
+    // 2026-08-16 — the MICROTASK drain (no timer yields): the pass-2 cascade
+    // is microtask-bound (scheduleFlush → queueMicrotask; handler applies
+    // chain in microtasks), so checkpoints of `await Promise.resolve()` drain
+    // it. Timer yields (setTimeout(0)) were the pass2Ms inflator: browsers
+    // and even Node clamp/throttle 0ms timers (0.5s+ per yield here, seconds
+    // in the browser) — the d12 pages measured pass2 ≈ 5-54s of mostly
+    // scheduler idle while the page had already populated. hasPendingWork()
+    // is the non-draining settle-check; flushYields/flushIdleMs split the
+    // drain window (now ≈ the engine work).
+    return (async () => {
+      for (let i = 0; i < 100; i += 1) {
+        const y0 = now()
+        await Promise.resolve()
+        flushIdleMs += now() - y0
+        flushYields += 1
+        if (!supervisor.hasPendingWork()) return
+      }
+    })()
   }
 
   document.getElementById('layer-plan').textContent =
@@ -625,6 +629,7 @@ if (typeof document !== 'undefined') {
       `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
       `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms ` +
       `pass2=${f(PROFILE.pass2Ms)}ms handlerMs=${f(PROFILE.handlerMs)}ms ` +
+      `flush=${flushYields}y/${f(flushIdleMs)}ms work:${f(supervisor.pass2WorkMs())}ms ` +
       `renders=${PROFILE.renderCount} handlers=${PROFILE.handlerCalls} ` +
       `census(registered=${PROFILE.registered} inTree=${PROFILE.inTree} unplaced=${PROFILE.unplaced} destroyed=${PROFILE.destroyed} cloneOps=${PROFILE.cloneOps}) ` +
       `covered=${f(PROFILE.coveredMs)}ms total=${f(PROFILE.totalMs)}ms ` +

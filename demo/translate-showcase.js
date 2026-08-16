@@ -178,7 +178,9 @@ if (typeof document !== 'undefined') {
     const els = emitElements(states);
     const ops = diffMinimal(null, els);
     const domAdapter = new DomAdapter(appEl);
-    applyOps(domAdapter, ops);
+    domAdapter.beginBatch()
+    applyOps(domAdapter, ops)
+    domAdapter.endBatch()
     const t3 = performance.now();
 
     const warningsEl = document.getElementById('warnings');

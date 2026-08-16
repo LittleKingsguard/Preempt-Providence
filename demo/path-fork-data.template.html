@@ -2,13 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Demo — Path Fork (static): 22 prototypes, ONE path-enumeration pass</title>
+  <title>__PAGE_TITLE__</title>
   <link rel="stylesheet" href="demo.css" />
 </head>
 <body>
   <!--
     ============================================================================
-    PATH FORK DEMO — the STATIC placement-path page (placement-path-spec §5).
+    PATH FORK DEMO — the DERIVED trio (placement / values / link).
+    __PAGE_TITLE__ (placement-path-spec §5; derived-fork-variants-review §5.1).
 
     The static re-expression of the fork-stress tree: the SAME 22-prototype
     binary topology, compiled by the §2 path enumeration instead of runtime
@@ -28,10 +29,13 @@
         node creation beyond the prototypes (E2E-1 by construction):
         Σ 2^k for k = 1..11 + root = 4095 path-states pinned to 23 nodes.
       • The page uses ONLY core (dist/core/*) + the shared data-derivation
-        helpers (levelCss/cssPropForLevel — demo-only, NOT core APIs).
+        helpers (levelCss/cssPropForLevel/linkDefForLevel — demo-only, NOT
+        core APIs).
       • The runtime fork-stress-data page (clone-based, after-compile
         expansion) is KEPT alongside as the runtime proof
-        (placement-path-spec §5.1 — Q4: both ship).
+        (placement-path-spec §5.1 — Q4: both ship); the derived trio shares
+        the ONE path-enumeration bootstrap with ZERO clones.
+    __METHOD_NOTE__
 
     Every path-state carries `stress:layer`/`stress:slot` (its level + slot)
     and `data-depth`; `stress:expanded` is DERIVED from the path-state's own
@@ -40,20 +44,8 @@
   -->
 
   <main>
-    <h1>Path Fork (static) — 23 nodes → <code>2<sup>12</sup> − 1 = 4095</code> path-states in ONE compile pass</h1>
-    <p class="goals">
-      The fork-stress binary topology WITHOUT clones: two prototypes per layer,
-      1..11, each declaring its placement zone (<code>placementName</code>) and
-      the level above's shared zone name (<code>targetPlacement</code>). The
-      path enumeration (§2) mints one state per (prototype, owner-path) pair —
-      4095 states from 23 graph nodes, <code>forkKey = pathKey</code> on every
-      state. The checks assert the static census (registered=23, in-tree=23,
-      unplaced=0, cloneOps=0), per-level element counts (2^k at level k),
-      the binary shape via <code>treeFromOps</code>, css per-level property +
-      slot pairs, derived <code>stress:expanded</code> idempotency, and PAR-5
-      structural parity with the builder's SSRFragmentAdapter output (hashed
-      shape signature + truncated sample — the full fragment is never embedded).
-    </p>
+    <h1>__PAGE_H1__</h1>
+    <p class="goals">__PAGE_GOALS__</p>
 
     <!-- Framework input: the LEGACY envelope (translateLegacy input — NOT a
          serialized anchor document; placement-path-spec §5.1). -->
@@ -61,7 +53,7 @@
     <script id="server-data" type="application/json">__SERVER_DATA__</script>
 
     <section>
-      <h2>Static placement-path tree (live DOM)</h2>
+      <h2>Static derived tree (live DOM)</h2>
       <p class="expect">
         Every element is framework-rendered from path-states: one element per
         (prototype, path-to-root) pair — 4095 elements, wires = pathKeys.

@@ -300,13 +300,19 @@ for (const method of ['values', 'link']) {
   }
 }
 
-// ---- static placement-path page: 22 prototypes, ONE path-enumeration pass ----
+// ---- static derived trio: 22 prototypes, ONE path-enumeration pass ---------
 // The static re-expression (placement-path-spec §5): translate → ONE
 // compilePath bootstrap → emit/diff/apply. NO clone-instance ops, NO
 // after-compile expansion — 4095 path-states from 23 graph nodes (E2E-1).
+// Three method variants (the derived trio — derived-fork-variants-review
+// §5.1): placement (the FAMILY BASELINE, no component fields), values (+
+// component value per prototype), link (+ component def per prototype — the
+// recursive def chain; its 4095-element census holds via the covered-leaf
+// def-fill gate, DEFECT #21).
 // Census guard: the page publishes registered / inTree / unplaced / destroyed
 // / cloneOps / states / elements / passes on the profile; the static census
-// (placement-path-spec §5.2) is pinned here so it can never silently drift.
+// (placement-path-spec §5.2) is pinned here so it can never silently drift —
+// IDENTICAL for all three methods (§5.1).
 function assertStaticPathCensus(prof) {
   for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'cloneOps', 'states', 'elements', 'passes']) {
     if (typeof prof[f] !== 'number') {
@@ -347,11 +353,24 @@ function assertStaticPathCensus(prof) {
     process.exit(1)
   }
 }
-{
-  const pageHtml = await readFile(`${base}demo/path-fork-data.html`, 'utf8')
+// §5.2 — the derived-family per-region pins: the placement-derived page is the
+// FAMILY BASELINE (its single total keeps meaning as the enumeration cost);
+// the values/link-derived pages pin their emit/diff/apply REGIONS against it
+// (totals are compile-enumeration-dominated and insensitive to EMIT-side
+// blow-ups — the critique's guard gap). 2.5× asserted (CI-safe); the ~1.5×
+// figure is the human watch (AGENTS.md item 4).
+const derivedForkPages = [
+  { method: 'placement', file: 'demo/path-fork-data.html', q: 'placement' },
+  { method: 'values', file: 'demo/path-fork-data-values-d12.html', q: 'values' },
+  { method: 'link', file: 'demo/path-fork-data-link-d12.html', q: 'link' },
+]
+const derivedRegions = ['emitMs', 'diffMs', 'applyMs']
+const derivedBase = {}
+for (const page of derivedForkPages) {
+  const pageHtml = await readFile(`${base}${page.file}`, 'utf8')
   seedPage(pageHtml)
-  await import(`${base}demo/path-fork-data.js`).catch((e) => {
-    console.error('path-fork-data failed:', e)
+  await import(`${base}demo/path-fork-data.js?method=${page.q}`).catch((e) => {
+    console.error(`path-fork-data (${page.method}-derived) failed:`, e)
     process.exit(1)
   })
   await Promise.race([
@@ -360,7 +379,7 @@ function assertStaticPathCensus(prof) {
   ]).catch(() => {})
   const prof = globalThis.__pathForkProfile
   if (!prof) {
-    console.error('path-fork-data profile missing — page did not finish profiling')
+    console.error(`path-fork-data (${page.method}-derived) profile missing — page did not finish profiling`)
     process.exit(1)
   }
   // performance guard (AGENTS.md item-4 watch applies to the path-enumeration
@@ -370,25 +389,43 @@ function assertStaticPathCensus(prof) {
   const covered = prof.coveredMs ?? 0
   const residual = prof.totalMs - covered
   if (residual > Math.max(prof.totalMs * 0.15, 25)) {
-    console.error(`path-fork-data profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    console.error(`path-fork-data (${page.method}-derived) profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
     process.exit(1)
   }
   assertStaticPathCensus(prof)
-  // Ratio guard — placement-baseline decision (placement-path-spec §10.ad N-5
-  // + §8 Q6): the static page is its OWN reference — its single total is the
-  // new placement baseline for the static model. TODO: after testing confirms
-  // the absence of explosive time issues, re-baseline the runtime pages'
-  // ratio guard against this total (§10.af Q6). The runtime pages KEEP their
-  // existing placement baseline above.
-  const pathForkTotal = prof.totalMs
-  console.log(`[path-fork:baseline] total=${pathForkTotal.toFixed(1)}ms — static placement baseline recorded (§10.ad); TODO: re-baseline the runtime ratio guard against it after testing confirms no explosive time issues (§10.af Q6)`)
-  // Tripwire (spec §10.af.4 R-6): the single-pass enumeration must not be
-  // SLOWER than the runtime page's full clone assembly — a blow-up here means
-  // the path-enumeration bootstrap is scaling badly (AGENTS.md item-4 watch).
-  if (d12Totals['placement'] > 0 && pathForkTotal > d12Totals['placement']) {
-    console.error(`path-fork-data total ${pathForkTotal.toFixed(1)}ms exceeds the runtime placement baseline ${d12Totals['placement'].toFixed(1)}ms — path-enumeration bootstrap scaling regression`)
-    process.exit(1)
+  if (page.method === 'placement') {
+    // Family baseline (placement-derived — the §8-Q6 split): per-region
+    // numbers the values/link pages pin against; the runtime family keeps its
+    // own total-ratio guard + the 2× tripwire below.
+    for (const r of derivedRegions) derivedBase[r] = prof[r] ?? 0
+    derivedBase.totalMs = prof.totalMs
+    const f = (v) => (v ?? 0).toFixed(1)
+    console.log(`[derived-fork:baseline] method=placement emit=${f(derivedBase.emitMs)}ms diff=${f(derivedBase.diffMs)}ms apply=${f(derivedBase.applyMs)}ms total=${f(prof.totalMs)}ms — derived FAMILY baseline recorded (placement-derived page; the former [path-fork:baseline] marker, §10.ad N-5/R-5 SUPERSEDED); values/link-derived pages pin their per-region ratios against this (§8-Q6 split); the runtime 2× total tripwire below is unchanged`)
+  } else {
+    // Derived-family pins: each region must stay within 2.5× of the
+    // placement-derived baseline (the critique's EMIT-side blow-up guard).
+    for (const r of derivedRegions) {
+      const ratio = derivedBase[r] > 0 ? (prof[r] ?? 0) / derivedBase[r] : 0
+      if (ratio > 2.5) {
+        console.error(`path-fork-data (${page.method}-derived) region ${r} ratio ${ratio.toFixed(2)}× exceeds 2.5× of the placement-derived baseline ${derivedBase[r].toFixed(1)}ms — emit-side scaling regression in the derived family`)
+        process.exit(1)
+      }
+    }
+    console.log(`[derived-fork:pin] method=${page.method} emit=${((prof.emitMs ?? 0) / derivedBase.emitMs).toFixed(2)}× diff=${((prof.diffMs ?? 0) / derivedBase.diffMs).toFixed(2)}× apply=${((prof.applyMs ?? 0) / derivedBase.applyMs).toFixed(2)}× vs placement-derived baseline (2.5× asserted)`)
   }
+}
+// Tripwire (§8-Q6 RE-BASELINED 2026-08-16 — AGENTS.md item-4 watch; kept for
+// the RUNTIME family): the runtime pages became HONEST after the timer-drain
+// fix (the pass-2 flush now uses microtask checkpoints — 0ms timer yields
+// were clamped to 0.5s+ each, inflating the old totals ~10-15×), so the
+// static path-fork total (2.5s of REAL 4095-path enumeration) is now ~7× the
+// runtime placement total (~330ms of real work) — the old "static must not
+// exceed runtime" comparison inverted by itself and is retired. The re-pinned
+// tripwire catches the RUNTIME pass-2 pipeline blowing up: the runtime
+// placement total must stay within 2× of the placement-derived total.
+if (d12Totals['placement'] > 0 && d12Totals['placement'] > (derivedBase.totalMs ?? 0) * 2) {
+  console.error(`runtime placement total ${d12Totals['placement'].toFixed(1)}ms exceeds 2× the placement-derived baseline ${(derivedBase.totalMs ?? 0).toFixed(1)}ms — pass-2 pipeline scaling regression`)
+  process.exit(1)
 }
 
 // ---- feature-showcase page: one legacy envelope, every feature, data-only ---
@@ -639,9 +676,11 @@ for (const method of ['placement', 'values', 'link']) {
     process.exit(1)
   }
 }
-if (!banners.some((b) => b.includes('Path Fork (static)') && /0 failed/.test(b))) {
-  console.error('path-fork-data page did not complete its checks (banner missing)')
-  process.exit(1)
+for (const label of ['Path Fork (static)', 'Path Fork (values-derived)', 'Path Fork (link-derived)']) {
+  if (!banners.some((b) => b.includes(label) && /0 failed/.test(b))) {
+    console.error(`${label} page did not complete its checks (banner missing)`)
+    process.exit(1)
+  }
 }
 if (!banners.some((b) => b.includes('feature-showcase') && /0 failed/.test(b))) {
   console.error('feature-showcase page did not complete its checks (banner missing)')
