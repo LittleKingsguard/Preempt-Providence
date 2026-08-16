@@ -65,11 +65,12 @@
  * Green-by-accident pins (flag): 3 (array no-op is silent), 6, 8, 11, 19
  * (object round-trips raw — wrong reason), 23, 24.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { translateLegacy, reverseTranslate, type LegacyInitialData } from '../../src/core/translate.js'
 import { Supervisor } from '../../src/core/supervisor.js'
 import { EventBridge } from '../../src/core/events.js'
 import { emitElements } from '../../src/core/render-helpers.js'
+import { dispatchEvent } from '../../src/core/handlers.js'
 import { Node, type Node as NodeType } from '../../src/core/node.js'
 import { hub } from '../helpers/fixtures.js'
 
@@ -569,5 +570,284 @@ describe('DEFECT-7/8 — translate fail-safe (stress loop round 3 findings, 2026
     // the object root still translates
     const t = translateLegacy({ template: { root: { type: 'app' } }, content: [] })
     expect(t.root.type).toBe('app')
+  })
+})
+
+describe('HANDLER-SEAM — handlers.<event> targets wire legacy handler defs (D6 un-park; review A′ §2, 2026-08-15)', () => {
+  // Decision-7 slice: handler-def-shaped bindings register by name; the
+  // consumer's handlers.<event> target plans without the gap warn; compile
+  // materializes a provenance-marked handlers layer (idempotent, traceable);
+  // reverse keeps the defs in template.component and emits the target.
+  it('[H1] a handler-def-shaped value ({name, body}) registers as a handler def — NO K3 warn; the def stays a value-carrying source', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'showComments', value: { name: 'showComments', body: '(e, c) => { return c.clientAPI.apply(c.node.id, []) }' } }],
+        },
+      },
+      content: [],
+    } as never)
+    expect(t.warnings).toEqual([])
+    const anchor = t.root.anchors.find((a) => a.target === 'showComments')!
+    expect(anchor.role).toBe('source')
+    expect((anchor.value as { name?: string }).name).toBe('showComments')
+  })
+
+  it('[H2] a genuinely vacuous binding still fires K3 component-binding-empty', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', component: [{ reference: '', value: { name: 'x', body: 'y' } }] } },
+      content: [],
+    } as never)
+    expect(t.warnings.map((w) => w.code)).toContain('component-binding-empty')
+  })
+
+  it('[H3] a handlers.click target plans WITHOUT the gap warn and persists the event verbatim', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'showComments', value: { name: 'showComments', body: '() => {}' } }],
+          children: [{ type: 'button', component: [{ reference: 'showComments', target: 'handlers.click' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    expect(t.warnings.filter((w) => w.code === 'component-target-gap')).toEqual([])
+    const btn = t.root.children[0]!
+    const anchor = btn.anchors.find((a) => a.target === 'showComments')!
+    expect(anchor.options.handlerEvent).toBe('click')
+  })
+
+  it('[H4] a legacy lifecycle name as the event suffix warns handler-phase-unknown + skips', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'authInit', value: { name: 'authInit', body: '() => {}' } }],
+          children: [{ type: 'div', component: [{ reference: 'authInit', target: 'handlers.afterAssembly' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    expect(t.warnings.map((w) => w.code)).toContain('handler-phase-unknown')
+  })
+
+  it('[H5] compile materializes ONE provenance-marked handlers layer on the consumer; dispatchEvent fires the body; re-compile stays idempotent', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'cb', value: { name: 'cb', body: '(e, c) => { return "clicked" }' } }],
+          children: [{ type: 'button', component: [{ reference: 'cb', target: 'handlers.click' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const btn = t.root.children[0]!
+    const cr = t.root.compile(t.nodes)
+    const handlersLayers = btn.layers.filter((l) => l.handlers !== undefined)
+    expect(handlersLayers.length).toBe(1)
+    const h = handlersLayers[0]!.handlers![0] as { name: string; event: string; body: (e: unknown, c: unknown) => string }
+    expect(h.name).toBe('cb')
+    expect(h.event).toBe('click')
+    const results = dispatchEvent(btn, sup.handlerContext, 'click', 'v')
+    expect(String(results[0])).toContain('clicked')
+    // idempotent: recompile → still ONE layer
+    t.root.compile(t.nodes)
+    expect(btn.layers.filter((l) => l.handlers !== undefined).length).toBe(1)
+  })
+
+  it('[H6] reverse keeps the defs in template.component and emits the consumer target; re-translate zero-warn, no double-emit', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'cb', value: { name: 'cb', body: '() => {}' } }],
+          children: [{ type: 'button', component: [{ reference: 'cb', target: 'handlers.click' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    const rev = reverseTranslate(t.root)
+    const defs = (Array.isArray(rev.template.component) ? rev.template.component : rev.template.component ? [rev.template.component] : []) as Array<{ reference?: string; value?: { name?: string } }>
+    expect(defs.some((d) => d.reference === 'cb' && d.value?.name === 'cb')).toBe(true)
+    const btn = rev.template.root.children![0]!
+    const binding = (Array.isArray(btn.component) ? btn.component[0] : btn.component) as { reference?: string; target?: string }
+    expect(binding.reference).toBe('cb')
+    expect(binding.target).toBe('handlers.click')
+    const t2 = translateLegacy(rev)
+    expect(t2.warnings).toEqual([])
+    // no double-emit: the re-translated consumer has ONE handler layer after compile
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t2.nodes) sup.registerNode(n)
+    t2.root.compile(t2.nodes)
+    const btn2 = t2.root.children[0]!
+    expect(btn2.layers.filter((l) => l.handlers !== undefined).length).toBe(1)
+  })
+})
+
+describe('FORMAT MARKER — the data-format marker + arg-order wrapper (decision 4; review A′ §2.3, 2026-08-15)', () => {
+  // The runtime bridge (src/core/legacy-handlers.ts) wraps seam-installed
+  // LEGACY bodies as (ctx, ...args) => body(eventStub(ctx, args),
+  // legacyContext(ctx)) — the legacy (event, context) arg order restored.
+  // Seam-installed defs default to 'legacy'; inline NodeData.handlers bodies
+  // default to 'modern' (unwrapped); an explicit per-def format field
+  // overrides the default and persists on reverse (K5-style).
+  function seamEnv(def: Record<string, unknown>): { t: ReturnType<typeof translateLegacy>; sup: Supervisor; btn: NodeType } {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'cb', value: def }],
+          children: [{ type: 'button', component: [{ reference: 'cb', target: 'handlers.click' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    return { t, sup, btn: t.root.children[0]! }
+  }
+
+  it('[F1] seam default — a def WITHOUT a format marker materializes a WRAPPED legacy body: the body receives (event, context) in legacy order', () => {
+    const { sup, btn } = seamEnv({ name: 'cb', body: '(event, context) => event.type + ":" + context.node.type' })
+    const results = dispatchEvent(btn, sup.handlerContext, 'click', 'v')
+    expect(String(results[0])).toBe('click:button')
+  })
+
+  it('[F2] explicit format "legacy" — the same wrapped dispatch', () => {
+    const { sup, btn } = seamEnv({ name: 'cb', format: 'legacy', body: '(event, context) => event.type + ":" + context.node.type' })
+    const results = dispatchEvent(btn, sup.handlerContext, 'click')
+    expect(String(results[0])).toBe('click:button')
+  })
+
+  it('[F3] explicit format "modern" — the body is installed RAW: modern (ctx, ...args) order (no wrap)', () => {
+    const { sup, btn } = seamEnv({ name: 'cb', format: 'modern', body: '(ctx, ...args) => ctx.node.type + ":" + String(args[0])' })
+    const results = dispatchEvent(btn, sup.handlerContext, 'click', 'v')
+    expect(String(results[0])).toBe('button:v')
+  })
+
+  it('[F4] inline NodeData.handlers bodies default MODERN — installed unwrapped (raw body, (ctx, ...args) order)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [{ type: 'button', handlers: [{ name: 'boot', event: 'click', body: '(ctx) => ctx.node.type' }] }],
+        },
+      },
+      content: [],
+    })
+    expect(t.warnings).toEqual([])
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const btn = t.root.children[0]!
+    const results = dispatchEvent(btn, sup.handlerContext, 'click')
+    expect(String(results[0])).toBe('button')
+  })
+
+  it('[F5] an inline handler with an explicit format "legacy" IS wrapped: the body receives (event, context) in legacy order', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [{
+            type: 'button',
+            handlers: [{ name: 'boot', format: 'legacy', event: 'click', body: '(event, context) => event.type + ":" + context.node.type' }],
+          }],
+        },
+      },
+      content: [],
+    })
+    expect(t.warnings).toEqual([])
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const btn = t.root.children[0]!
+    const results = dispatchEvent(btn, sup.handlerContext, 'click')
+    expect(String(results[0])).toBe('click:button')
+  })
+
+  it('[F6] a non-legacy/modern format value warns handler-format-invalid and FALLS BACK to the provenance default (def → legacy, inline → modern)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { t, sup, btn } = seamEnv({ name: 'cb', format: 'v3', body: '(event, context) => event.type' })
+      expect(t.warnings.map((w) => w.code)).toContain('handler-format-invalid')
+      // fallback = the seam default (legacy): still wrapped, dispatches in legacy order
+      expect(String(dispatchEvent(btn, sup.handlerContext, 'click')[0])).toBe('click')
+
+      const t2 = translateLegacy({
+        template: {
+          root: {
+            type: 'app',
+            children: [{ type: 'button', handlers: [{ name: 'b', format: 'v3' as never, event: 'click', body: '(ctx) => ctx.node.type' }] }],
+          },
+        },
+        content: [],
+      })
+      expect(t2.warnings.map((w) => w.code)).toContain('handler-format-invalid')
+      // fallback = the inline default (modern): unwrapped, (ctx, ...args) order
+      const sup2 = new Supervisor({ events: new EventBridge() })
+      for (const n of t2.nodes) sup2.registerNode(n)
+      expect(String(dispatchEvent(t2.root.children[0]!, sup2.handlerContext, 'click')[0])).toBe('button')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('[F7] reverse — an EXPLICIT format persists on the def ({reference, value: {name, body, format}}); the provenance default does NOT persist; re-translate reproduces the same wrapping, zero warns', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'explicit', value: { name: 'explicit', format: 'legacy', body: '(e, c) => e.type' } },
+            { reference: 'implicit', value: { name: 'implicit', body: '(e, c) => e.type' } },
+          ],
+          children: [
+            { type: 'button', component: [{ reference: 'explicit', target: 'handlers.click' }] },
+            { type: 'button', component: [{ reference: 'implicit', target: 'handlers.click' }] },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const rev = reverseTranslate(t.root)
+    const defs = (Array.isArray(rev.template.component) ? rev.template.component : rev.template.component ? [rev.template.component] : []) as Array<{ reference: string; value: { name: string; body: string; format?: string } }>
+    const explicit = defs.find((d) => d.reference === 'explicit')!
+    expect(explicit.value.format).toBe('legacy')
+    const implicit = defs.find((d) => d.reference === 'implicit')!
+    expect(implicit.value.format).toBeUndefined()
+    // re-translate: zero warns, and the explicit def re-materializes WRAPPED
+    const t2 = translateLegacy(rev)
+    expect(t2.warnings).toEqual([])
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t2.nodes) sup.registerNode(n)
+    t2.root.compile(t2.nodes)
+    const btn = t2.root.children[0]!
+    expect(String(dispatchEvent(btn, sup.handlerContext, 'click')[0])).toBe('click')
+  })
+
+  it('[F8] an inline legacy-wrapped handler reverses with its ORIGINAL body source (never the wrapper source) + the explicit format', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [{
+            type: 'button',
+            handlers: [{ name: 'boot', format: 'legacy', event: 'click', body: '(event, context) => event.type' }],
+          }],
+        },
+      },
+      content: [],
+    })
+    const rev = reverseTranslate(t.root)
+    const h = (rev.template.root.children![0] as { handlers?: Array<{ name: string; body: string; format?: string }> }).handlers![0]!
+    expect(h.format).toBe('legacy')
+    expect(h.body).toBe('(event, context) => event.type')
+    expect(h.body).not.toContain('legacyContext')
+    expect(h.body).not.toContain('eventStub')
   })
 })

@@ -161,6 +161,30 @@ DIVERGE for clones. Engine gap: `materializeSeam` reads `linkOf(a)`
 
 ---
 
+### 2.8 `layer-apply` (the ORIGIN-OWNER op — legacy-handler-reuse-review §12.4, LANDED 2026-08-15)
+
+The origin-owner element's core, unparked: ONE atomic journaled structural op
+that mints a set of created nodes under a creator and wires an anchor layer to
+it. The legacy-bridge children-injection mapping (`receiveNextState({children})`
+→ ONE layer-apply) is the LANDED consumer (user directive 2026-08-15 — the
+review §7 decision-2 "cut" is superseded; the primitive is engine-level).
+
+| Rule | Statement |
+| --- | --- |
+| OO-1 | **Op shape:** `{kind: 'layer-apply', target, layerId, sourceName, decls: AnchorDecl[], nodes: NodeData[]}`. Executor mints each NodeData as a FAMILY CHILD of `target` (fresh `Node`, appended after the current children on the target's family link), sets `node.originLayer = layerId`, registers `node.id` in the module-level minted-set registry (`registerMinted`/`unregisterMinted`/`mintedByOrigin` — survives creator death, A1), and applies `addLayer({id: layerId, sourceName, anchors: decls})` to the target. The journal result persists `minted: NodeId[]` (A3 — replay resolves the ids to the existing nodes; a replayed op hits the idempotency gate) |
+| OO-2 | **Idempotency:** re-applying the SAME layerId is a NO-OP (the target already carries the layer; no second mint, census unchanged) |
+| OO-3 | **Family-children-only veto (A5):** v1 mints family children ONLY. A NodeData carrying an `anchors` field warns `layer-apply-anchors-rejected` and the child data STILL mints; the smuggled seed anchors never materialize (stripped before construction) |
+| OO-4 | **Origin-marked decl admission:** the layer's CHILD-role decls carry `options.origin = layerId` (injected at apply; the marker split's anchor side). `addAnchor`'s role-scoped single-parent exemption (ALS-4) admits origin-marked second `'child'` anchors exactly like seam-marked ones; a plain second family child anchor still rejects `'single-parent'` |
+| OO-5 | **Teardown = the creator's removeLayer/removeLayersForSource** (the whole-subtree cascade, ruling 5): the layer's generating anchors are removed (DEFECT #10) AND each minted node of that layer is decided by the PRE-DETACH survival predicate (B2) — doomed iff its CURRENT family chain reaches a non-permanent terminal (`chainRoot ∈ {unplaced, destroyed-owner, loop, slice-root, token 'other'}`) OR the chain still passes through the creator; survives iff the chain reaches a permanent token (rootNode/contentNodes/component) under a NON-origin parent. Doomed → `detachNodeSafe` (the shared sibling-preserving detach — works on a moved node's current child anchor) → the sweep cascade destroys it and its subtree; survivor → PROMOTION: `originLayer` cleared + unregistered (becomes authored content, reverse-emitted). Every touched node is unregistered; double-remove is a no-op |
+| OO-6 | **Reverse exclusion:** `nodeToLegacy` excludes children whose `originLayer` is set (like the runtimeMinted filter — the authored envelope is base truth); a promoted node reverses as authored |
+| OO-7 | **Bridge mapping LANDED (user directive 2026-08-15):** `receiveNextState({children})` is ONE `layer-apply` — deterministic per-consumer layerId `legacy-kids-<nodeId>`, `sourceName: 'legacy-bridge'`, child decls in payload order (`priority` = index), NodeView entries in the payload coerced to their data shape (style re-serialized); re-injection with the same layerId is a no-op (OO-2); a MIXED payload (children + state keys) rides the atomic layer-apply + a SEPARATE state-slice. **Mint semantics pins (blind test #4):** a NodeData carrying `type: 'component'` (or any type string) mints as an ORDINARY family child — `type` is carried verbatim; the `'component'` token exists ONLY as a family-link parent-anchor target (node.ts `familyParentTokenOf`), never as a node's type string. A css slice's `cssDef` key is a PLAIN css key — the value lands in the merged pass-1 css unchanged (no special casing; the emit-side cssDef rules read the merged value like authored cssDef). Still open (review §12.4-7): serialization fate (A2 — runtime-only + promotion today), non-child-anchor cleanup vs render-path prune (A4), the preservation-by-reversal flag (a FUTURE feature — NOT-YET-IMPLEMENTED) |
+
+Pins: tests/unit/legacy-shape-ops.test.ts Run B (O1–O9). Teardown helper
+history: the pre-existing ops detach was a whole-family-link wipe (critique
+PROBE-1); the safe per-node detach is DEFECT #12's `detachNodeSafe`.
+
+---
+
 ## 3. Decomposition of legacy behaviors
 
 | Legacy concept | Decomposes to | Ledger ref |

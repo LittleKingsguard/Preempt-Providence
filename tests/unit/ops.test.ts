@@ -481,3 +481,46 @@ function graphKey(node: Node): string {
     .map(a => `${a.role}@${a.link.id}#${typeof a.target === 'string' ? a.target : a.target.id}:${JSON.stringify(a.options)}`)
     .join('|')
 }
+describe('DEFECT-12 — detach/move must not wipe the shared family link (2026-08-15)', () => {
+  // ops.ts detach + supervisor detach/move call link.destroy() unconditionally
+  // (parentCount counts PARENT anchors — always 1 on a family link), destroying
+  // SIBLINGS' family edges (they go 'unplaced' and die in the sweep). The safe
+  // per-node pattern exists in payload.ts detachNode.
+  it('detach removes ONLY the target child — siblings keep their family edges and survive the sweep', async () => {
+    const root = makeRoot()
+    const a = childOf(root, makeNode({ content: 'a' }, 'a'), 0)
+    const b = childOf(root, makeNode({ content: 'b' }, 'b'), 1)
+    const c = childOf(root, makeNode({ content: 'c' }, 'c'), 2)
+    const ctx = opCtx(root, a, b, c)
+    execute({ kind: 'detach', node: a }, ctx)
+    expect(a.childAnchor()).toBeNull()
+    // the shared family link survives: b and c still have their child anchors
+    expect(b.childAnchor()).not.toBeNull()
+    expect(c.childAnchor()).not.toBeNull()
+    expect(b.state).not.toBe('unplaced')
+    expect(c.state).not.toBe('unplaced')
+  })
+
+  it('move does not destroy the source siblings — only the moved node re-parents', () => {
+    const root = makeRoot()
+    const a = childOf(root, makeNode({ content: 'a' }, 'a'), 0)
+    const b = childOf(root, makeNode({ content: 'b' }, 'b'), 1)
+    const c = childOf(root, makeNode({ content: 'c' }, 'c'), 2)
+    const ctx = opCtx(root, a, b, c)
+    execute({ kind: 'move', node: a, to: { parent: c, priority: 0 } } as never, ctx)
+    // a re-parented under c; b's family edge untouched
+    expect(b.childAnchor()).not.toBeNull()
+    expect(b.state).not.toBe('unplaced')
+    expect(c.children.map((ch) => ch.id)).toContain(a.id)
+    expect(root.children.map((ch) => ch.id)).not.toContain(a.id)
+  })
+
+  it('a lone child detach still dissolves the parent side (S-R3.4 — childless parent carries zero parent anchors)', () => {
+    const root = makeRoot()
+    const lone = childOf(root, makeNode({ content: 'lone' }, 'lone'), 0)
+    const ctx = opCtx(root, lone)
+    execute({ kind: 'detach', node: lone }, ctx)
+    expect(lone.childAnchor()).toBeNull()
+    expect(root.anchors.filter((a) => a.role === 'parent').length).toBe(0)
+  })
+})

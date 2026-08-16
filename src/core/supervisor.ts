@@ -14,9 +14,9 @@ import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes } from './handlers.js'
 import type { HandlerContext, HandlerPhase } from './handlers.js'
-import { unregisterContentNode } from './registry.js'
+import { unregisterContentNode, resolveNodeRef } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf } from './resolve.js'
-import { placementAttach, derivePlacementTrigger } from './ops.js'
+import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply } from './ops.js'
 import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger } from './types.js'
 
 let journalSeq = 0
@@ -341,15 +341,17 @@ export class Supervisor {
     dirtied?: NodeId[]
     nodeState?: string
     error?: { code: string; detail?: unknown }
+    minted?: NodeId[]
   } {
     const node = op.node as Node | undefined
-    if (!node && op.kind !== 'clone-instance') {
+    if (!node && op.kind !== 'clone-instance' && op.kind !== 'layer-apply') {
       return { status: 'rejected', error: { code: 'unknown-node' } }
     }
 
     // before-compile: phase handlers run before the op executes (and its
     // compile/apply happens). Errors are contained by dispatchPhase.
-    if (node) this.runPhaseOnNode('before-compile', node)
+    const phaseTarget = op.kind === 'layer-apply' ? (op.target as Node | undefined) : node
+    if (phaseTarget) this.runPhaseOnNode('before-compile', phaseTarget)
 
     try {
       if (op.kind === 'state-slice') {
@@ -437,10 +439,8 @@ export class Supervisor {
         return { status: 'applied', journalId: entry!.id, dirtied: [node!.id] }
       }
       if (op.kind === 'detach') {
-        const childAnchor = (node as Node).anchors.find(a => a.role === 'child')
-        if (childAnchor) {
-          (childAnchor.link as unknown as Link).destroy()
-        }
+        // DEFECT #12 — the safe per-node detach (siblings keep their edges)
+        detachNodeSafe(node as Node)
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [node!.id] })
         this.emitStructure('detach', node!.id); this.markPass2(node!.id)
         return { status: 'applied', journalId: entry!.id, dirtied: [node!.id] }
@@ -448,8 +448,8 @@ export class Supervisor {
       if (op.kind === 'move') {
         const toParent = (op.to as { parent: Node }).parent
         if (findCycle(node as Node, toParent)) throw new CycleError((node as Node).id)
-        const childAnchor = (node as Node).anchors.find(a => a.role === 'child')
-        if (childAnchor) (childAnchor.link as unknown as Link).destroy()
+        // DEFECT #12 — safe detach of the moved node; siblings untouched
+        detachNodeSafe(node as Node)
         const link = toParent.familyLinkFor()
         const options: { priority?: number } = {}
         const prio = (op.to as { priority?: number }).priority
@@ -484,6 +484,28 @@ export class Supervisor {
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [copy.id] })
         this.emitStructure('clone-instance', copy.id); this.markPass2(copy.id)
         return { status: 'applied', journalId: entry!.id, dirtied: [copy.id] }
+      }
+      if (op.kind === 'layer-apply') {
+        // ORIGIN-OWNER (legacy-handler-reuse-review §12.4) — the atomic
+        // mint-and-wire op: mints the NodeData set as family children of the
+        // target, registers the minted set, and applies the anchor layer.
+        // Idempotent (same layerId = no-op); the journal result persists the
+        // minted ids (A3 — replay resolves them to the existing nodes).
+        const target = op.target as Node | undefined
+        if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
+        const res = layerApply(op as never, { hub: target.hubFor ?? this.hub ?? null as never, nodes: this.nodes })
+        // supervisor visibility: every minted node is registered here so
+        // getNode/allNodes/pass-2 resolve it (the minted-set registry tracks
+        // ownership for teardown; the supervisor tracks the graph)
+        for (const id of res.minted) {
+          const n = resolveNodeRef(id)
+          if (n) this.registerNode(n)
+        }
+        const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways, minted: res.minted })
+        this.emitStructure('layer-apply', target.id)
+        this.markPass2(target.id)
+        for (const id of res.minted) this.markPass2(id)
+        return { status: 'applied', journalId: entry!.id, dirtied: res.doorways, minted: res.minted }
       }
 
       return { status: 'no-usable-state', nodeState: (node as Node)?.state ?? 'unplaced' }
@@ -530,10 +552,8 @@ export class Supervisor {
     if (!node) return
     const resolved = this.nodes.get(node.id) ?? node
     if (kind === 'attach') {
-      const childAnchor = resolved.anchors.find(a => a.role === 'child')
-      if (childAnchor) {
-        (childAnchor.link as unknown as Link).destroy()
-      }
+      // DEFECT #12 — attach-undo uses the safe per-node detach too
+      detachNodeSafe(resolved)
     } else if (kind === 'destroy') {
       // destroy is terminal; undo is a no-op for destroyed nodes
     }

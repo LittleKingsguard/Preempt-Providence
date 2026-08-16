@@ -32,7 +32,8 @@
 // compile walk; placements become `placement` anchors.
 import { Node, mintNodeId, ancestorConsumesZone } from './node.js'
 import { Link } from './link.js'
-import { registerContentNode, registerDefPrototypes, registerDefRootPrototype, defRootPrototypeFor } from './registry.js'
+import { registerContentNode, registerDefPrototypes, registerDefRootPrototype, defRootPrototypeFor, registerHandlerDef, setTranslateUserData } from './registry.js'
+import { wrapLegacyHandler } from './legacy-handlers.js'
 import { validateDerived } from './derived.js'
 import type { Anchor, DerivedDecl, DerivedExpr, LinkConfigNameHub, NodeBaseData } from './types.js'
 export type LegacyHandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
@@ -41,6 +42,17 @@ export interface LegacyHandlerDef {
   name: string
   event?: string
   phase?: LegacyHandlerPhase
+  /** FORMAT MARKER (decision 4, 2026-08-15) — the body's data-format
+   *  convention: 'legacy' bodies are (event, context) and get wrapped by the
+   *  bridge; 'modern' bodies are raw (ctx, ...args). INLINE bodies default
+   *  to 'modern' (unwrapped); seam-installed defs default to 'legacy'
+   *  (wrapped). An explicit per-def field overrides the default and persists
+   *  on reverse (K5-style). */
+  format?: 'legacy' | 'modern'
+  /** internal — the ORIGINAL body source of an inline legacy-wrapped
+   *  handler: reverse re-emits it (never the bridge wrapper source), so the
+   *  round-trip reproduces the same wrap. */
+  sourceBody?: string
   /** live function OR its source as a string (instantiated at translate —
    *  legacy loadable handlers, admin-gated at the backend) */
   body?: ((ctx: unknown, ...args: unknown[]) => unknown) | string
@@ -187,6 +199,17 @@ function warn(warnings: TranslatedWarning[], code: string, path: string | undefi
   console.warn(`[legacy-translate] ${code}${at}: ${detail}`)
 }
 
+/** HANDLER-SEAM — legacy lifecycle hook names used as `handlers.<phase>`
+ *  event suffixes: warned + skipped (N5 — the 3-phase set is closed; the
+ *  legacy names have no event home). Mirrors the old Handler.ts phase list. */
+const LEGACY_LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
+  'beforeAssembly', 'afterAssembly', 'beforeRender', 'afterRender',
+  'beforeInstantiate', 'afterInstantiate', 'beforePreprocessing',
+  'afterPreprocessing', 'beforeValidation', 'afterValidation',
+  'beforePostprocessing', 'afterPostprocessing', 'beforeComponentRouting',
+  'afterComponentRouting', 'beforeSlotAssembly', 'afterSlotAssembly',
+])
+
 /** K8 AP13 — the closed 3-set; legacy lifecycle hook names are deliberately
  *  excluded (no mapping), guarded at translate with `handler-phase-unknown`. */
 const LEGACY_HANDLER_PHASES: ReadonlySet<string> = new Set(['before-compile', 'after-compile', 'after-render'])
@@ -304,19 +327,42 @@ function baseFrom(
         warn(warnings, 'handler-body-invalid', hp, 'body must be a function or a function-source string; handler definition skipped')
         return
       }
+      // FORMAT MARKER (decision 4) — inline bodies default to MODERN
+      // (unwrapped, the demo surface's convention); an explicit 'legacy'
+      // format wraps the body via the bridge (the (event, context) arg order
+      // restored); any other format value warns + falls back to the default.
+      const fmt = h.format
+      const format: 'legacy' | 'modern' | undefined = fmt === 'legacy' || fmt === 'modern' ? fmt : undefined
+      if (fmt !== undefined && format === undefined) {
+        warn(warnings, 'handler-format-invalid', hp, `format "${String(fmt)}" is not 'legacy' or 'modern'; falling back to the inline default (modern)`)
+      }
       if (typeof h.body === 'string') {
         // string → new Function instantiation; a body that fails to compile
         // (syntax error or non-function evaluation) warns + skips — TR-F2:
         // per-definition content is never a throw at translate
         try {
-          kept.push({ ...h, body: instantiateHandlerBody(h.body) })
+          const fn = instantiateHandlerBody(h.body)
+          const { format: _authoredFormat, ...hRest } = h
+          if (format === 'legacy') {
+            // the wrapper is installed at translate; the ORIGINAL source is
+            // kept (sourceBody) so reverse re-emits the authored body, never
+            // the wrapper source
+            kept.push({ ...hRest, format, body: wrapLegacyHandler(fn, h.event ?? h.name), sourceBody: h.body })
+          } else {
+            kept.push({ ...hRest, ...(format !== undefined ? { format } : {}), body: fn })
+          }
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e)
           warn(warnings, 'handler-body-invalid', hp, `body string failed to instantiate (${reason}); handler definition skipped`)
         }
         return
       }
-      kept.push(h)
+      const { format: _authoredFormat2, ...hRest } = h
+      if (format === 'legacy' && typeof h.body === 'function') {
+        kept.push({ ...hRest, format, body: wrapLegacyHandler(h.body, h.event ?? h.name) })
+      } else {
+        kept.push({ ...hRest, ...(format !== undefined ? { format } : {}), ...(h.body !== undefined ? { body: h.body } : {}) })
+      }
     })
     base.handlers = kept
   }
@@ -359,6 +405,9 @@ interface BindingPlan {
   value?: unknown
   applyPath?: string | undefined
   synthesized?: DerivedDecl | undefined
+  /** HANDLER-SEAM (D6 un-park) — a `handlers.<event>` target's verbatim event
+   *  suffix. */
+  handlerEvent?: string | undefined
   /** D7/F17 — `type`/`content`/`children` seam targets: planned WITHOUT the
    *  component-target-gap warn; the seam target persists on the anchor
    *  options (`options.seam`) so assembly can distinguish seam candidates. */
@@ -387,7 +436,7 @@ function classifyTarget(
   authoredDerived: DerivedDecl | undefined,
   warnings: TranslatedWarning[],
   path: string,
-): { applyPath?: string; synthesized?: DerivedDecl; seam?: 'type' | 'content' | 'children' } {
+): { applyPath?: string; synthesized?: DerivedDecl; seam?: 'type' | 'content' | 'children'; handlerEvent?: string } {
   if (target === 'type' || target === 'content' || target === 'children') {
     // D7/F17 — anchor-layer seam candidate: no gap warn, seam persisted
     return { seam: target }
@@ -421,7 +470,18 @@ function classifyTarget(
     warn(warnings, 'component-target-skipped', path, `target "${target}": malformed props form (syntax edge); no apply`)
     return {}
   }
-  if (KNOWN_GAP_TARGETS.has(target) || /^css\.style\.[^.\s]+$/.test(target) || /^handlers\.[^.\s]+$/.test(target)) {
+  if (/^handlers\.[^.\s]+$/.test(target)) {
+    // HANDLER-SEAM (D6 un-park, 2026-08-15): the event suffix verbatim — no
+    // gap warn. LEGACY LIFECYCLE names as the suffix warn handler-phase-
+    // unknown + skip (N5 — the 3-phase set is closed; event-only reuse).
+    const event = target.slice('handlers.'.length)
+    if (LEGACY_LIFECYCLE_EVENTS.has(event)) {
+      warn(warnings, 'handler-phase-unknown', path, `target "${target}": "${event}" is a legacy lifecycle phase, not an event; binding skipped (N5)`)
+      return {}
+    }
+    return { handlerEvent: event }
+  }
+  if (KNOWN_GAP_TARGETS.has(target) || /^css\.style\.[^.\s]+$/.test(target)) {
     warn(warnings, 'component-target-gap', path, `target "${target}" is a valid legacy injection path with no translate-time seam (recognition only); no apply`)
     return {}
   }
@@ -480,12 +540,31 @@ function planBindings(
       reference,
       role: binding!.value !== undefined ? (target !== undefined ? 'duplex' : 'source') : 'target',
     }
-    if (binding!.value !== undefined) plan.value = binding!.value
+    if (binding!.value !== undefined) {
+      plan.value = binding!.value
+      // HANDLER-SEAM (D6 un-park): a def-shaped value ({name, body}) registers
+      // as a handler def by reference — K3 superseded for THIS shape only.
+      // FORMAT MARKER (decision 4): an explicit `format: 'legacy'|'modern'`
+      // registers with the def; the seam default is 'legacy' (wrapped); any
+      // other format value warns handler-format-invalid + falls back.
+      const v = binding!.value as { name?: unknown; body?: unknown; format?: unknown }
+      if (typeof v === 'object' && v !== null && typeof v.name === 'string' && v.name.length > 0 && typeof v.body === 'string') {
+        const fmt = v.format
+        let format: 'legacy' | 'modern' = 'legacy'
+        if (fmt === 'legacy' || fmt === 'modern') {
+          format = fmt
+        } else if (fmt !== undefined) {
+          warn(warnings, 'handler-format-invalid', path, `format "${String(fmt)}" is not 'legacy' or 'modern'; falling back to the seam default (legacy)`)
+        }
+        registerHandlerDef(reference, { name: v.name, body: v.body, format })
+      }
+    }
     if (target !== undefined) {
       const t = classifyTarget(target, reference, authoredDerived, warnings, path)
       plan.applyPath = t.applyPath
       plan.synthesized = t.synthesized
       plan.seam = t.seam
+      plan.handlerEvent = t.handlerEvent
     }
     plans.push(plan)
   }
@@ -522,6 +601,7 @@ function applyPlans(node: Node, plans: BindingPlan[], hub: LinkConfigNameHub): v
     const options: Record<string, unknown> = {}
     if (plan.applyPath !== undefined) options.applyPath = plan.applyPath
     if (plan.seam !== undefined) options.seam = plan.seam
+    if (plan.handlerEvent !== undefined) options.handlerEvent = plan.handlerEvent
     if (plan.role === 'source' || plan.role === 'duplex') {
       const a = node.addAnchor(plan.role, plan.reference, options, link)
       if (a !== null && plan.value !== undefined) a.value = plan.value
@@ -590,7 +670,12 @@ function mintDefPrototypes(
     // children are the def-children prototypes (their chain still terminates
     // at the 'component' token via the def-root).
     if (def.css !== undefined && typeof def.css === 'object' && Object.keys(def.css).length > 0) {
-      const defRoot = translateNodeData({ type: def.type, css: def.css }, hub, nodes, warnings, `${path}.component.value`)
+      const defRootData: LegacyNodeData = { type: def.type, css: def.css }
+      const defComponent = (def as { component?: unknown }).component
+      if (defComponent !== undefined) {
+        defRootData.component = defComponent as LegacyComponentBinding | LegacyComponentBinding[]
+      }
+      const defRoot = translateNodeData(defRootData, hub, nodes, warnings, `${path}.component.value`)
       attachToPermanentOwner(defRoot, 'component')
       registerDefRootPrototype(link, defRoot)
     }
@@ -914,6 +999,11 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
     if (cfg.runMonitoring === true) persistence = true
   }
 
+  // DECISION 6 (2026-08-15) — the legacy bridge's read-only
+  // `supervisor.userData` member captures the translated userData here (the
+  // first payload's value; undefined clears the slot).
+  setTranslateUserData(userData)
+
   return { root, nodes, content, warnings, metadata, userData, clientConfig: { adapter, persistence } }
 }
 
@@ -980,18 +1070,40 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
     }
     data.derived = Object.keys(props).length > 0 ? { props } : {}
   }
-  const rawHandlers = node.handlers as unknown as LegacyHandlerDef[] | undefined
-  if (rawHandlers && rawHandlers.length > 0) {
+  // DEFECT #14 fix (blind test #4): the seam handlers layer is
+  // provenance-marked (sourceName 'handler-seam') and its bindings reverse via
+  // the component anchors as `{reference, target: 'handlers.<event>'}` — it
+  // must NOT leak into `nodeData.handlers` as a zombie wrapped-function.
+  // Emit the AUTHORED (base) handlers plus any non-seam layer additions
+  // (runtime user edits via state-slice targetProp 'handlers' — the R-3 leak).
+  const rawHandlers = [
+    ...((node.base.handlers as unknown as LegacyHandlerDef[] | undefined) ?? []),
+    ...node.layers
+      // DEFECT #17 fix (round 5): the seed-<id> mirror layer carries a copy
+      // of base.handlers (sourceName undefined) — excluding it stops the
+      // double-emission that compounded per round-trip (4→8→…)
+      .filter((l) => l.sourceName !== 'handler-seam' && !l.id.startsWith('seed-') && Array.isArray(l.handlers))
+      .flatMap((l) => (l.handlers as unknown as LegacyHandlerDef[])),
+  ]
+  if (rawHandlers.length > 0) {
     data.handlers = rawHandlers.map((h) => {
       // live function bodies ship back as their SOURCE (so the doc round-trips
       // through the string-body instantiation); native/bound code has no
-      // recoverable source and is omitted
+      // recoverable source and is omitted. An inline LEGACY-WRAPPED handler
+      // re-emits its ORIGINAL source (sourceBody — never the bridge wrapper
+      // source) + the explicit format, so re-translate reproduces the wrap.
       let body = h.body
       if (typeof h.body === 'function') {
-        const src = h.body.toString()
+        const src = h.sourceBody ?? h.body.toString()
         body = /\{\s*\[native code\]\s*\}/.test(src) ? undefined : src
       }
-      return { name: h.name, ...(h.event ? { event: h.event } : {}), ...(h.phase ? { phase: h.phase } : {}), ...(body !== undefined ? { body } : {}) }
+      return {
+        name: h.name,
+        ...(h.event ? { event: h.event } : {}),
+        ...(h.phase ? { phase: h.phase } : {}),
+        ...(h.format !== undefined ? { format: h.format } : {}),
+        ...(body !== undefined ? { body } : {}),
+      }
     })
   }
   // K5 — component bindings back, ONE binding per component anchor (in anchor
@@ -1027,6 +1139,7 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
     // P-EMIT-3 fill).
     if (applyPath !== undefined) binding.target = applyPath
     else if (typeof a.options.seam === 'string') binding.target = a.options.seam
+    else if (typeof a.options.handlerEvent === 'string') binding.target = `handlers.${a.options.handlerEvent}`
     bindings.push(binding)
   }
   if (bindings.length === 1) data.component = bindings[0]!
@@ -1071,7 +1184,11 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
     }
     if (Object.keys(placement).length > 0) data.placement = placement
   }
-  const kids = node.children.filter((c) => !isContentRoot(c) && !c.runtimeMinted)
+  // ORIGIN-OWNER (§12.4.3) — a node whose `originLayer` is set is minted
+  // (never authored): reverse-excluded like the runtimeMinted filter (the
+  // authored envelope is base truth; the teardown's promotion clears the
+  // marker — a promoted node reverses as authored content).
+  const kids = node.children.filter((c) => !isContentRoot(c) && !c.runtimeMinted && c.originLayer === undefined)
   if (kids.length > 0) data.children = kids.map((k) => nodeToLegacy(k, isContentRoot))
   return data
 }

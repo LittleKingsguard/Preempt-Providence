@@ -17,10 +17,21 @@ import type {
 import { SingleParentError } from './errors.js'
 import { Link } from './link.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
-import { registerNode, scheduleSweep, markPending, resolveNodeRef, defPrototypesFor, defRootPrototypeFor } from './registry.js'
+import { registerNode, scheduleSweep, markPending, resolveNodeRef, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, unregisterMinted, handlerDef, compileHandlerBody } from './registry.js'
 import { resolveArms, resolvePathTargets } from './resolve.js'
 import { logCompilePass, compilePassLogEnabled } from './debug.js'
 import { validateDerived, applyDerived } from './derived.js'
+// detachNodeSafe (the shared sibling-preserving detach, DEFECT #12) is the
+// origin-owner teardown's doomed-node path. Imported at call time only — the
+// node.ts ↔ ops.ts cycle is safe exactly like the supervisor.ts ↔ node.ts one
+// (ops.ts uses its node.js imports strictly inside function bodies).
+import { detachNodeSafe } from './ops.js'
+// wrapLegacyHandler (the LEGACY-HANDLER RUNTIME BRIDGE, decision 4) — the
+// seam materialization installs legacy-format def bodies behind the
+// (event, context) arg-order wrapper. Call-time use only — legacy-handlers
+// imports node.js as TYPES ONLY, so the node.ts ↔ legacy-handlers.ts edge is
+// a type edge at runtime (safe).
+import { wrapLegacyHandler } from './legacy-handlers.js'
 
 export { MAX_COMPILE_DEPTH }
 
@@ -325,6 +336,13 @@ export class Node {
    *  placement/component logic — clone-instance is a legacy artifact guard).
    *  Runtime-only; never serialized. */
   runtimeMinted = false
+  /** ORIGIN-OWNER (legacy-handler-reuse-review §12.4.3) — the per-node
+   *  origin marker: the layer id that minted this node via `layer-apply`.
+   *  Doubles as the reverse-exclusion marker (nodeToLegacy's filter, like
+   *  runtimeMinted). Cleared by the teardown's survivor promotion (a moved
+   *  minted node becomes authored content) and by the doomed path.
+   *  Runtime-only; never serialized. */
+  originLayer: string | undefined
 
   private readonly _anchors: Anchor[]
   private readonly _dirty: Set<DirtyScope>
@@ -575,6 +593,9 @@ export class Node {
         if (match) this.removeAnchor(match)
       }
     }
+    // ORIGIN-OWNER (§12.4.4, ruling 5) — layer removal on the creator ALSO
+    // tears down its minted set (the pre-detach survival predicate).
+    this.teardownMinted(id)
     this.compileLocal()
     this.markDirty('anchor-populate')
     this.markRemote()
@@ -597,10 +618,58 @@ export class Node {
         if (match) this.removeAnchor(match)
       }
     }
+    // ORIGIN-OWNER — source-scoped removal tears down every removed layer's
+    // minted set (the whole-subtree cascade, ruling 5).
+    for (const layer of removed) this.teardownMinted(layer.id)
     this.compileLocal()
     this.markDirty('anchor-populate')
     this.markRemote()
     scheduleSweep(true)
+  }
+
+  /** ORIGIN-OWNER teardown (legacy-handler-reuse-review §12.4.2/6, B2) — the
+   *  PRE-DETACH survival predicate, per minted node, decided BEFORE any
+   *  detach (post-detach a node is always 'unplaced', so the sweep gate can
+   *  never see it in-tree): DOOMED iff the node's CURRENT family chain
+   *  reaches a non-permanent terminal (chainRoot ∈ {unplaced,
+   *  destroyed-owner, loop, slice-root, token 'other'}) OR the chain still
+   *  passes through this origin — the whole-subtree cascade (ruling 5:
+   *  includes created nodes placed elsewhere). SURVIVES iff the chain
+   *  reaches a permanent token (rootNode/contentNodes/component) under a
+   *  NON-origin parent — promotion: the origin marker is cleared and the
+   *  node unregistered (becomes authored content, reverse-emitted;
+   *  §12.4.6). Doomed nodes are detached via the shared sibling-preserving
+   *  detach (detachNodeSafe — their current child anchor, wherever they
+   *  moved) and the sweep cascade destroys their subtrees. The marker is
+   *  cleared and the registry entry dropped for every touched node
+   *  (double-remove no-ops; the record never lingers past its rollback). */
+  private teardownMinted(layerId: string): void {
+    for (const id of mintedByOrigin(layerId)) {
+      const node = resolveNodeRef(id)
+      if (node) {
+        let originOnChain = false
+        for (let cur: Node | null = node; cur; cur = cur.parent) {
+          if (cur === this) {
+            originOnChain = true
+            break
+          }
+        }
+        const kind = chainRoot(node, new Set<NodeId>())
+        const permanent = kind.kind === 'token'
+          && (kind.token === 'rootNode' || kind.token === 'contentNodes' || kind.token === 'component')
+        if (!originOnChain && permanent) {
+          // survivor promotion: origin marker cleared, node unregistered —
+          // it is now authored content (reverse-emitted)
+          node.originLayer = undefined
+        } else {
+          // doomed: the sibling-preserving detach; the sweep cascade
+          // destroys the node and its subtree unless re-attached first
+          detachNodeSafe(node)
+          node.originLayer = undefined
+        }
+      }
+      unregisterMinted(id)
+    }
   }
 
   clone(actor?: string, opts: { ignore?: string[] } = {}): Node {
@@ -725,6 +794,11 @@ export class Node {
           // children MULTIPLE LEGAL PARENTS — INTENDED (G24). EVERY other
           // second 'child' anchor keeps the gate (family attach ops — G25
           // unchanged).
+        } else if ((options as { origin?: unknown }).origin !== undefined) {
+          // ORIGIN-OWNER (§12.4.5) — same exemption for an origin-marked
+          // 'child' anchor (options.origin — the layer-apply decl child
+          // anchor's admission, the marker split's anchor side): a minted
+          // child admitted as a second parent under its origin layer.
         } else {
           throw new SingleParentError(this.id)
         }
@@ -779,7 +853,20 @@ export class Node {
       if (layer.content !== undefined) content = layer.content
       if (layer.props) for (const k of Object.keys(layer.props)) props[k] = layer.props[k]
       if (layer.css) for (const k of Object.keys(layer.css)) css[k] = layer.css[k]
-      if (layer.handlers) handlers = [...(layer.handlers as unknown[])]
+      if (layer.handlers) {
+        // DEFECT #16 fix (round 5): handlers merge APPEND-WITH-OVERRIDE per
+        // (name, event) — the old replace-array wiped the base's authored
+        // handlers when a seam/handlers layer landed (silent dead handler).
+        // Same-key later-wins; different entries accumulate (the handlers.md
+        // letter: "layer handlers append, later layers override same-event").
+        const merged = [...(handlers ?? [])] as Array<{ name?: unknown; event?: unknown }>
+        for (const h of layer.handlers as Array<{ name?: unknown; event?: unknown }>) {
+          const idx = merged.findIndex((m) => m.name === h.name && m.event === h.event)
+          if (idx !== -1) merged[idx] = h
+          else merged.push(h)
+        }
+        handlers = merged
+      }
       if (layer.derived?.props) {
         derived = derived?.props
           ? { props: { ...derived.props, ...layer.derived.props } }
@@ -1282,6 +1369,22 @@ export class Node {
       // must materialize from it)
       if ((a.role !== 'target' && a.role !== 'duplex') || typeof a.target !== 'string') continue
       const seam = a.options.seam
+      // HANDLER-SEAM (D6 un-park, 2026-08-15): a `handlers.<event>` binding
+      // resolves the def by reference and layers ONE provenance-marked
+      // handlers layer on the consumer ({name, event, body: compiled}) —
+      // idempotent (replace-in-place), traceable (the layer sourceName +
+      // origin marker pattern). A def that disappeared clears the stale layer.
+      // Handled BEFORE the seam gate (handler anchors carry handlerEvent, no
+      // seam option).
+      if (a.options.handlerEvent !== undefined) {
+        // DEFECT #13 fix: ONE per-consumer `seam-handlers` layer accumulates
+        // ALL the consumer's handler bindings (compileLocal's layer merge
+        // REPLACES the handlers array per layer — per-binding layers would
+        // collapse to the last one). The layer is REBUILT from the consumer's
+        // current handlerEvent anchors on every materialize — idempotent.
+        contentChanged = this.rebuildHandlerSeamLayer() || contentChanged
+        continue
+      }
       if (seam === undefined) continue
       const link = linkOf(a)
       const value = link.anchorsOf('source').find((p) => p.value !== undefined)?.value
@@ -1372,6 +1475,56 @@ export class Node {
       (a) => a.role === 'parent' && a.options.seam !== undefined
         && a.link.anchorsOf('child').some((ca) => ca.target === proto),
     )
+  }
+
+  /** DEFECT #13/#14 (2026-08-15) — rebuild the consumer's SINGLE
+   *  provenance-marked handler-seam layer from ALL its handlerEvent anchors
+   *  (FORMAT MARKER: legacy bodies installed WRAPPED — the `(event, context)`
+   *  arg order restored via eventStub + legacyContext; modern bodies raw).
+   *  Idempotent: the rebuilt layer replaces in place. */
+  private rebuildHandlerSeamLayer(): boolean {
+    const entries: Array<{ name: string; event: string; body: unknown }> = []
+    let stale = false
+    for (const a of this.anchors) {
+      if ((a.role !== 'target' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+      if (a.options.handlerEvent === undefined) continue
+      const def = handlerDef(a.target)
+      if (def) {
+        // DEFECT #18 fix (round 5): per-ENTRY containment — a malformed def
+        // body warns handler-body-invalid + skips THAT entry (the inline
+        // path's NP11 discipline); it never aborts the compile or the rebuild
+        // of the consumer's other bindings.
+        try {
+          const compiled = compileHandlerBody(def.body)
+          entries.push({ name: def.name, event: a.options.handlerEvent, body: def.format === 'legacy' ? wrapLegacyHandler(compiled, a.options.handlerEvent) : compiled })
+        } catch {
+          console.warn(`handler-body-invalid at seam def "${a.target}": the body does not evaluate; entry skipped`)
+        }
+      }
+    }
+    if (entries.length === 0) {
+      const before = this.layers.length
+      this.layers = this.layers.filter((l) => l.sourceName !== 'handler-seam')
+      return this.layers.length !== before
+    }
+    const layer: NodeLayer = { id: 'seam-handlers', sourceName: 'handler-seam', handlers: entries }
+    const idx = this.layers.findIndex((l) => l.id === layer.id)
+    if (idx !== -1 && this.layers[idx] !== undefined && JSON.stringify((this.layers[idx] as NodeLayer).handlers) === JSON.stringify(layer.handlers)) return stale
+    if (idx !== -1) this.layers[idx] = layer
+    else this.layers.push(layer)
+    return true
+  }
+
+  private clearHandlerSeamLayers(target: string): boolean {
+    let removed = false
+    this.layers = this.layers.filter((l) => {
+      if (l.id.startsWith(`seam-handlers-${target}`)) {
+        removed = true
+        return false
+      }
+      return true
+    })
+    return removed
   }
 
   private clearSeamContentLayers(target: string): boolean {

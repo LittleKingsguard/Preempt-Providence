@@ -807,7 +807,8 @@ function runScenario26() {
     revVsStyle?.content === '"a:b"' &&
     p.html.includes('shell text') && p.html.includes('menu-bar') && p.html.includes('>logo<') &&
     revSc?.children === undefined &&
-    tCodes.filter((c) => c === 'component-target-gap').length === 1 &&
+    // HANDLER-SEAM SUPERSESSION (2026-08-15): handlers.<event> no longer gaps
+    tCodes.filter((c) => c === 'component-target-gap').length === 0 &&
     p.html.includes('id="handler-gap"') && JSON.stringify(resultsOut) === JSON.stringify(['alive']) &&
     seamRoundTrip
   record('26', ok, d, [

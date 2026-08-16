@@ -5,8 +5,9 @@
 // refreshed (replaced by a new set), or appended to (websocket comments)
 // without touching other payloads or user-created edits.
 import type { Node } from './node.js'
+import { registerContentNode, unregisterContentNode } from './registry.js'
 import { Link } from './link.js'
-import { markPending, registerContentNode, unregisterContentNode } from './registry.js'
+import { detachNodeSafe } from './ops.js'
 
 export interface Payload {
   id: string
@@ -26,30 +27,8 @@ function familyLinkFor(parent: Node): Link {
 /** Detach one node from its parent edge; the sweep cascade-destroys it
  *  unless it is re-attached before the sweep drains. Only THIS node's child
  *  anchor is removed — siblings on the shared family link are untouched. */
-function detachNode(node: Node): void {
-  const ca = node.childAnchor()
-  if (!ca) {
-    markPending(node) // already unplaced — still sweep-eligible
-    return
-  }
-  const link = ca.link as unknown as Link
-  const idx = link.anchors.indexOf(ca)
-  if (idx !== -1) link.anchors.splice(idx, 1)
-  const nIdx = node.anchors.indexOf(ca)
-  if (nIdx !== -1) node.anchors.splice(nIdx, 1)
-  markPending(node)
-  // last child left the shared family link → dissolve the parent side too
-  // (a childless parent carries zero parent anchors, S-R3.4)
-  if (link.anchorsOf('child').length === 0) {
-    const pa = link.anchorsOf('parent')[0]
-    if (pa && typeof pa.target === 'object' && pa.target !== null) {
-      const owner = pa.target as Node
-      const oi = owner.anchors.indexOf(pa)
-      if (oi !== -1) owner.anchors.splice(oi, 1)
-    }
-    link.anchors.length = 0
-  }
-}
+// DEFECT #12 — the safe per-node detach now lives in ops.ts (detachNodeSafe),
+// shared with the ops executors + supervisor paths; see the ops.ts comment.
 
 function attachNode(parent: Node, child: Node, priority: number): void {
   const link = familyLinkFor(parent)
@@ -63,7 +42,7 @@ function attachNode(parent: Node, child: Node, priority: number): void {
 export function dropPayload(payload: Payload): void {
   for (const root of [...payload.roots]) {
     unregisterContentNode(root)
-    detachNode(root)
+    detachNodeSafe(root)
   }
   payload.roots = []
 }
@@ -75,7 +54,7 @@ export function dropPayload(payload: Payload): void {
 export function refreshPayload(payload: Payload, newRoots: Node[], parent: Node): void {
   for (const root of [...payload.roots]) {
     unregisterContentNode(root)
-    detachNode(root)
+    detachNodeSafe(root)
   }
   let priority = nextPriority(parent)
   for (const node of newRoots) {

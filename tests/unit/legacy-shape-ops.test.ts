@@ -40,7 +40,7 @@
  *
  * RED set today: 1, 3, 4, 5, 7, 8. Green-by-accident pins (flag): 2, 6, 7b.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Supervisor } from '../../src/core/supervisor.js'
 import { EventBridge } from '../../src/core/events.js'
 import { emitElements } from '../../src/core/render-helpers.js'
@@ -49,8 +49,13 @@ import { translateLegacy } from '../../src/core/translate.js'
 import { Node, type Node as NodeType } from '../../src/core/node.js'
 import { Link } from '../../src/core/link.js'
 import { SingleParentError } from '../../src/core/errors.js'
+import { mintedByOrigin } from '../../src/core/registry.js'
 import { makeRoot, makeNode, childOf, hub } from '../helpers/fixtures.js'
 import type { Anchor } from '../../src/core/types.js'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 /** SPEC-ENCODED pending (F15/F17): the seam anchor-option marker. */
 const seamOpts = { seam: true } as Anchor['options']
@@ -420,5 +425,254 @@ describe('DEFECT-10 — removeLayer removes its generating anchors (node.md §6.
     host.removeLayer('probe-seam') // no-op
     host.addLayer(decl as never)   // re-add works
     expect(host.anchors.some((a) => a.role === 'target' && a.target === 'menu' && a.options.seam === 'children')).toBe(true)
+  })
+})
+
+/**
+ * Run B (RED) — the ORIGIN-OWNER element (docs/specs/legacy-handler-reuse-
+ * review.md §12.4, the unpark acceptance criteria): the `layer-apply`
+ * structural op mints family children under the creator, registers the
+ * minted set (module registry + node.originLayer), applies the anchor layer
+ * to the creator, and tears the minted set down on removeLayer/
+ * removeLayersForSource under the PRE-DETACH survival predicate. Origin-
+ * owned nodes never reverse (like the runtimeMinted filter).
+ *
+ * States / fail-states enumerated:
+ * [O1] layer-apply mints each NodeData as a family child of the target
+ *      (census), sets node.originLayer, registers the minted set, applies
+ *      the anchor layer (child decls carry options.origin = layerId), and
+ *      the journal result carries `minted: NodeId[]`.
+ * [O2] re-applying the SAME layerId is a no-op (idempotent — no second
+ *      mint, no census growth).
+ * [O3] a NodeData carrying an `anchors` field warns `layer-apply-anchors-
+ *      rejected` (A5 seed-anchor veto) and the child data still mints; the
+ *      smuggled anchors never materialize.
+ * [O4] the role-scoped single-parent exemption admits origin-marked second
+ *      'child' anchors (like the seam flag); a plain second child anchor
+ *      still rejects 'single-parent'.
+ * [O5] teardown — removeLayer/removeLayersForSource on the creator tears
+ *      down the whole minted set: nodes still under the creator are DOOMED
+ *      (detached → sweep-destroyed), unregistered, and the layer's
+ *      generating anchors are removed.
+ * [O6] a minted node moved elsewhere (non-permanent chain) is still doomed
+ *      at teardown (the whole-subtree cascade, ruling 5).
+ * [O7] a minted node moved under a NON-ORIGIN PERMANENT parent survives the
+ *      teardown and is PROMOTED (originLayer cleared + unregistered →
+ *      authored content, reverse-emitted).
+ * [O8] double-remove is a no-op.
+ * [O9] reverse — nodeToLegacy excludes origin-owned nodes from children
+ *      (like the runtimeMinted filter); a promoted node reverses as
+ *      authored.
+ */
+describe('ORIGIN-OWNER — the layer-apply op (legacy-handler-reuse-review §12.4)', () => {
+  function mintingSuper(root: NodeType, creator: NodeType): Supervisor {
+    const sup = new Supervisor(root, new Map([[root.id, root], [creator.id, creator]]))
+    return sup
+  }
+
+  const applyMint = (sup: Supervisor, creator: NodeType, nodes: unknown[], decls?: unknown[]): ReturnType<Supervisor['apply']> =>
+    sup.apply({
+      kind: 'layer-apply',
+      target: creator,
+      layerId: 'inject-1',
+      sourceName: 'legacy-src',
+      decls: (decls ?? [{ role: 'target', target: 'my-name' }]) as never,
+      nodes: nodes as never,
+    })
+
+  it('[O1] mints each NodeData as a family child, registers the minted set, applies the anchor layer, and journals result.minted', () => {
+    const root = makeRoot({ type: 'root' })
+    const creator = childOf(root, makeNode({ type: 'creator' }), 0)
+    const sup = mintingSuper(root, creator)
+    const res = applyMint(sup, creator, [
+      { type: 'span', props: { id: 'm1' }, content: 'one' },
+      { type: 'span', props: { id: 'm2' }, content: 'two' },
+    ], [
+      { role: 'target', target: 'my-name' },
+      { role: 'child', target: creator, options: { priority: 0 } },
+    ])
+    expect(res.status).toBe('applied')
+    expect(res.dirtied).toContain(creator.id)
+    // census: exactly the two minted family children, in mint order
+    expect(creator.children.length).toBe(2)
+    expect(creator.children[0]!.props['id']).toBe('m1')
+    expect(creator.children[1]!.props['id']).toBe('m2')
+    const m1 = creator.children[0]!
+    const m2 = creator.children[1]!
+    // per-node origin marker + the module-level minted-set registry
+    expect(m1.originLayer).toBe('inject-1')
+    expect(m2.originLayer).toBe('inject-1')
+    expect(mintedByOrigin('inject-1').sort()).toEqual([m1.id, m2.id].sort())
+    // the anchor layer applied to the creator with its decls; the child decl
+    // carries options.origin = layerId (role-scoped exemption admission)
+    const layer = creator.layers.find((l) => l.id === 'inject-1')
+    expect(layer).toBeDefined()
+    expect(layer!.sourceName).toBe('legacy-src')
+    const childDecl = layer!.anchors!.find((d) => d.role === 'child')!
+    expect(childDecl.options!.origin).toBe('inject-1')
+    // the target-role decl materialized on the creator
+    expect(creator.anchors.some((a) => a.role === 'target' && a.target === 'my-name')).toBe(true)
+    // journal entry carries the minted ids (A3 — replay determinism)
+    const entry = sup.journal[sup.journal.length - 1]!
+    expect(entry.op.kind).toBe('layer-apply')
+    expect(entry.result.minted).toEqual([m1.id, m2.id])
+  })
+
+  it('[O2] re-applying the SAME layerId is a no-op — no second mint, census unchanged', () => {
+    const root = makeRoot({ type: 'root' })
+    const creator = childOf(root, makeNode({ type: 'creator' }), 0)
+    const sup = mintingSuper(root, creator)
+    applyMint(sup, creator, [{ type: 'span', props: { id: 'm1' } }])
+    const before = mintedByOrigin('inject-1')
+    const res2 = applyMint(sup, creator, [{ type: 'span', props: { id: 'dup' } }])
+    expect(res2.status).toBe('applied')
+    expect(res2.minted).toEqual([])
+    expect(creator.children.length).toBe(1)
+    expect(creator.children[0]!.props['id']).toBe('m1')
+    expect(mintedByOrigin('inject-1')).toEqual(before)
+    expect(sup.journal[sup.journal.length - 1]!.result.minted).toEqual([])
+  })
+
+  it('[O3] a NodeData carrying an anchors field warns layer-apply-anchors-rejected and still mints (family children only)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const root = makeRoot({ type: 'root' })
+    const creator = childOf(root, makeNode({ type: 'creator' }), 0)
+    const sup = mintingSuper(root, creator)
+    const res = applyMint(sup, creator, [
+      { type: 'span', props: { id: 'm1' }, anchors: [{ role: 'target', target: 'smuggled' }] },
+    ])
+    expect(res.status).toBe('applied')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('layer-apply-anchors-rejected'))
+    // the child data still mints; the smuggled anchor never materializes
+    expect(creator.children.length).toBe(1)
+    expect(creator.children[0]!.anchors.some((a) => a.role === 'target' && a.target === 'smuggled')).toBe(false)
+  })
+
+  it('[O4] the role-scoped single-parent exemption admits origin-marked second child anchors (like the seam flag)', () => {
+    const root = makeRoot({ type: 'root' })
+    const c = childOf(root, makeNode({ type: 'c' }), 0)
+    const anchor = c.addAnchor('child', c, { origin: 'inject-1' }, new Link({ name: 'parent-child' }))
+    expect(anchor).not.toBeNull()
+    expect(c.childAnchor()).not.toBeNull()
+    // a plain second family child anchor STILL rejects
+    expect(() => c.addAnchor('child', c, {}, new Link({ name: 'parent-child' }))).toThrow(SingleParentError)
+  })
+})
+
+describe('ORIGIN-OWNER — teardown on the creator (the PRE-DETACH survival predicate, §12.4.2/6)', () => {
+  function flushSweep(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  function setup(): { root: NodeType; creator: NodeType; sup: Supervisor } {
+    const root = makeRoot({ type: 'root' })
+    const creator = childOf(root, makeNode({ type: 'creator' }), 0)
+    const sup = new Supervisor(root, new Map([[root.id, root], [creator.id, creator]]))
+    return { root, creator, sup }
+  }
+
+  it('[O5] whole-subtree removal: minted nodes still under the creator are doomed — detached, sweep-destroyed, unregistered; generating anchors removed', async () => {
+    const { root, creator, sup } = setup()
+    sup.apply({
+      kind: 'layer-apply', target: creator, layerId: 'inject-1', sourceName: 'legacy-src',
+      decls: [{ role: 'target', target: 'my-name' }] as never,
+      nodes: [{ type: 'span', props: { id: 'm1' } }, { type: 'span', props: { id: 'm2' } }] as never,
+    })
+    const m1 = creator.children[0]!
+    const m2 = creator.children[1]!
+    expect(creator.anchors.some((a) => a.role === 'target' && a.target === 'my-name')).toBe(true)
+    creator.removeLayer('inject-1')
+    // the layer + its generating anchors are gone
+    expect(creator.layers.find((l) => l.id === 'inject-1')).toBeUndefined()
+    expect(creator.anchors.some((a) => a.role === 'target' && a.target === 'my-name')).toBe(false)
+    // the minted set is unregistered and the doomed nodes die in the sweep
+    expect(mintedByOrigin('inject-1')).toEqual([])
+    expect(m1.childAnchor()).toBeNull()
+    expect(m2.childAnchor()).toBeNull()
+    await flushSweep()
+    expect(m1.destroyed).toBe(true)
+    expect(m2.destroyed).toBe(true)
+    void root
+  })
+
+  it('[O6] a minted node moved elsewhere (a non-permanent chain) is still doomed at teardown — the whole-subtree cascade (ruling 5)', async () => {
+    const { root, creator, sup } = setup()
+    sup.apply({
+      kind: 'layer-apply', target: creator, layerId: 'inject-1', sourceName: 'legacy-src',
+      decls: [] as never,
+      nodes: [{ type: 'span', props: { id: 'm1' } }] as never,
+    })
+    const m1 = creator.children[0]!
+    const elsewhere = makeNode({ type: 'elsewhere' }) // unplaced — NON-permanent
+    sup.apply({ kind: 'move', node: m1, to: { parent: elsewhere } })
+    expect(m1.parent).toBe(elsewhere)
+    creator.removeLayersForSource('legacy-src')
+    expect(m1.originLayer).toBeUndefined() // marker cleared on the doomed node too
+    await flushSweep()
+    expect(m1.destroyed).toBe(true)
+    expect(mintedByOrigin('inject-1')).toEqual([])
+    void root
+  })
+
+  it('[O7] a minted node moved under a NON-ORIGIN permanent parent survives the teardown and is PROMOTED (cleared + unregistered + reverse-emitted)', async () => {
+    const { root, creator, sup } = setup()
+    sup.apply({
+      kind: 'layer-apply', target: creator, layerId: 'inject-1', sourceName: 'legacy-src',
+      decls: [] as never,
+      nodes: [{ type: 'span', props: { id: 'm1' }, content: 'one' }] as never,
+    })
+    const m1 = creator.children[0]!
+    sup.apply({ kind: 'move', node: m1, to: { parent: root } })
+    expect(m1.parent).toBe(root)
+    creator.removeLayer('inject-1')
+    // promotion: the origin marker is cleared, the node unregistered
+    expect(m1.originLayer).toBeUndefined()
+    expect(mintedByOrigin('inject-1')).toEqual([])
+    await flushSweep()
+    expect(m1.destroyed).toBe(false)
+    // promoted = authored content: the node reverses under its new parent
+    const out = reverseTranslate(root)
+    const rootKids = (out.template.root.children ?? []) as Array<{ props?: Record<string, unknown> }>
+    expect(rootKids.some((c) => c.props?.id === 'm1')).toBe(true)
+  })
+
+  it('[O8] double-remove is a no-op (second remove finds no layer — nothing to tear down)', () => {
+    const { root, creator, sup } = setup()
+    sup.apply({
+      kind: 'layer-apply', target: creator, layerId: 'inject-1', sourceName: 'legacy-src',
+      decls: [] as never,
+      nodes: [{ type: 'span', props: { id: 'm1' } }] as never,
+    })
+    const m1 = creator.children[0]!
+    creator.removeLayer('inject-1')
+    expect(() => creator.removeLayer('inject-1')).not.toThrow()
+    void m1
+    void root
+  })
+})
+
+describe('ORIGIN-OWNER — reverse: origin-owned nodes never emit (translate.ts:1074, like the runtimeMinted filter)', () => {
+  it('[O9] nodeToLegacy excludes origin-owned children; a promoted node reverses as authored', () => {
+    const root = makeRoot({ type: 'root' })
+    const creator = childOf(root, makeNode({ type: 'creator' }), 0)
+    const authored = childOf(creator, makeNode({ type: 'div', props: { id: 'authored' } }), 0)
+    const sup = new Supervisor(root, new Map([[root.id, root], [creator.id, creator], [authored.id, authored]]))
+    sup.apply({
+      kind: 'layer-apply', target: creator, layerId: 'inject-1', sourceName: 'legacy-src',
+      decls: [] as never,
+      nodes: [{ type: 'span', props: { id: 'm1' } }] as never,
+    })
+    const m1 = creator.children[1]!
+    expect(m1.originLayer).toBe('inject-1')
+    // while minted: only the AUTHORED child reverses
+    let out = reverseTranslate(root)
+    const creatorData = (out.template.root.children ?? [])[0] as { children?: Array<{ props?: Record<string, unknown> }> }
+    expect(creatorData.children!.map((k) => k.props?.id)).toEqual(['authored'])
+    // promotion: move under root + tear down the layer → m1 reverses as authored
+    sup.apply({ kind: 'move', node: m1, to: { parent: root } })
+    creator.removeLayer('inject-1')
+    out = reverseTranslate(root)
+    const rootKids = (out.template.root.children ?? []) as Array<{ props?: Record<string, unknown> }>
+    expect(rootKids.some((c) => c.props?.id === 'm1')).toBe(true)
   })
 })

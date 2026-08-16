@@ -148,27 +148,95 @@ applied as a layer like any other value.
 | H-H11 | before-compile observes pre-op state | handler sees the value BEFORE the op |
 | H-H12 | rejected op | before-compile ran; no after-compile/after-render |
 
-## 6. Known gaps (PARKED / TODO)
+## 6. Legacy handler defs (D6 — SUPERSEDED 2026-08-15, the handler-seam LANDED)
 
-- **TODO (D6 — live-prod disposition 2026-08-14, `live-prod/placeholderLanding/
-  FINDINGS.md`; corrected 2026-08-15, stress-test review loop round 3):**
-  legacy handler DEFS stored as `template.component` values
-  (`{name, body}` — e.g. `AuthInitHandler`, `LogoutHandler`,
-  `ToggleUserDropdown`, `enterEditMode`, `showComments`,
-  `toggleCommentsButton` in the placeholderLanding envelope) are misparsed as
-  component SOURCE anchors: the K7 source-anchor plan makes them value-carrying
-  providers, nothing wires them to phases/events, and the `handler-phase-unknown`
-  guard never fires (they never become HandlerDefs). **They do NOT die
-  silently:** such a def has NO `reference`, so the K3 vacuous guard fires —
-  ONE `component-binding-empty` warn at the def's path (`root` for
-  `template.component`), zero anchors, def skipped; the defs are
-  dead-as-components, never HandlerDefs, never dispatched, no crash (the
-  "die SILENTLY" claim in the original D6 note was STALE — probe-verified:
-  `component-binding-empty@root` fires for `{name, body}` defs).
-  The legacy system wired them through `handlers.afterAssembly`-style targets +
-  HandlerDef phases (old `core/Handler.ts:13`). Handler implementation changed
-  for understood reasons; the misparse gap is **accepted and parked as a TODO —
-  no fix**. Bodies of such defs use the legacy context API
-  (`receiveNextState`/`findNode`/`supervisor.userData`) and would need the
-  documented re-authoring carve-out if a fix ever lands. No new warn code is
-  introduced for this gap (the K3 warn that fires is pre-existing).
+The D6 "accepted and parked as a TODO — no fix" disposition is SUPERSEDED by
+the handler-seam (review decision 7, landed 2026-08-15):
+
+- **Def registration:** def-shaped `template.component` values
+  (`{reference, value: {name, body}}` — e.g. the placeholderLanding defs)
+  register as HANDLER DEFS by name at translate (K3 superseded for THAT shape
+  only; a genuinely vacuous binding still fires `component-binding-empty`).
+- **Seam planning:** `target: 'handlers.<event>'` plans WITHOUT the
+  `component-target-gap` warn; the event suffix persists verbatim as
+  `options.handlerEvent` (F17-style). Legacy lifecycle names as the suffix
+  (afterAssembly, beforeRender, …) warn `handler-phase-unknown` + skip (N5 —
+  event-only reuse; the 3-phase set stays closed).
+- **Materialization:** compile layers ONE provenance-marked handlers layer on
+  the consumer — `{name, event: <suffix verbatim>, body: compiled}` — via the
+  origin/layer pattern (idempotent replace-in-place; a def that disappears
+  clears the stale layer).
+- **Reverse:** the consumer's binding emits `target: 'handlers.<event>'`
+  (S26-style); the defs stay in `template.component`; re-translate is
+  warning-free with no double-emit.
+- **FORMAT MARKER (decision 4, LANDED):** the def body's data-format
+  convention rides the marker — `format: 'legacy'` bodies are
+  `(event, context)` and are installed WRAPPED by the bridge
+  (`wrapLegacyHandler` — the arg order restored); `format: 'modern'` bodies
+  are raw `(ctx, ...args)` and install unwrapped. The provenance default is
+  'legacy' for seam-installed defs, 'modern' for inline `NodeData.handlers`
+  bodies. An explicit per-def `format` overrides the default, persists on
+  reverse (K5-style), and re-translate reproduces the same wrap; any other
+  format value warns `handler-format-invalid` + falls back to the provenance
+  default (translate.ts — never a throw). An inline legacy-wrapped handler
+  re-emits its ORIGINAL body source (`sourceBody` — never the wrapper
+  source) on reverse.
+- **The runtime bridge is LANDED** (decisions.md HANDLER-SEAM row; review
+  decisions 3/4/5/6 + the user directive 2026-08-15):
+  - **The arg-order wrapper + event stub (decision 4):** `wrapLegacyHandler`
+    installs the legacy body behind the engine's `(ctx, ...args)` dispatch —
+    the body receives `(eventStub, legacyContext)`. The stub is
+    `{type, preventDefault(){}, stopPropagation(){}, target: <NodeView>,
+    isTrusted: false}` with `value: args[0]` when the dispatch carried an
+    argument.
+  - **The NodeView proxy (decision 3, review §5):** one WeakMap-cached view
+    per live node — the SAME object across dispatches (bodies compare/
+    attach to nodes). `parent` walks the family chain, token-terminated
+    (rootNode/contentNodes/component — never a synthetic token node);
+    `children` = FAMILY children only (seam-wired def children excluded);
+    `css` reads parse a serialized style STRING back to the
+    `Record<string,string>` OBJECT (F7 — the D3 reverse contract); `data` is
+    the base facade (children NOT included — graph-derived, never stored);
+    `state`/`type`/`props`/`content`/`handlers` delegate to the compiled
+    node; `targetComponents`/`sourceComponents` are READ-ONLY fresh-copy
+    maps of the anchor reference names (`.delete()` etc. are graph no-ops);
+    `findNode`/`findNodes` walk the subtree in DOCUMENT order.
+  - **QueryUtils — adapter-internal (decision 5, review §6):** the honest
+    query vocabulary is `type` (exact), `id` (css.id), `classes` (every
+    requested class present), `props` (exact equality per key), or a
+    predicate function. ANY key outside that vocabulary — `style`,
+    `handlers`, `components`, `hasNonTypeTargetComponents`, … — marks the
+    query 'unsupported': `legacy-query-unsupported` warns ONCE per dispatch
+    and the query matches NOTHING (never a silent broad match; the
+    "support-or-warn" drift half did NOT land — warn-only is the contract).
+  - **userData (decision 6):** read-only passthrough — the real supervisor
+    with a `userData` member captured from `TranslatedTree.userData` at
+    translate; a WRITE is a contained no-op (strict-mode assignment failure
+    surfaces in the dispatch results — no session channel).
+  - **receiveNextState — the write surface:** `type`/`content`/`props.*`/
+    `css.*`/`handlers` map to ONE state-slice (`props.<k>`/`css.<k>`
+    replaceAll per key); `css.style` OBJECT writes serialize back to the
+    kebab-case string (D3); **`cssDef` is a plain css key — no special
+    handling**: the value lands in the merged pass-1 css and the emit-side
+    cssDef rules read the merged value like any authored cssDef. A
+    **`{children}` payload is ONE `layer-apply`** (the user directive
+    2026-08-15 — the origin-owner op; `legacy-kids-<nodeId>` deterministic
+    layerId, minted family children origin-marked + registered, idempotent
+    re-injection, teardown = one layer removal; a NodeView entry in the
+    payload serializes to its data shape with the style re-serialized). A
+    MIXED payload (children + state keys) rides the atomic layer-apply + a
+    SEPARATE state-slice. A **`type: 'component'` NodeData in the children
+    payload mints as an ORDINARY family child** — `type` is carried verbatim;
+    the `'component'` token exists ONLY as a family-link parent-anchor target
+    (node.ts `familyParentTokenOf`), never as a node's type string. A
+    non-array children value rejects with
+    `{status: 'rejected', error: {code: 'children-shape-invalid', …}}`.
+  - **Remaining no-analog (REAL):** `enterEditMode`'s `window.Preempt`
+    mutations (`fetchContent`/`fetchHandlers`/`rerun`) have no new-system
+    analog — the body is data-fixed to the fetch path and its window guard
+    contains the no-Preempt case (blind test #4 finding; review §8 listed
+    enterEditMode as fully re-authored).
+- Tests: `tests/unit/legacy-shape-translate.test.ts` H1-H6 + F1-F8 (the
+  format-marker block), `tests/unit/legacy-bridge.test.ts` B1-B8 (the 6
+  corpus defs through the bridge), `scripts/stress-probes/
+  blind4-bridge-probe.mjs` (blind test #4 probe).

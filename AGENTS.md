@@ -67,10 +67,18 @@ Context management guidelines for agents working in this repository:
    and the smoke.
    **Active trackers (maintained every pass):** `docs/defects.md` (the
    active defect list — open defects on top, fixed rows with their fix
-   reference, superseded rows archived) and `docs/decisions.md` (the active
+   reference, superseded rows archived), `docs/decisions.md` (the active
    decisions summary — ACTIVE/SUPERSEDED status, pinned contracts with their
-   sources). A change that fixes a defect or lands a decision MUST update
-   these trackers in the same pass.
+   sources), `docs/pending.md` (parked decisions with their revisit
+   conditions, pending decisions awaiting the user gate, not-yet-implemented
+   features, and speculative proposals with their recorded constraints), and
+   `docs/next-steps.md` (the work queue: when a defect arises with a CLEAR
+   and DISTINCT fix shape — no user approval needed for a design choice —
+   bookmark the OTHER current findings in `docs/next-steps.md` and
+   IMMEDIATELY proceed with the design → implementation chain for the fix;
+   circle back to the document on resolution). A change that fixes a defect,
+   lands a decision, parks an item, or launches a speculative proposal MUST
+   update these trackers in the same pass.
 
 ## Process & TDD compliance for sub-agents
 

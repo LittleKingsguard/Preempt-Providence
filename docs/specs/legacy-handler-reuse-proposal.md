@@ -98,3 +98,33 @@ userData as scoped follow-ups. Options B/C/D exist as fallbacks/refinements.
 6. Do the legacy phase names (afterAssembly/beforeAssembly) need a mapping
    to the new phase set (before-compile/after-compile/after-render), or are
    phase handlers excluded from the reuse (event handlers only)?
+
+## AMENDMENT — the origin-owner element (user proposal + rulings, 2026-08-15)
+
+The children-injection CUT is re-opened under the origin/owner contract (the
+user's proposal, following the gate's finding-3 atomicity blocker):
+
+- **`{kind: 'layer-apply', target, layerId, sourceName, decls, nodes:
+  [NodeData]}`** — ONE journaled structural op: mints the created nodes from
+  the NodeData and applies an anchor layer to the CREATOR node (the "anchor
+  layer on a different node" — the created nodes are explicitly tied to it
+  via an origin marker). Atomic, named, replayable; rollback/undo = ONE layer
+  removal (the DEFECT #10 machinery unwinds the generating anchors; the sweep
+  cascade destroys the owned subtrees).
+- Legacy `receiveNextState({children})` maps onto ONE atomic op.
+
+User rulings (2026-08-15):
+1. The element is PARKED relative to the §7 gate — revisit after the other
+   decisions are addressed.
+2. Origin-owned nodes stay IN-TREE while extant; the rollback detects when
+   an origin-owned node loses a TRACEABLE PERMANENT PARENT and deletes it.
+3. The origin is an EXPLICIT marker (doubles as the reverse-exclusion
+   marker); a FUTURE feature flags a layer for PRESERVATION BY REVERSAL
+   (deliberate edits reverse as authored).
+4. Scope: engine-general in FORM (generalizes the anchor-layer + seam-link
+   machinery; clone-instance / dynamic injection could ride it), but the
+   bridge is the only committed consumer today.
+5. Layer removal cascades the WHOLE origin-owned subtree — including created
+   nodes that were placed elsewhere (moved but still traceable to the origin).
+
+Tracked: docs/pending.md (PARKED), legacy-handler-reuse-review.md §11.

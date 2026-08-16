@@ -68,6 +68,9 @@ export interface AnchorOptions {
    *  resolved value is applied to; persisted so reverseTranslate can re-emit
    *  `target` on the round-trip (translate.ts sets it at synthesis). */
   applyPath?: string
+  /** HANDLER-SEAM (2026-08-15, D6 un-park) — a `handlers.<event>` binding's
+   *  event suffix, verbatim: the consumer's handler layer fires on that event. */
+  handlerEvent?: string
   /** DEFECT #10 (2026-08-15) — the seam target anchor NAME that drove a seam
    *  parent link: the materializeSeam reversion pass removes seam links
    *  whose driving seam anchor is gone (removeLayer unwinds the seam it
@@ -79,6 +82,10 @@ export interface AnchorOptions {
    *  STRING (`'type'|'content'|'children'`) on translate-planned target
    *  anchors (F17 — assembly distinguishes seam candidates by it). */
   seam?: boolean | 'type' | 'content' | 'children'
+  /** ORIGIN-OWNER (legacy-handler-reuse-review §12.4.3) — the layer id that
+   *  minted an anchor: `layer-apply`'s decl child anchors carry it (admitted
+   *  by the role-scoped single-parent exemption, like the seam flag). */
+  origin?: string
 }
 export interface Anchor { role: Role; target: AnchorTarget; options: AnchorOptions; link: Link; value?: unknown; owner?: import('./node.js').Node }
 // `value` is the provided/deployed cell for `source`/`duplex` anchors (api.md §4.1: source provides
@@ -127,7 +134,24 @@ export interface PlacementAttachOp {
   names: string[]
   trigger?: PlacementTrigger
 }
-export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp
+/** ORIGIN-OWNER (legacy-handler-reuse-review §12.4, unpark acceptance) — the
+ *  atomic mint-and-wire structural op: mints each NodeData as a family child
+ *  of `target` (family children ONLY — a NodeData `anchors` field is
+ *  rejected/warned, A5), registers the minted set (per-node `originLayer` +
+ *  the module-level registry), and applies an anchor layer (`decls`) to
+ *  `target` — the decl child anchors carry `options.origin = layerId`.
+ *  Re-applying the SAME layerId is a no-op (idempotent); teardown = one
+ *  removeLayer/removeLayersForSource on the creator (the pre-detach survival
+ *  predicate, §12.4.2/6). The journal result persists `minted` (A3). */
+export interface LayerApplyOp {
+  kind: 'layer-apply'
+  target: Node
+  layerId: string
+  sourceName: string
+  decls: AnchorDecl[]
+  nodes: NodeBaseData[]
+}
+export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp|LayerApplyOp
 
 export interface LayerMutation {
   targetProp: 'type'|'content'|'handlers'|`props.${string}`|`css.${string}`
@@ -207,5 +231,9 @@ export interface NodeLayer {
   content?: unknown; handlers?: unknown[]; anchors?: AnchorDecl[]; derived?: DerivedDecl
 }
 export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl }
+/** ORIGIN-OWNER — the data shape of a layer-apply minted node (family
+ *  children only; an `anchors` field is vetoed with the
+ *  `layer-apply-anchors-rejected` warn). */
+export type NodeData = NodeBaseData
 export interface LinkConfigNameHub { linkFor(name: string, kind: 'component'|'placement'): Link }
 export interface HandlerDef { name: string; event?: string; phase?: string; body?: (ctx: unknown, ...args: unknown[]) => unknown }

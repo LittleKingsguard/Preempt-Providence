@@ -9,6 +9,57 @@ import type { Link } from './link.js'
 import type { NodeId } from './types.js'
 
 export const registered = new Set<Node>()
+
+// HANDLER-SEAM (2026-08-15, D6 un-park) — the legacy handler-def registry:
+// def-shaped bindings (`{reference, value: {name, body}}`) register by name at
+// translate; the seam materialization resolves them when a consumer's
+// `handlers.<event>` binding compiles. Lives here (not node.ts/translate.ts)
+// to avoid the node↔translate cycle.
+// FORMAT MARKER (decision 4, 2026-08-15) — each def records its data-format
+// convention: 'legacy' (the (event, context) bodies — the seam default,
+// wrapped by the bridge at materialization) or 'modern' (raw (ctx, ...args)
+// bodies, installed unwrapped). The default is applied at registration.
+export interface HandlerDefRecord {
+  name: string
+  body: string
+  format: 'legacy' | 'modern'
+}
+
+const handlerDefs = new Map<string, HandlerDefRecord>()
+
+export function registerHandlerDef(name: string, def: { name: string; body: string; format?: 'legacy' | 'modern' }): void {
+  handlerDefs.set(name, { ...def, format: def.format ?? 'legacy' })
+}
+
+export function handlerDef(name: string): HandlerDefRecord | undefined {
+  return handlerDefs.get(name)
+}
+
+// USERDATA passthrough (decision 6, 2026-08-15) — the legacy bridge's
+// read-only `supervisor.userData` member is captured from
+// `TranslatedTree.userData` (the first content payload's userData) at
+// translate into this small module slot. Read at dispatch by the bridge
+// context; writes are contained no-ops (no session channel exists).
+let translateUserData: unknown
+
+export function setTranslateUserData(value: unknown): void {
+  translateUserData = value
+}
+
+export function getTranslateUserData(): unknown {
+  return translateUserData
+}
+
+/** Shared legacy-body compiler (the translate-time `new Function` gate —
+ *  admin/trusted-developer bodies only). The seam materialization compiles
+ *  def bodies when it layers them onto a consumer. */
+export function compileHandlerBody(src: string): (...args: unknown[]) => unknown {
+  const fn = new Function(`return (${src})`)()
+  if (typeof fn !== 'function') {
+    throw new Error(`legacy-handler-body: "${src}" does not evaluate to a function`)
+  }
+  return fn
+}
 const pendingDestroy: Node[] = []
 let sweepScheduled = false
 
@@ -48,6 +99,31 @@ export function registerDefRootPrototype(link: Link, root: Node): void {
 
 export function defRootPrototypeFor(link: Link): Node | undefined {
   return defRootPrototypes.get(link)
+}
+
+// Origin tracking (the ORIGIN-OWNER element, legacy-handler-reuse-review
+// §12.4.3/4 — A1): the module-level minted-set record — minted node id →
+// origin layer id. It SURVIVES creator death (a moved minted node under a
+// non-origin permanent parent is promoted by the teardown, never left
+// permanently reverse-excluded) and is the rollback handle (one layer id →
+// its whole minted set). Per-node marker split: Node.originLayer carries the
+// same id (the reverse-exclusion read).
+const mintedByLayer = new Map<NodeId, string>()
+
+export function registerMinted(nodeId: NodeId, origin: string): void {
+  mintedByLayer.set(nodeId, origin)
+}
+
+export function unregisterMinted(nodeId: NodeId): void {
+  mintedByLayer.delete(nodeId)
+}
+
+export function mintedByOrigin(origin: string): NodeId[] {
+  const out: NodeId[] = []
+  for (const [id, o] of mintedByLayer) {
+    if (o === origin) out.push(id)
+  }
+  return out
 }
 
 export function registerContentNode(node: Node): void {

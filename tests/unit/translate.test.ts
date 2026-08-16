@@ -381,7 +381,6 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         'css.style',
         'css.style.color',
         'handlers',
-        'handlers.click',
         'component',
       ]
       for (const target of targets) {

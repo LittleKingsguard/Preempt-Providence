@@ -1,6 +1,7 @@
-import type { LayerMutationList, LinkConfigNameHub, MutationOp, NodeId, PlacementAttachOp, PlacementTrigger, StateSliceOp } from './types.js'
+import type { AnchorDecl, LayerApplyOp, LayerMutationList, LinkConfigNameHub, MutationOp, NodeBaseData, NodeId, PlacementAttachOp, PlacementTrigger, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
 import { Node, findCycle, ancestorConsumesZone } from './node.js'
+import { markPending, registerMinted } from './registry.js'
 import { Link } from './link.js'
 
 export interface OpContext {
@@ -63,16 +64,40 @@ function attach(node: Node, to: Node, priority: number | undefined): NodeId {
   return to.id
 }
 
-function detach(node: Node): NodeId {
-  const childAnchor = node.anchors.find(a => a.role === 'child')
-  if (!childAnchor) return node.id
-  const link = toLink(childAnchor)
-  const parentCount = link.anchorsOf('parent').length
-  if (parentCount <= 1) {
-    link.destroy()
-  } else {
-    node.removeAnchor(childAnchor)
+/** DEFECT #12 fix (2026-08-15) — the SAFE per-node detach, shared by the ops
+ *  executors, the supervisor detach/move/undo paths, and the payload
+ *  lifecycle: removes ONLY this node's child anchor from its family link
+ *  (siblings keep their edges — the old `link.destroy()` wiped the whole
+ *  shared link because `parentCount` counts PARENT anchors, always 1 on a
+ *  family link) and marks the node pending so the sweep cascade-destroys it
+ *  unless it is re-attached first. When the LAST child leaves the shared
+ *  link, the parent side dissolves too (S-R3.4 — a childless parent carries
+ *  zero parent anchors). */
+export function detachNodeSafe(node: Node): void {
+  const ca = node.childAnchor()
+  if (!ca) {
+    markPending(node) // already unplaced — still sweep-eligible
+    return
   }
+  const link = ca.link as unknown as Link
+  const idx = link.anchors.indexOf(ca)
+  if (idx !== -1) link.anchors.splice(idx, 1)
+  const nIdx = node.anchors.indexOf(ca)
+  if (nIdx !== -1) node.anchors.splice(nIdx, 1)
+  markPending(node)
+  if (link.anchorsOf('child').length === 0) {
+    const pa = link.anchorsOf('parent')[0]
+    if (pa && typeof pa.target === 'object' && pa.target !== null) {
+      const owner = pa.target as Node
+      const oi = owner.anchors.indexOf(pa)
+      if (oi !== -1) owner.anchors.splice(oi, 1)
+    }
+    link.anchors.length = 0
+  }
+}
+
+function detach(node: Node): NodeId {
+  detachNodeSafe(node)
   return node.id
 }
 
@@ -125,6 +150,47 @@ export function derivePlacementTrigger(linkName: string, containerAnchorMinted: 
   return { kind: 'placement', linkName, direction: containerAnchorMinted ? 'container-added' : 'content-added' }
 }
 
+/** ORIGIN-OWNER (legacy-handler-reuse-review §12.4, unpark acceptance) — the
+ *  layer-apply executor: ONE atomic mint-and-wire op. Mints each NodeData as
+ *  a family child of the target (appended after the current children), marks
+ *  each node's `originLayer` + registers it in the module-level minted-set
+ *  registry (survives creator death, A1), and applies the anchor layer
+ *  (`decls`, child-role decls carrying `options.origin = layerId` — admitted
+ *  by the role-scoped single-parent exemption) to the target. Family children
+ *  ONLY (A5): a NodeData carrying an `anchors` field warns
+ *  `layer-apply-anchors-rejected` and the child data still mints (the
+ *  smuggled anchors never materialize). Re-applying the SAME layerId is a
+ *  no-op (idempotent — the minted set and census are untouched); the minted
+ *  ids ride the journal result (A3 — replay resolves them). Teardown = one
+ *  removeLayer/removeLayersForSource on the creator. */
+export function layerApply(op: LayerApplyOp, ctx: OpContext): { minted: NodeId[]; doorways: NodeId[] } {
+  const target = toNode(op.target)
+  if (target.layers.some(l => l.id === op.layerId)) return { minted: [], doorways: [target.id] }
+  const minted: NodeId[] = []
+  const link = target.familyLinkFor()
+  let priority = link.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
+  for (const nd of op.nodes ?? []) {
+    // A5 seed-anchor veto: v1 mints family children ONLY — a NodeData
+    // `anchors` field is rejected with a warn; the child data still mints
+    const { anchors, ...data } = nd as NodeBaseData & { anchors?: AnchorDecl[] }
+    if (anchors !== undefined) {
+      console.warn(`layer-apply-anchors-rejected at ${target.id}: seed anchors are not minted by layer-apply (v1 mints family children only)`)
+    }
+    const node = new Node(data, target.hubFor ?? ctx.hub ?? undefined)
+    node.originLayer = op.layerId
+    registerMinted(node.id, op.layerId)
+    minted.push(node.id)
+    node.addAnchor('child', node, { priority }, link)
+    priority += 1
+  }
+  // the anchor layer on the creator; child-role decls carry the origin marker
+  const decls = (op.decls ?? []).map(d =>
+    d.role === 'child' ? { ...d, options: { ...(d.options ?? {}), origin: op.layerId } } : d,
+  )
+  target.addLayer({ id: op.layerId, sourceName: op.sourceName, anchors: decls })
+  return { minted, doorways: [target.id, ...minted] }
+}
+
 export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } {
   switch (op.kind) {
     case 'attach': {
@@ -157,6 +223,11 @@ export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } 
       const container = toNode(pa.container)
       placementAttach(node, container, pa.names, ctx.hub)
       return { doorways: [container.id, node.id] }
+    }
+    case 'layer-apply': {
+      const la = op as LayerApplyOp
+      const res = layerApply(la, ctx)
+      return { doorways: res.doorways }
     }
     case 'clone-instance': {
       const source = toNode(op.source)
