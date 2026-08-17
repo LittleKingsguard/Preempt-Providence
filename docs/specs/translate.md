@@ -163,6 +163,18 @@ interface LegacyNodeData {
   // `String(val)` (`[object Object]` was the defect).
   versions?: unknown
   derived?: DerivedDecl  // the derived RULE, never the baked values (derived-state.md §2/§8)
+  hooks?: string[]       // HOOKS (hooks-map-review.md §7 — the value-provider slot, contract
+                         // amendment B, IMPLEMENTED 2026-08-16): a STRING-ARRAY of SAME-NODE
+                         // value-provider component names — each entry names a `component`
+                         // binding with a matching `reference` on THIS node (a source/duplex
+                         // anchor; the component-source-duplicate guard means at most one
+                         // anchor per name). The names round-trip (baseFrom/nodeToLegacy/
+                         // serialize — the derived/handlers precedent ~4 sites); the VALUE
+                         // lives in the component binding (a hook write mirrors the provider
+                         // anchor's value — ONE source, no duplicate). A non-ARRAY field, or a
+                         // non-string member, warns `hooks-shape-invalid` + skips (the
+                         // children-shape-invalid discipline — never a silent drop; the K4
+                         // unknown-key gap is closed FOR THIS FIELD).
 }
 
 interface LegacyTemplateData { root: LegacyNodeData; children?: LegacyNodeData[]; component?: LegacyComponentBinding | LegacyComponentBinding[] }
@@ -405,7 +417,17 @@ targets.
   the payload is SKIPPED, never silently dropped; the array form is the only
   supported shape),   `children-shape-invalid` (D5/F14, LANDED — a
   non-array `nodeData.children` (single NodeData OBJECT, string, …) warns +
-  the field is SKIPPED, never dual-parsed, never wrapped).
+  the field is SKIPPED, never dual-parsed, never wrapped),
+  `hooks-shape-invalid` (HOOKS, LANDED 2026-08-16 — a non-array `hooks`
+  field, or a non-string/empty member, warns + skips (that entry) — the
+  children-shape-invalid discipline; the K4 unknown-key gap is closed FOR
+  THIS FIELD, hooks-map-review §7.2 pin 4). Runtime (the managed channel):
+  `hook-name-unresolved` (a `hooks.<name>` write naming a name with NO
+  source/duplex anchor on the node → the state-slice op is REJECTED,
+  `ApplyErrorCode`; the defensive applySlice path warns + skips, never
+  throws), `hook-mode-blocked` (append/replaceAll on a hooks target →
+  rejected), `hook-seam-exempt` (a seam/def-shaped provider — the landmine
+  guard — warns + the mutation is an inert no-op).
   Emission-time: `component-multiple-definitions` (post-K7, >1 def-shaped
   binding, first-def wins). Full guard table: review doc Appendix E.2.
   The interim `component-target-placement` warn (AP5/NP13 —

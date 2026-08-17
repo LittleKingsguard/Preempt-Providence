@@ -12,6 +12,7 @@ import {
   treeFromOps as treeFromOpsReal,
   treeSig,
   wireKey,
+  findElScanCount,
 } from '../../src/core/render-helpers.js'
 import type { RenderTree } from '../../src/core/render-helpers.js'
 import {
@@ -1097,5 +1098,39 @@ describe('DEFECT #1 — emitOne forwards forkKey onto emitted elements and ops',
     expect(parent).toBeDefined()
     expect(parent!.children.map((c) => c.wire)).toEqual([`${leaf.id}#0`, `${leaf.id}#1`])
     expect(parent!.children.every((c) => c.forkKey !== undefined)).toBe(true)
+  })
+
+  it('DEFECT #22 — applyOps/treeFromOps bare lookups stay LINEAR (the composite-key + bare-wire flow: no O(n) prefix scan per op)', () => {
+    // the derived-path-state shape: every element stored under the composite
+    // (wire, forkKey=wire) key; every append op carries the BARE wire
+    const n = 300
+    const ops: RenderOp[] = []
+    for (let i = 0; i < n; i += 1) ops.push({ kind: 'create', wire: `w${i}`, type: 'div', forkKey: `w${i}` })
+    for (let i = 1; i < n; i += 1) ops.push({ kind: 'append', owner: `w${i - 1}`, child: `w${i}` })
+    const wires = new Map<string, { wire: string; type: string }>()
+    const adapter = {
+      wires,
+      createEl(type: string, wire: NodeRef, forkKey?: string): { wire: string; type: string } {
+        const e = { wire, type }
+        this.wires.set(wireKey(wire, forkKey), e)
+        return e
+      },
+      setProp(): void {},
+      appendChild(): void {},
+      hydrate(): void {},
+      removeEl(): void {},
+    }
+
+    const before = findElScanCount()
+    applyOpsReal(adapter as RenderAdapter<{ wire: string; type: string }>, ops)
+    const applyScans = findElScanCount() - before
+    // linear: ~2 exact/index lookups per append — an O(n²) prefix scan would
+    // be ~n²/2 ≈ 45k
+    expect(applyScans).toBeLessThan(2 * n)
+
+    const before2 = findElScanCount()
+    treeFromOpsReal(ops)
+    const treeScans = findElScanCount() - before2
+    expect(treeScans).toBeLessThan(2 * n)
   })
 })

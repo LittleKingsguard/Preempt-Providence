@@ -559,9 +559,9 @@ async function main() {
   await runner.check('handler layers: children created, idempotent on re-run', async () => {
     const all = allNodes()
     // handler layers create 2 children per parent: L4 → 2×2^3=16; L8 (depth
-    // ≥ 9) → 2×2^7=256; L12 (depth ≥ 13) would add 2×2^11
+    // ≥ 9) → 2×2^7=256; L12 (depth ≥ 13, the d14 probe) → 2×2^11=4096
     const marked = all.filter((n) => n.props?.[HANDLER_MARKER])
-    const expectMarked = depth >= 9 ? 16 + 256 : depth >= 5 ? 16 : 0
+    const expectMarked = depth >= 13 ? 16 + 256 + 4096 : depth >= 9 ? 16 + 256 : depth >= 5 ? 16 : 0
     if (marked.length !== expectMarked) throw new Error(`expected ${expectMarked} handler-created nodes, got ${marked.length}`)
     // idempotency: re-dirty a handler parent and verify no duplicate children
     const handlerParents = all.filter((n) => n.layers.some((l) => l.id?.startsWith('fork-stress-handler')))

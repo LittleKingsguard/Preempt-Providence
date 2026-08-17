@@ -15,7 +15,7 @@ import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes } from './handlers.js'
 import type { HandlerContext, HandlerPhase } from './handlers.js'
 import { unregisterContentNode, resolveNodeRef } from './registry.js'
-import { placementChangeIrrelevant, activePlacementOf } from './resolve.js'
+import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply } from './ops.js'
 import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger } from './types.js'
 
@@ -385,6 +385,39 @@ export class Supervisor {
         for (const m of mutation) {
           if (m.targetProp.startsWith('placement') || m.targetProp === 'children') {
             return { status: 'rejected', error: { code: 'placement-target-blocked' } }
+          }
+          // HOOKS (hooks-map-review.md §7.2 pins 1/5 — the value-provider
+          // slot): the managed-channel ENTRY gate. `hooks.<name>` writes are
+          // 'replace'-only (`hook-mode-blocked`) and resolve against the
+          // node's OWN source/duplex anchors (`hook-name-unresolved` — a
+          // bare `hooks` target has no name); a seam/def-shaped provider is
+          // the landmine — `hook-seam-exempt` warn + the mutation is an
+          // inert NO-OP (the rest of the op still applies). The same gate
+          // runs defensively inside node.applySlice (warn + skip, never
+          // throw) — this pre-check is what turns the containment into a
+          // rejected RESULT on the managed channel.
+          if (m.targetProp.startsWith('hooks.') || m.targetProp === 'hooks') {
+            const name = m.targetProp === 'hooks' ? '' : m.targetProp.slice('hooks.'.length)
+            if (name.length === 0 || m.mode !== 'replace') {
+              return {
+                status: 'rejected',
+                error: {
+                  code: m.mode !== 'replace' ? 'hook-mode-blocked' : 'hook-name-unresolved',
+                  detail: `hooks.${name}: 'replace' mode only, targeting a same-node source/duplex provider name`,
+                },
+              }
+            }
+            const guard = hookWriteGuard(node as Node, name)
+            if (!guard.ok) {
+              if (guard.code === 'hook-name-unresolved') {
+                return {
+                  status: 'rejected',
+                  error: { code: 'hook-name-unresolved', detail: `no source/duplex anchor named "${name}" on ${(node as Node).id}` },
+                }
+              }
+              console.warn(`hook-seam-exempt at ${(node as Node).id}: "${name}" is a seam/def-shaped provider; hook write skipped (a hook write would tear down the seam)`)
+              continue
+            }
           }
         }
         const nodeState = (node as Node).state

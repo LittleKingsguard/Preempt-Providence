@@ -27,7 +27,9 @@ type StructuralOp =
 interface StateSliceOp {
   kind: 'state-slice'
   node: Node
-  mutation: LayerMutationList   // targetProp union owned by api.md; 'children' is NEVER legal (graph-derived, never stored)
+  mutation: LayerMutationList   // targetProp union owned by api.md (§1: 'type' | 'content' | 'handlers' |
+                                // `props.${string}` | `css.${string}` | `hooks.${string}` — HOOKS §1 note);
+                                // 'children' is NEVER legal (graph-derived, never stored)
   actor: Actor
 }
 
@@ -248,6 +250,24 @@ class LinkConfigError extends Error {
 2. **Queued pass 2**: remote-dependent values marked dirty → microtask sweep (§5 below).
 3. **In-tree gating** (S1.1): compile attempt on a node not in-tree returns **no usable compiled state** (not partial). P3 §2.4 carve-out: a placement-ROUTED node (enumerated placement path to root) compiles actionable path-states via `compilePath` — the gate keys on the family-derived `NodeState`, which content roots clear through the contentNodes-ownership minting at translate (P3 §10.ad/F-13).
 4. Journaled identically to structural ops for replay/undo.
+
+**HOOKS branch (hooks-map-review.md §7 — the value-provider slot, IMPLEMENTED
+2026-08-16):** a `hooks.<name>` mutation is 'replace'-only; the supervisor's
+state-slice ENTRY gate rejects `hook-name-unresolved` (no source/duplex
+anchor for the name on the node) and `hook-mode-blocked` (append/replaceAll),
+and warns `hook-seam-exempt` + no-ops a seam/def-shaped provider (the
+landmine guard — hooking a def would tear the seam; `isDefShapedValue`:
+`type`-bearing node data, `content`-carrying objects, `{name, body}` handler
+defs, `anchor.options.seam`). The write lands ONE deterministic
+`hook-<name>` replace-in-place layer (`addLayer`'s findIndex→replace — never
+the seq-based `slice-${seq}` layer-id scheme) carrying the value in the
+layer's dedicated `value` slot (never a `props.*` key), mirrors the provider
+anchor's value (`a.value = value` — the ONE source the serialize/loadState/
+nodeToLegacy surfaces already ship), and the inherited E2E-3 consumer walk
+dirties the per-name link's target owners (consumers + resolvedStates
+refresh + emit). `value: undefined` clears the hook (layer removed; the
+authored value, preserved as the layer's `hookFallback` at the first write,
+restores to the anchor).
 
 ---
 

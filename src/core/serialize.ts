@@ -28,6 +28,10 @@ export interface RenderNodeState {
   /** the derived RULE (never the baked values) — re-derivation needs the
    *  rule in the data, not the value (derived-state.md §2/§8, SER-R1). */
   derived?: DerivedDecl
+  /** HOOKS (hooks-map-review.md §7.2 pin 4) — the authored `hooks` field
+   *  (the NAMES only; the VALUE rides the anchors' `value` — the mirror
+   *  keeps ONE source, SER-R1). */
+  hooks?: string[]
 }
 
 export type SerializedRenderDoc = {
@@ -112,6 +116,7 @@ export function serializeNode(node: Node): RenderNodeState {
   }
   if (content !== undefined) state.content = content
   if (node.derived !== undefined) state.derived = node.derived
+  if (node.base.hooks !== undefined && node.base.hooks.length > 0) state.hooks = [...node.base.hooks]
   // deterministic anchor order for stable round-trips
   state.anchors.sort((x, y) => {
     const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, duplex: 3, target: 4, container: 5, content: 6, component: 7 }
@@ -146,6 +151,7 @@ interface SeededNode {
   anchors?: SerializedAnchor[]
   forkKey?: string
   derived?: DerivedDecl
+  hooks?: string[]
 }
 
 function assertNoLiveTargets(v: unknown): void {
@@ -190,6 +196,15 @@ function parseNodeState(v: unknown): SeededNode {
     // `derived` never reaches a compile pass
     validateDerived(o.derived)
     seed.derived = o.derived as DerivedDecl
+  }
+  if (o.hooks !== undefined) {
+    // HOOKS §7.2 pin 4 — the field rides the schema boundary: a malformed
+    // serialized `hooks` (non-array / non-string member) is rejected like
+    // any other malformed schema member (SER-R1)
+    if (!Array.isArray(o.hooks) || o.hooks.some((h) => typeof h !== 'string')) {
+      throw new Error('NodeSchema-shape-mismatch')
+    }
+    seed.hooks = o.hooks as string[]
   }
   return seed
 }

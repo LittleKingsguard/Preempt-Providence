@@ -43,7 +43,7 @@ L11 component 'link-3'        → 2 children per L10 node    (2048)
                                                           (4095 total)
 ```
 
-Pages: `fork-stress-d{2,4,6,8,9,10,11,12}.html` — depth d has layers 1..d−1
+Pages: `fork-stress-d{2,4,6,8,9,10,11,12,14}.html` — depth d has layers 1..d−1
 (2^d − 1 nodes). The memoized-chainRoot change (compile-horizon review §6)
 made depths 9-12 compilable: acyclic parent chains are no longer
 depth-capped (only resolution recursion is), so the deep layers render.
@@ -174,15 +174,15 @@ carries the LEGACY envelope (root + two prototypes per layer, handler
 declared by NAME in the data — the page supplies the body) and assembles the
 whole 2^depth − 1 tree at runtime via the `clone-instance` op (each clone's
 inherited `after-compile` handler expands the next layer). Pages
-`fork-stress-data-d{2,4,6,8,9,10,11,12}.html` with the same depth set.
+`fork-stress-data-d{2,4,6,8,9,10,11,12,14}.html` with the same depth set (+ the single-method d14 variants — the depth-14 pages are the SCALING PROBES, added 2026-08-16: the d12 totals are too fast to expose pass-2 scaling; RE-SCOPED 2026-08-16: the d14 pages are BUILT-BUT-NOT-SMOKE-RUN — manual/browser probes, the automated smoke runs depths 2..12 + the d12 single-method/derived families).
 
 **Static twin (placement-path-spec §5 — Unit 11, shipped alongside):** the
 same topology is re-expressed WITHOUT clone-instance assembly — the
 `demo/path-fork-data.*` page compiles the 22 prototypes + root through the
 path-enumeration compile mode (`compilePath`): `placementName` producer /
 `targetPlacement: string[]` consumer declarations in the legacy envelope,
-ONE enumeration bootstrap → 4095 path-states pinned to 23 nodes (census
-23/4095/0/0, cloneOps=0). The four-mechanism cycle doc above describes the
+ONE enumeration bootstrap → 2^depth − 1 path-states pinned to 2·depth−1 nodes
+(census 2·depth−1/2^depth−1/0/0, cloneOps=0; d12 = 23/4095, d14 = 27/16383). The four-mechanism cycle doc above describes the
 RUNTIME page (kept — placement-path-spec §9-Q4: both pages ship); the
 runtime page's census asserts are re-pinned per §5.2 F-13 (in-tree =
 2^depth − 1 + prototypes, unplaced = 0).
@@ -195,7 +195,7 @@ npm test; npm run typecheck; npm run demo:smoke; npm run build
 
 ## Data-driven variant (completion test)
 
-A second page series (`fork-stress-data-d{2,4,6,8,9,10,11,12}.html`)
+A second page series (`fork-stress-data-d{2,4,6,8,9,10,11,12,14}.html`)
 rebuilds the same stress tree with a stricter contract: **core-only page
 module** (no demo-fixtures helpers), **legacy-format data envelope**
 (`translateLegacy` input), and **two prototypes per layer** with everything

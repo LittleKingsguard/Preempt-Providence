@@ -41,6 +41,17 @@ interface LayerMutation {
             | `props.${string}` | `css.${string}`        // 'placement' is NOT legal (§3.3);
                                                          // 'children' is NEVER legal — graph-derived,
                                                          // never stored (notes §10.2)
+            | `hooks.${string}`                          // HOOKS (hooks-map-review.md §7 — the
+                                                         // value-provider slot): `hooks.<name>`
+                                                         // targets a SAME-NODE value-provider hook.
+                                                         // 'replace' mode ONLY (append/replaceAll →
+                                                         // `hook-mode-blocked`); a name with no
+                                                         // source/duplex anchor on the node →
+                                                         // `hook-name-unresolved` (rejected); a
+                                                         // seam/def-shaped provider → `hook-seam-exempt`
+                                                         // (warn + the mutation is an inert no-op);
+                                                         // `value: undefined` CLEARS the hook (the
+                                                         // authored anchor value restores)
   mode: 'replace' | 'append' | 'replaceAll'
   value: unknown
   sourceName?: string

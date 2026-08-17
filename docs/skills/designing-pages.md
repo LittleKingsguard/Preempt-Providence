@@ -348,6 +348,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | Test file | Documents |
 | --- | --- |
 | `tests/e2e/path-fork-e2e.test.ts` | **Unit 12** — the consolidated E2E constraint suite (placement-path-spec §0, the four FIXED user requirements; full-pipeline Node tests: legacy envelope → translate → register → ONE `compilePath` bootstrap → `emitElements`/`diffMinimal`/`applyOps`). **E2E-1** — the fork test has ONLY the 22 prototype nodes (+ root): 23 registered at every pipeline stage (global-registry count unchanged through compile/emit/diff/apply — zero node creations), 4095 distinct path-states (`forkKey = pathKey`, no `#`), 4095 elements on pathKey wires (per-level 2^k, create ops = 4095, zero removes), journal empty of `clone-instance` ops. **E2E-2** — a shallow props slice on a depth-2 node regenerates ONLY that node's path-states (compile-scope spies + pass-2 keys) and its element is REUSED (same wires, zero create/remove, set ops only on its wires). **E2E-3** — a component SOURCE change invalidates ONLY the per-name component Link's TARGET owners (the consumers — the §3.2 affected set): the all-consumers pressure case (every consumer's `compilePath` runs once; the non-consuming sibling runs zero passes) AND the half-tree precision case (provider consumed by the a-column only ⇒ affected = {provider, p3a, p4a}; the b-column runs ZERO compile passes; p4b's 8 max-depth states stay). **E2E-4** — a post-render third depth-4 node via `placement-attach` dirties EXACTLY {container, added node} (pass-2 keys, compile spies — d5a at depth 5 gets zero passes, no set ops on its wire) and the render diff is ONE create + appends under the container's path wire, every other element reused. Plus the consolidated guard pins: static census 23/4095/0/0, runtime re-pin arithmetic (4117 in-tree = 4095 + 22 prototypes, cloneOps 4094), the `component-source-duplicate` keep-first/skip-second/warn pin, and the §8-Q6 ratio-baseline TODO marker pin. Authoring note pinned by E2E-4: a node's OWN pathKey carries its CONSUMER hops only (its producer zone appears in its children's keys). |
+| `tests/unit/hooks.test.ts` | **HOOKS — the value-provider slot (2026-08-16, hooks-map-review.md §7 contract amendment B; decisions.md HOOKS row — the §7.2 pin-6 TDD list, red→green):** the `hooks: string[]` field round-trips translate → reverse → re-translate (zero warnings) + the `hooks-shape-invalid` containment (non-array field / non-string member warn + skip); (a) the READ SITES — the duplex provide-and-self-apply self-seed, the consumer arm bindings (continueArm), the path-state bindings (resolvePathTargets, compilePath), and the seam read (the SED-1 type-target collapse asserted at the EMIT level — a def-named hook is exempt, the def value stays, the element takes the def type + css); (b) the E2E-3 CASCADE — the state-slice walk dirties the consumers, the pass-2 refresh carries the hook value, the state events fire; (c) the ONE-source ROUND-TRIP TRIPLE — serialize → loadState reproduces the anchor value + the field, reverse → re-translate ships the binding value + the field, and the SSR emit (emitElements) renders the hook value; (d) the SEAM GUARD — the supervisor rejects `hook-name-unresolved`/`hook-mode-blocked`, the def-named write warns `hook-seam-exempt` + no-ops (both the supervisor path and the defensive applySlice path — never a throw); (e) the CLONE-SHADOWING pin — a hook-bearing node's clone carries the field + its OWN local `hook-<name>` layer + the mirrored anchor value; independent layers; (f) the layer-stack-stays-O(1) property (25 writes → ONE replace-in-place layer; the same-value short-circuit; the clear path — `value: undefined` removes the layer + restores the authored value) |
 | `tests/unit/node.test.ts` | node lifecycle, layers, two-pass compile, forks, serialization, fail-states; **Unit 8** — the `component-source-duplicate` guard (placement-path-spec §6.2 node.ts row, §10.ab/§10.ae): a SECOND same-name source/duplex anchor on ONE node warns `component-source-duplicate`, keeps the first, and is NOT added — UNCONDITIONAL (imperative `addAnchor` AND the constructor seed path: a serialized doc carrying the pattern loads with ONE source and a warn, keep-first VALUE preserved); source+duplex share one provider namespace (name-keyed, matching resolve's `providersOn`); same-name CONTAINER anchors are unaffected (placement multiplicity legal) and different-name sources are fine; the Unit-11 re-expressed fixture shapes never trip it (regression pin); materializeAnchors' decl-path dedup is complementary (idempotent layer re-application stays silent) — the guard is the single enforcement point for everything reaching addAnchor |
 | `tests/unit/path-enum.test.ts` | the placement-path enumeration compile mode (placement-path-spec §2 — Units 4+5): `compilePath()` minting ONE compiled state per valid (node, owner-path) pair — pathKey = `root/<zone>/<ownerId>/…/<nodeId>` (§2.2), `forkKey` = `pathKey` on every path-state; the R2.2 sibling-shared owner-name topology census (depth 4 → 15 states; d12 → 4095, E2E-1 — both level-(k−1) prototypes own ONE name, consumers target it, §5.1); path-derived children at mint time (family children + placement consumers, loop arms excluded — §2.3); viability for contentNodes-owned family-'in-tree' nodes (honest family label, §2.4); the per-walk visit-set cycle guard (`circular-source` + `loop` drop, sibling walks unaffected — §1.4; a placement-requested loop branch below the chosen name is never consulted — §1.2); E2E-2 foundation (a props mutation on a placement-routed node regenerates ONLY its path-states via the supervisor pass-2 dispatch); derived `children.length` reads path-derived children; Unit-5 §1.2 first-match fan-out (ALL zones of the chosen name produce instances) + `activePlacement` = the chosen name on every placement-routed path-state (§2.5) |
 | `tests/unit/path-emit.test.ts` | **Unit 7** — the path-state emit layer (placement-path-spec §4): pathKey wires — a two-zone chosen-name fan-out emits 2 elements with distinct pathKey wires, each with ITS path-derived childOrder (child states' pathKey wires; per-path appends carry pathKey owners; `treeFromOps` reconstructs the path tree); the fork-stress depth-4 probe (15 elements, path-nested binary shape, no `#<i>` wires anywhere; `applyOps` reaches every element via the (wire, forkKey) composites); the armIdx-gate re-expression (a multi-path node's states are NEVER arms — `on:*` attaches to every path-state of a handler-carrying node and def-retyping applies to every def-carrying path-state); family states unchanged (wire = nodeId, no forkKey) + `#f:` component forks unchanged (`nodeId#<i>` wires); the root path-state emits at the conventional wire `root`; `diffMinimal` prevMap reuse (same pathKey across a recompile ⇒ zero ops; a shallow props mutation ⇒ set-only on the changed path-states' wires); mixed family + path emission without wire collisions |
@@ -378,14 +379,15 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/e2e/markdown-display.test.ts` | in-place render, focus retention, parent changes |
 | `demo/feature-matrix.js` (smoke) | one page exercising every surface: placements, components, handlers, payload lifecycle (append/refresh/drop), managed updates, reverse translation, loop-safety, PAR-5 parity, SSR hydrate seam. The `session` provider is data-declared on the root via `template.component` (K6 — value-carrying root binding → SOURCE anchor); the root's runtime duplex consumer half of `session`, the TWO DISTINCT theme providers (`theme-dark`/`theme-light` — Unit 11 re-expression: the same-name `theme` ×2 fork claim is an anti-pattern, placement-path-spec §10.ad, so each consumer resolves its own provider, one arm each), and the loop providers are runtime-only additions (legacy-unexpressible — `target` is an apply path, never a second name, K1–K8) |
 | `demo/mode-toggle.js` (smoke) | same feature-matrix document driven through the three adapter modes — `?mode=ssr|client|markdown` (every build embeds both payloads, so static serves work; `scripts/serve-demo.mjs` serves per-mode too). **Demo-page test case — NOT expected real-world behavior.** SSR asserts the full well-formed server HTML was received (root-first, presentation ids present, balanced tags — the `validateHtmlShape` scan mirrors the e2e stack validator); markdown asserts the raw editor source is embedded verbatim for inspection alongside the live parsed display; client runs the shared harness with no mode-specific payload |
-| `demo/fork-stress.js` (smoke, depths 2–12) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Each level changes a different css property (L1 background-color, L2 border-style, L3 border-width, L4 text-decoration, cycling) with a value per sibling slot (demo-only helper `levelCss`, NOT a core API). Checks: per-layer node counts, rendered-count, css per-level property + slot pairs, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
-| `demo/fork-stress-data.js` (smoke, depths 2–12) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; self-contained `c.node` bodies fire ONCE per clone — the DERIVED `stress:expanded` (`children.length > 0`, declared on the prototypes, inherited by clones — derived-state.md §9.2) replaces the marker op, so no self-ops, no re-dirties: 4094 handler calls at d12, half the marker era). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` (2^depth − 1 nodes) + the three SINGLE-METHOD d12 variants `fork-stress-data-{placement,values,link}-d12.html` (spec §4): placement-only (pure clone structure), values-only (every prototype declares its scalar VALUE as a legacy `component` source — translate.md §2 — and every clone renders it as text), link-only (every prototype declares its component DEF as the source value; every clone's emission re-types the next layer — the recursive def chain, which exercises the emitter's covered-consumer `defChildren` path). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total (RE-PINNED per placement-path-spec §5.2 F-13: contentNodes-ownership minting makes the 22 prototype content roots family-in-tree too — in-tree = 2^depth − 1 + prototypes, unplaced = 0, cloneOps stays the journaled clone count; the prototypes never compile/render, the token terminates the walk), css per-level property + slot pairs, `stress:kind` per layer mechanism, values/link method checks (per-node element text vs resolved source value / def content), DOM nesting vs graph children (all sources live on the prototypes, so the root emits like every node — walk from the root element), `stress:layers` ancestry chains (parent-baked at creation), derived idempotency (resolved-state `stress:expanded` true for non-leaves / false for leaves), incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` + `docs/specs/derived-state.md` §9.2 |
+| `demo/fork-stress.js` (smoke, depths 2–12; the **d14 page is BUILT-BUT-NOT-SMOKE-RUN** — manual/browser scaling probe) | layered stress test of the forking render system — a binary tree built layer by layer, each layer adding 2 children per node through one of the four runtime child-creation mechanisms (placement → component values → component link → idempotent handler → repeats with different placement/component names). Pages `fork-stress-d{2,4,6,8,9,10,11,12,14}.html` (2^depth − 1 nodes; d14 = 16383 — ADDED 2026-08-16 as the scaling probe: the d12 totals (~150-800ms post the timer-drain + findEl fixes) are too fast to expose pass-2 scaling, so depth 14 joins the family; RE-SCOPED 2026-08-16: the d14 page is BUILT for manual/browser probing only — the automated smoke runs depths 2..12, an O(n²) return flags there; the handler-marked census extends to the depth≥13 L12 handler layer, `16 + 256 + 4096 = 4368` marked). Only core (`dist/core/*`) + handler code — no demo-side render machinery. Each level changes a different css property (L1 background-color, L2 border-style, L3 border-width, L4 text-decoration, cycling) with a value per sibling slot (demo-only helper `levelCss`, NOT a core API). Checks: per-layer node counts, rendered-count, css per-level property + slot pairs, placement anchors, values/link binding rendering, handler idempotency (no after-compile loops), ancestry labels, incremental-render scope. Spec: `docs/specs/fork-stress.md` |
+| `demo/fork-stress-data.js` (smoke, depths 2–12; the d14 page + the d14 single-method variants are BUILT-BUT-NOT-SMOKE-RUN — manual/browser scaling probes) | the DATA-DRIVEN variant of fork-stress: the same binary stress tree assembled from a LEGACY envelope alone (root + two prototype nodes per layer — handlers declared by NAME in the data, bodies supplied by the page) via the `clone-instance` op (recursive after-compile expansion; self-contained `c.node` bodies fire ONCE per clone — the DERIVED `stress:expanded` (`children.length > 0`, declared on the prototypes, inherited by clones — derived-state.md §9.2) replaces the marker op, so no self-ops, no re-dirties: 4094 handler calls at d12, half the marker era). Pages `fork-stress-data-d{2,4,6,8,9,10,11,12,14}.html` (2^depth − 1 nodes; d14 = 16383) + the SINGLE-METHOD variants at BOTH depths `fork-stress-data-{placement,values,link}-d{12,14}.html` (spec §4 — the d14 variants are the SCALING PROBES added 2026-08-16, RE-SCOPED 2026-08-16: BUILT but NOT part of the automated smoke — the smoke keeps the d12 single-method placement baseline + 2.5× totals guard, depths 2..12): placement-only (pure clone structure), values-only (every prototype declares its scalar VALUE as a legacy `component` source — translate.md §2 — and every clone renders it as text), link-only (every prototype declares its component DEF as the source value; every clone's emission re-types the next layer — the recursive def chain, which exercises the emitter's covered-consumer `defChildren` path). Only core (`dist/core/*`) + the shared data-derivation helpers (`levelCss`/`cssPropForLevel`/`LAYER_METHODS` — NOT core APIs) — no demo-fixtures, no demo-side render machinery. Checks: per-layer node counts + total (RE-PINNED per placement-path-spec §5.2 F-13: contentNodes-ownership minting makes the 2·(depth−1) prototype content roots family-in-tree too — in-tree = 2^depth − 1 + prototypes, unplaced = 0, cloneOps stays the journaled clone count; the prototypes never compile/render, the token terminates the walk), css per-level property + slot pairs, `stress:kind` per layer mechanism, values/link method checks (per-node element text vs resolved source value / def content), DOM nesting vs graph children (all sources live on the prototypes, so the root emits like every node — walk from the root element), `stress:layers` ancestry chains (parent-baked at creation), derived idempotency (resolved-state `stress:expanded` true for non-leaves / false for leaves), incremental-render contract (bootstrap the only full compile). Spec: `docs/specs/fork-stress-data.md` + `docs/specs/derived-state.md` §9.2 |
 | `demo/feature-showcase.js` (smoke) | the FEATURE SHOWCASE — ONE legacy envelope demonstrating the framework's advertised features both isolated and combined via ONLY the documented core interfaces + JSON handler/derived/anchor data (markdown above in §12). Confirmations: depth-0 scalar resolution into two consumers with derived `bindings.*` bakes, same-name self-provider multiplicity, provide-and-self-apply (`{reference, value, target: 'props.<k>'}` — K1/K2: the synthesized `props.moodPanel = {$: 'bindings.mood'}` bake reads the node's own published value), scoped unresolved fail-state, `circular-source` A↔B borrow-walk loop pair authored via the K7 ARRAY form (provider + consumer bindings on ONE node — `component: [{reference, value}, {reference}]`; dropped at compile — never rendered — no hang), derived-DSL bakes, placement badge, on:input/on:click string-body handlers mutating a sibling preview, one-shot idempotent after-compile stamp via `runPhase`, throwing-handler containment, css id/classes/style, contentNodes-owned content payloads (family-in-tree via the permanent-owner token, never rendered — P3 §10.ad/F-13), clientConfig gates. The two-name duplex anchor shape is runtime-only — no legacy data expresses it (K1–K8). PAR-5: the expected-output page is the same envelope through the real `SSRFragmentAdapter`. Checks walk the #app subtree (shim-compatible). Banner: `feature-showcase`. Spec/companion: `docs/framework-feature-summary.md` |
-| `demo/path-fork-data.js` (smoke) | **Unit 11** — the STATIC placement-path page (placement-path-spec §5, pages `path-fork-data.html` (placement) + `path-fork-data-values-d12.html` + `path-fork-data-link-d12.html` — the DERIVED TRIO, derived-fork-variants-review §5.1): the fork-stress topology re-expressed WITHOUT clones — the legacy envelope carries the root + 22 prototypes (two per layer 1..11) declaring `placementName` (producer/'container') and, for layers ≥ 2, `targetPlacement: ['zone-<k-1>']` (consumer — the R2.2 sibling-shared owner-name topology); the pipeline is translate → register → ONE `compilePath` bootstrap → `emitElements`/`diffMinimal`/`applyOps` (DomAdapter) → render — NO clone-instance ops, NO after-compile expansion (E2E-1 by construction: 4095 path-states pinned to 23 nodes). The values/link variants add the per-method component fields on the prototypes (values: scalar VALUE per prototype — every path-state renders `value-<SLOT>-<k>` as text; link: the component DEF per prototype — the recursive def chain over path-states; its 4095 element census holds via the covered-childless def-fill gate, DEFECT #21). Checks (all methods): the static census (registered=23, in-tree=23, unplaced=0, destroyed=0, cloneOps=0 — smoke-pinned via the profile), state census (4095 distinct pathKeys, `forkKey = pathKey` on every state, `activePlacement` = the chosen zone name, no `#` anywhere), element census (4095 elements, wires = pathKeys — the (wire, forkKey) composite keys at the adapter boundary; the LINK page's re-typed def-chain children are bare-keyed with NO forkKey — the adapter-key asymmetry, review §3.3/§4.4), per-level counts (2^k elements at level k, 1..11), css per-level property + slot pairs, derived `stress:expanded` idempotency (state-level for every method; the ELEMENT-level bake assertion is scoped to standalone-emitted path-states — re-typed children source pass-1 node props only, the `method !== 'link'` exemption, review §4.5), `treeFromOps` binary-shape reconstruction (1 root → 2 → … → 2048 leaves at depth 11, 4095 total), PAR-5 structural parity with the builder's `SSRFragmentAdapter` output (wire- and forkKey-agnostic shape signature — an FNV-1a 64-bit digest over the recursive type/props/children fold — the full 4095-element SSR fragment is ~190MB and is NEVER embedded; the page embeds the digest as `serverTreeSig` plus a 300-op truncated SSR sample `expectedSsrSample` proving the builder's SSR pipeline ran), the per-method mechanism checks (values: text-vs-resolved-value per path-state; link: div type + def content for k > 1 + the child's OWN props on re-typed elements + the 4092 re-typed-element count pin), profile line `[derived-fork:profile] method=<m> … states=4095 passes=1 …` + `globalThis.__pathForkDone`. Smoke guards: `assertStaticPathCensus` (the §5.2 numbers per page — IDENTICAL for all three methods, never silent drift) + residual coverage + the FAMILY baseline (§8-Q6 split — review §5.2): the placement-derived page records its per-region totals as `[derived-fork:baseline]` (the former `[path-fork:baseline]` single-total marker, §10.ad N-5/R-5 SUPERSEDED); the values/link pages pin each region within 2.5× (`[derived-fork:pin]`) — NOT totals (compile-enumeration-dominated, EMIT-insensitive); the runtime pages keep their total-ratio guard + the unchanged 2× tripwire against the placement-derived total. Element lookups use `elOfWire` (bare-then-composite) — never the composite-only `domElOf` (the review's adapter-key rule). Builder: `scripts/path-fork-page.mjs` (parameterized per method) |
+| `demo/path-fork-data.js` (smoke; depth-parameterized — the d12 trio; the d14 SCALING-PROBE trio is BUILT but NOT smoke-run) | **Unit 11** — the STATIC placement-path page (placement-path-spec §5, pages `path-fork-data.html` (placement d12) + `path-fork-data-values-d12.html` + `path-fork-data-link-d12.html` — the DERIVED TRIO, derived-fork-variants-review §5.1 — PLUS the d14 trio `path-fork-data-{placement,values,link}-d14.html` (27 nodes/16383 path-states, added 2026-08-16 as the SCALING PROBES: the d12 enumeration dominates the d12 totals and hides EMIT-side scaling, so d14 re-exposes it with the same per-region pins — RE-SCOPED 2026-08-16: the d14 trio is BUILT as manual/browser scaling probes only, NOT run in the automated smoke): the fork-stress topology re-expressed WITHOUT clones — the legacy envelope carries the root + 22 prototypes (two per layer 1..11) declaring `placementName` (producer/'container') and, for layers ≥ 2, `targetPlacement: ['zone-<k-1>']` (consumer — the R2.2 sibling-shared owner-name topology); the pipeline is translate → register → ONE `compilePath` bootstrap → `emitElements`/`diffMinimal`/`applyOps` (DomAdapter) → render — NO clone-instance ops, NO after-compile expansion (E2E-1 by construction: 4095 path-states pinned to 23 nodes). The values/link variants add the per-method component fields on the prototypes (values: scalar VALUE per prototype — every path-state renders `value-<SLOT>-<k>` as text; link: the component DEF per prototype — the recursive def chain over path-states; its 4095 element census holds via the covered-childless def-fill gate, DEFECT #21). Checks (all methods): the static census (registered=23, in-tree=23, unplaced=0, destroyed=0, cloneOps=0 — smoke-pinned via the profile), state census (4095 distinct pathKeys, `forkKey = pathKey` on every state, `activePlacement` = the chosen zone name, no `#` anywhere), element census (4095 elements, wires = pathKeys — the (wire, forkKey) composite keys at the adapter boundary; the LINK page's re-typed def-chain children are bare-keyed with NO forkKey — the adapter-key asymmetry, review §3.3/§4.4), per-level counts (2^k elements at level k, 1..11), css per-level property + slot pairs, derived `stress:expanded` idempotency (state-level for every method; the ELEMENT-level bake assertion is scoped to standalone-emitted path-states — re-typed children source pass-1 node props only, the `method !== 'link'` exemption, review §4.5), `treeFromOps` binary-shape reconstruction (1 root → 2 → … → 2048 leaves at depth 11, 4095 total), PAR-5 structural parity with the builder's `SSRFragmentAdapter` output (wire- and forkKey-agnostic shape signature — an FNV-1a 64-bit digest over the recursive type/props/children fold — the full 4095-element SSR fragment is ~190MB and is NEVER embedded; the page embeds the digest as `serverTreeSig` plus a 300-op truncated SSR sample `expectedSsrSample` proving the builder's SSR pipeline ran), the per-method mechanism checks (values: text-vs-resolved-value per path-state; link: div type + def content for k > 1 + the child's OWN props on re-typed elements + the 4092 re-typed-element count pin), profile line `[derived-fork:profile] method=<m> … states=4095 passes=1 …` + `globalThis.__pathForkDone`. Smoke guards: `assertStaticPathCensus` (the §5.2 numbers per page — IDENTICAL for all three methods, never silent drift) + residual coverage + the FAMILY baseline (§8-Q6 split — review §5.2): the placement-derived page records its per-region totals as `[derived-fork:baseline]` (the former `[path-fork:baseline]` single-total marker, §10.ad N-5/R-5 SUPERSEDED); the values/link pages pin each region within 2.5× (`[derived-fork:pin]`) — NOT totals (compile-enumeration-dominated, EMIT-insensitive); the runtime pages keep their total-ratio guard + the 3× tripwire against the placement-derived total (re-baselined 2026-08-16 — the isolated-subprocess smoke exposes the honest ~2.1-2.7× runtime:derived ratio). Element lookups use `elOfWire` (bare-then-composite) — never the composite-only `domElOf` (the review's adapter-key rule). Builder: `scripts/path-fork-page.mjs` (parameterized per method) |
 | `demo/translate-showcase.js` (smoke) | the TRANSLATE-KERNEL showcase (K1–K8): every guard code exercised with its intended result (legal array-form card with K1 synthesis + provide-and-self-apply; plain consumer; duplicate reference + duplicate target pre-anchor blocks; vacuous `{}` warn+skip; `component: []` valid; unresolved consumer key-omission; `props.name.` syntax edge; unknown-path gap; dotted-reference carve-out), the K4 warnings channel rendered into the page, and the K5/N1 reverse round-trip (apply path persists as `target`, synthesized derived stripped, authored derived stays, re-translate fires no warnings). PAR-5 expected-output page via `SSRFragmentAdapter`. Banner: `translate-showcase`. Wired into `npm run demo:build` (page 18) + `demo:smoke` (seeded, `__translateShowcaseDone`, banner assertion) |
 | `demo/legacy-shape.js` (smoke) | **the REAL-LEGACY-SHAPE regression page (2026-08-14, fix-pass plan item 5 — D1–D8; LANDED 2026-08-15 — matrix row LANDED)**: a production-shaped legacy envelope in the placeholderLanding style — the blind-test translate-stack fixture (tests/blind/translate-stack-fixture.json) adapted with authored `props.id` (deterministic PAR-5 signature) + a nested media-query cssDef rule — with `placement` as canonical ARRAYS (producer `placementName` + consumer `targetPlacement` on one page; a `placement-entry-invalid` side card for a non-object entry — `placement: [42]` warned + skipped, node still renders), `css.style` as OBJECTS (serialized by translate to kebab-case `k: v;` strings), `css.cssDef` StyleNodes emitted as deduped stylesheet rules from ACTIONABLE states only (class selector `.blind-card`, element/tag selector `nav`, and the nested media-query rule `nav{@media (max-width: 600px){flex-direction:column;}}` — 6 unique rules in ONE styles op), `doc.content` as a `ContentPayload[]` array, the three seam delivery shapes through the D7 anchor-layer seam — `{target: 'content', reference: titleDef}` delivering TEXT only (F13/SED-3), `{target: 'type', reference: badgeDef}` SHELL COLLAPSE (SED-1: the consumer's element becomes the def button — def type + css + def child strong, no def content text, no surviving wrapper), `{target: 'children', reference: menuDef}` keeping its OWN shell element + text + authored children and GAINING the def-root nav.blind-menu as an ADDITIONAL seam-wired child (SED-2 delivery-shape ruling) — def roots + children staying out-of-tree pre-minted `'component'`-token prototypes (6 prototypes, never emitted by the host — no count-mismatch clobber, no stray span.blind-title), multi-zone placement with the FIRST targetPlacement choice missing (`['no-such-zone', 'side-zone']` → activePlacement='side-zone' fan-out into BOTH asides, §1.2/§2.5, `forkKey = pathKey`), EMPTY-OWNER visibility of the styled asides, zero K4 warnings on the main envelope, and a `payload-shape-obsolete` rejection card (the obsolete `{content, metadata}` object form warned + skipped, envelope root children still render). Pipeline: translate → register → ONE per-node compilePath bootstrap → emitElements → diffMinimal → applyOps(DomAdapter). 66 page checks: the probe's 45 claim set (probe §1–§7 incl. the root.compile seam-native comparison) + D8 prototype census (registered=17, in-tree=11, prototypes=6, unplaced=0, cloneOps=0, states=12, elements=16), DOM-mirror checks scoped to the adapter's wires, the K4 side-card checks, and PAR-5 (serverTreeSig = wire-agnostic `shapeSigOfTrees` digest + embedded SSRFragmentAdapter fragments incl. the side cards). PAR-5 expected-output page via `SSRFragmentAdapter` (`demo/legacy-shape.expected.html`). Banner: `legacy-shape`; profile `[legacy-shape:profile]` + `__legacyShapeProfile` (smoke-pinned census incl. the 6 deduped-style-rules set). Wired into `npm run demo:build` (page 19) + `demo:smoke` (seeded, `__legacyShapeDone`, banner assertion) |
 
 | `demo/handlers-scenarios.js` (smoke) | **BLIND TEST #5 — the MOCKED REAL-WORLD HANDLER page (2026-08-16, docs/specs/handlers-scenarios.md):** ten use-case cards (S1 rendered TWICE — anon/alice — for the two userData variants) driven ONLY by legacy envelopes (function-STRING bodies) + `dist/core/*`; the harness mirrors the supervisor (compile → recordResolved → after-compile dispatch on phase-bound nodes → recompile → emit → apply). Confirmations: the AUTH-SEAM phase copy + def-children adoption + retention destroy (destroyed flag + kept walk slot; the destroyed def child's ELEMENT is pruned from the emitted set — DEFECT #20 FIXED 2026-08-16, tests N4/N5 — the checks assert the retention half); the read-only userData passthrough (captured at translate — no manual wiring); `receiveNextState({children})` → ONE layer-apply (minted family children; re-injection OO-2 no-op; `{children: []}` is NOT a teardown; mint is one level — nested children/anchors dropped); clientAPI destroy as the clear path; event args (`event.value`); honest QueryUtils walks (findNode by the consumer's OWN authored class — the def's classes are not findable, render.md SED-1 read-side pin); parent-walk + sibling mutation; css state-slices; throwing-handler containment; append-with-override multi-handler nodes; the shim-DAG counting discipline (§14.2 rule 6 — count emitted els). Profile `[handlers-scenarios:profile] … census(registered/inTree/unplaced/destroyed/prototypes/cloneOps) …` vs the builder-embedded expected census (equality guard) + residual coverage; banner `handlers-scenarios: 25 passed`. Builder: `scripts/handlers-scenarios-page.mjs` (page 20) |
+| `demo/hooks-scenarios.js` (smoke) | **THE VALUE-PROVIDER SLOT SPA page (2026-08-16, docs/specs/hooks-map-review.md §7 — contract amendment B, IMPLEMENTED; decisions.md HOOKS row):** ONE legacy envelope whose root carries the THREE scalar value providers (`theme`/`user`/`counter` component value bindings) + the authored `hooks: ['theme','user','counter']` field (the root is a PURE provider — F3-dropped from render, "a value holder, never an element" — its family children, the three scenario CARDS, render). The cards' consumer readouts (component target bindings + derived `bindings.*` bakes) show the hook values as text + baked props; the CONTROL buttons' click bodies (function-STRING data, the seam's `(event, context)` format) write `hooks.<name>` through the MANAGED CHANNEL — `context.clientAPI.apply(providerId, [{targetProp: 'hooks.<name>', mode: 'replace', value}])`, the provider found by a FAMILY walk to the top (`while (provider.parent)`) — never direct node access (api.md §1 letter; §7.2 pin 1). Confirmations: the S1 theme-switcher + S2 login/logout writes cascade into the readouts (text + the derived bakes) through the inherited E2E-3 consumer walk; S3's live counter treats the control as the EXTERNAL-source boundary (the event arg carries the incoming absolute count — the body never reads a value back); S4 pins the USER CONTRACT — N hook writes land ONE deterministic `hook-<name>` replace-in-place layer (the page publishes `maxHookLayers` on the profile; the smoke asserts == 1) + the cascade actually re-renders + the `hook-name-unresolved` / `hook-mode-blocked` rejections + the `hook-seam-exempt` no-op on a def-shaped provider (`SetTheme`'s `{name, body}`). Profile `[hooks-scenarios:profile] … hookWrites/maxHookLayers … census(registered/inTree/unplaced/destroyed/prototypes/cloneOps) …` vs the builder-embedded expected census (equality guard) + residual coverage; banner `hooks-scenarios: 16 passed`. Builder: `scripts/hooks-scenarios-page.mjs` (page 21) |
 ## 12. Demo pages (`npm run demo` → http://localhost:4173/demo/)
 
 - `ssr-render.html` — SSR doc → client re-render, parity, resolved
@@ -444,13 +446,19 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   `scripts/build-demo.mjs` emits the static default); every mode drives the
   same shared harness (`demo/lib/feature-matrix-tests.js`) that
   `feature-matrix.js` uses. Session lessons: `archive/reviews/2026-08-15/2026-08-15-session-defect-review.md`.
-- `fork-stress-d{2,4,6,8,9,10,11,12}.html` — layered stress test of the
+- `fork-stress-d{2,4,6,8,9,10,11,12,14}.html` — layered stress test of the
   forking render system. **Demo-page test case — NOT expected real-world
   behavior.** A binary tree built layer by layer; each layer adds exactly 2
   children per node through one of the four runtime child-creation
   mechanisms, cycling: placement → component values → component link →
   idempotent handler → repeats with different placement/component names.
-  Depth d has layers 1..d−1 (layer k has 2^k nodes), total 2^d − 1. Every
+Depth d has layers 1..d−1 (layer k has 2^k nodes), total 2^d − 1. **d14
+   (2^14 − 1 = 16383 nodes) is the SCALING PROBE (added 2026-08-16):** the d12
+   totals (~150-800ms post the timer-drain + findEl fixes) are too fast to
+   expose pipeline scaling, so depth 14 joins the family (RE-SCOPED 2026-08-16:
+   the d14 page is BUILT-BUT-NOT-SMOKE-RUN — a manual/browser scaling probe;
+   the automated smoke runs depths 2..12 only); its handler-marked
+   census includes the depth≥13 L12 handler layer (4368 marked). Every
   node renders its `stress:layers` chain (depth + tree-back-to-root) AND a
   different css property per level with a value per sibling slot (compile-
   lookup stressor; the `levelCss` helper is **demo-only** — see §14.3). The page uses ONLY core (`dist/core/*`) and
@@ -460,7 +468,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   `attach` op, component sources/targets, and idempotent `after-compile`
   handlers (guarded by their layer marker — the default guard against
   after-assembly loops). Spec: `docs/specs/fork-stress.md`.
-- `fork-stress-data-d{2,4,6,8,9,10,11,12}.html` — DATA-DRIVEN variant of the
+- `fork-stress-data-d{2,4,6,8,9,10,11,12,14}.html` — DATA-DRIVEN variant of the
   fork-stress page. **Demo-page test case — NOT expected real-world
   behavior.** The page input is a LEGACY envelope (`forkStressLegacyData(depth)`:
   root + two prototype nodes per layer, one per sibling slot), NOT a
@@ -471,7 +479,10 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   prototypes onto the root (`clone-instance` op — the supervisor registers +
   attaches + marks the copy pass-2 dirty); each clone's inherited
   `after-compile` expands the next layer by cloning the layer+1 prototypes
-  under it (recursive assembly — depth 12 = 4095 nodes). HandlerContext
+under it (recursive assembly — depth 12 = 4095 nodes, depth 14 = 16383;
+   the d14 page is BUILT-BUT-NOT-SMOKE-RUN — a manual/browser scaling probe;
+   the automated smoke runs depths 2..12).
+   HandlerContext
   identifies the clone it runs on via `c.node` (variant A — per-dispatch
   context enrichment), reads its own layer from props, and expands ITSELF
   exactly once (O(1) per firing — no page-side queue, no graph scans). No
@@ -491,8 +502,13 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
    chains, derived idempotency (resolved-state `stress:expanded`), and the
    incremental-render contract (bootstrap the only full compile). Spec:
    `docs/specs/fork-stress-data.md` + `docs/specs/placement-path-spec.md` §5.2.
-- `fork-stress-data-{placement,values,link}-d12.html` — the SINGLE-METHOD
-  d12 variants (spec §4): the whole tree relies on ONE mechanism.
+- `fork-stress-data-{placement,values,link}-d{12,14}.html` — the SINGLE-METHOD
+  variants at BOTH depths (spec §4): the whole tree relies on ONE mechanism.
+  d12 = the original variants (smoke-pinned with the d12 placement baseline +
+  2.5× totals ratio guard); d14 = the SCALING PROBES (added 2026-08-16 — the
+  d12 pass-2 totals are too fast to expose the scaling shape; RE-SCOPED
+  2026-08-16: the d14 variants are BUILT-BUT-NOT-SMOKE-RUN — manual/browser
+  probes, the smoke runs d12 only).
   placement-only is pure clone structure; values-only adds `component`
   refs WITH the scalar VALUE to every prototype (a value-bearing binding is
   a legacy `component` SOURCE — translate.md §2 — and clone-instance
@@ -502,31 +518,41 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   chain). All sources are declared in the envelope — the page never
   attaches an anchor. The root carries no sources and emits like every
   node; nesting walks from the root, 2^depth − 1 elements. Banner:
-  `Fork Stress (data: <method>) — depth 12`.
+  `Fork Stress (data: <method>) — depth <dN>`.
 - `path-fork-data.html`, `path-fork-data-values-d12.html`,
-  `path-fork-data-link-d12.html` — the DERIVED TRIO (placement / values /
+  `path-fork-data-link-d12.html`, `path-fork-data-{placement,values,link}-d14.html`
+  — the DERIVED TRIO (placement / values /
   link — derived-fork-variants-review §5.1): the runtime fork-stress page's
-  static twin, the SAME 22-prototype binary topology compiled by the path
-  enumeration instead of clone-instance assembly — the trio framing: the
+  static twin, the SAME 2·(depth−1)-prototype binary topology compiled by the
+  path enumeration instead of clone-instance assembly — the trio framing: the
   runtime clone pages stay as LEGACY STRESS (clone-instance + after-compile
   expansion); the derived pages are the INTENT (the wiring state enlarged to
   act as a derived layer over the graph — one element per path-state, ZERO
-  clones). The legacy envelope carries the root + two prototypes per layer
+  clones). The d12 pages (the original trio; `path-fork-data.html` is the
+  placement FAMILY BASELINE) carry the root + two prototypes per layer
   1..11, each declaring `placementName` (producer — the 'container' role)
   and, for layers ≥ 2, `targetPlacement: ['zone-<k-1>']` (consumer — the
   R2.2 sibling-shared owner-name topology: both level-(k−1) prototypes own
   the shared zone name, so the chosen name's two containers fan out the
-  path per hop). The values/link variants add the per-method component
+path per hop). The **d14 trio (`path-fork-data-{placement,values,link}-d14.html`,
+   27 nodes / 16383 path-states — added 2026-08-16 as the SCALING PROBES)** is
+   the same topology parameterized by depth (the d14 placement page is the d14
+   family baseline; RE-SCOPED 2026-08-16: the d14 trio is BUILT-BUT-NOT-
+   SMOKE-RUN — manual/browser scaling probes; the smoke pins the d12 FAMILY
+   baseline + the values/link per-region 2.5× pins only). The values/link variants
+  add the per-method component
   fields on the prototypes (values: `{reference: 'values-<k>.<slot>',
   value: 'value-<SLOT>-<k>'}`; link: `{reference: 'link-<k>', value:
   linkDefForLevel(k)}`) — NO handlers, NO stress:handler residue (the
   derived model has no after-compile expansion). The page is translate →
   register → ONE `compilePath` bootstrap → emitElements/diffMinimal/
-  applyOps (DomAdapter) → render: 4095 path-states from 23 graph nodes, no
+  applyOps (DomAdapter) → render: 2^depth − 1 path-states from 2·depth−1
+  graph nodes, no
   nodes created (E2E-1), every element a pathKey wire. Checks (per method):
-  the static census (23/23/0/0/0), state census (4095 distinct pathKeys,
+  the static census (2·depth−1/2·depth−1/0/0/0), state census (2^depth − 1
+  distinct pathKeys,
   forkKey = pathKey), element census + per-level 2^k counts (the LINK page:
-  4095 post the covered-leaf def-fill gate, DEFECT #21; its re-typed
+  2^depth − 1 post the covered-leaf def-fill gate, DEFECT #21; its re-typed
   def-chain children are BARE-keyed with no forkKey — the adapter-key
   asymmetry), css property/slot pairs, derived `stress:expanded`
   idempotency (element assertions scoped to standalone-emitted states on
@@ -681,6 +707,31 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
   and the banner (25 passed). Builder: `scripts/handlers-scenarios-page.mjs`
   (page 20). The smoke checks count EMITTED els (the shim DOM is a DAG —
   §14.2 rule 6). Spec: `docs/specs/handlers-scenarios.md`.
+- `hooks-scenarios.html` — **the VALUE-PROVIDER SLOT SPA page (2026-08-16;
+  `docs/specs/hooks-map-review.md` §7 contract amendment B, IMPLEMENTED —
+  decisions.md HOOKS row)**: one SPA envelope, three real-world scenarios.
+  The root carries the scalar value providers (`theme`/`user`/`counter` +
+  the authored `hooks: [...]` field) and is a PURE PROVIDER — F3-dropped
+  from render, "a value holder, never an element" — while its family
+  children, the scenario CARDS, render: a THEME SWITCHER (light/dark
+  writes cascade into the readout text + the derived `themeName` bake), a
+  USER/SESSION panel (login/logout writes repopulate the session readout),
+  and a LIVE COUNTER/BADGE (the control is the EXTERNAL-source boundary —
+  the event arg carries the incoming count; the badge follows every push).
+  Every control is an authored button whose function-STRING click body
+  writes `hooks.<name>` through the MANAGED CHANNEL
+  (`context.clientAPI.apply(id, [{targetProp: 'hooks.<name>', mode:
+  'replace', value}])`), finding the provider by a family walk to the top
+  of the chain — never direct node access. The page checks pin the USER
+  CONTRACT: N hook writes land ONE deterministic `hook-<name>`
+  replace-in-place layer (the profile publishes `maxHookLayers`; the smoke
+  asserts == 1) + the cascade actually re-renders the consumers + the
+  `hook-name-unresolved` / `hook-mode-blocked` rejections + the
+  `hook-seam-exempt` no-op on a def-shaped provider. Banner
+  `hooks-scenarios` (16 passed); the smoke asserts the profile residual +
+  the census equality vs the builder-embedded expected. Builder:
+  `scripts/hooks-scenarios-page.mjs` (page 21). Hooks authoring rules:
+  §14.10.
 - **AUTH-SEAM (2026-08-16) — covered by unit tests AND the handlers-
   scenarios demo page:** the auth pattern (`handlers.afterAssembly` → the
   after-compile phase on the type-target consumer, incl. the NESTED
@@ -1062,9 +1113,19 @@ handlers.md/payload.md/placement-path-spec §10.ag):
    "times show up much later" symptom). The fix collapsed all four d12
    methods to pass2 ≈ 265-320ms (flush window ≈ engine work — the profile
    now splits wall vs `work:` via `supervisor.pass2WorkMs()`). The §8-Q6
-   runtime guard was re-baselined to match (runtime ≤ 2× the static
-   baseline — the old comparison inverted once the runtime totals became
-   honest).
+    runtime guard was re-baselined to match (runtime ≤ 2× the static
+    baseline — the old comparison inverted once the runtime totals became
+    honest).
+6. **Composite-keyed stores need O(1) bare-wire indexes — never prefix-scan
+   per op** (DEFECT #22, 2026-08-16): the derived pages store path-states
+   under `wireKey(wire, forkKey)` while the append/remove ops carry BARE
+   wires — `findEl`'s prefix fallback made the initial renders O(n²) (the
+   Firefox-profiler hotspot; placement-derived apply ≈ 1.17s in the shim).
+   `applyOps`/`treeFromOps` now maintain per-call O(1) bare indexes
+   (`createdBare` / `byWireBare`) with the persistent fallback for
+   cross-call elements; `findElScanCount()` pins the regression class
+   deterministically. Result: placement-derived apply 1170→43ms, checks
+   1243→126ms, total 2488→247ms.
 
 ### 14.9 The covered-childless def-fill gate (DEFECT #21 — the 2026-08-16 derived-trio pass)
 
@@ -1102,3 +1163,75 @@ handlers.md/payload.md/placement-path-spec §10.ag):
    also carry NO derived bake (pass-1 node props only) — scope element-
    level derived assertions to standalone-emitted states (the
    `method !== 'link'` exemption pattern).
+
+### 14.10 The hooks value-provider slot (2026-08-16 — hooks-map-review §7, IMPLEMENTED)
+
+1. **A pure provider is F3-dropped from render — "a value holder, never an
+   element".** The hooks demo root carries the providers + the `hooks`
+   field and is a PURE provider (its names are consumed elsewhere) → its
+   OWN element never emits; its family children (the scenario cards) render
+   at the mount. Author the hookable providers on a non-rendering node
+   (the root or a dedicated provider node) and the consumers in the
+   renderable cards — never assert a provider's element.
+2. **Controls write through the MANAGED CHANNEL only** — `context.clientAPI.
+   apply(providerId, [{targetProp: 'hooks.<name>', mode: 'replace', value}])`
+   in function-STRING bodies (or `clientAPI.apply` on the page harness);
+   direct `addLayer`/`a.value` writes are the rejected bypass. The provider
+   id is reachable from a control body by a FAMILY walk to the top
+   (`while (provider.parent) provider = provider.parent` — the token
+   parent terminates the walk).
+3. **Hookable values must be SCALARS or plain data objects** — a
+   def-shaped provider value (`type`-bearing node data, a `content`-
+   carrying object, a `{name, body}` handler def) is `hook-seam-exempt`:
+   the hook mutation is skipped (warn + no-op on the specific mutation;
+   the op itself is applied — `status: 'applied'` on the managed channel;
+   `hook-seam-exempt` is a K4 console warn, NOT an `ApplyErrorCode`).
+   Author the hooked providers as scalars/strings/numbers/plain objects;
+   keep defs unhookable by design.
+4. **Repeated writes never grow the layer stack** — the write lands ONE
+   deterministic `hook-<name>` replace-in-place layer; a same-value write
+   short-circuits. The page's O(1) proof must count the node's LAYERS
+   (`provider.layers.filter(l => l.id === 'hook-<name>')`), never the
+   render count (the supervisor pipeline still runs its pass-2 flush for
+   every write — the layer short-circuit is the single-source guarantee,
+   not a render skip).
+5. **The derived bake lives on the COMPILED STATE, not the node's pass-1
+   props** — `readout.props.count` (a NodeView read) never sees the
+   `bindings.*` bake; element-level bake assertions must read the emitted
+   element's `prop:<key>` attribute. A control body that needs the current
+   value should re-express the flow instead (e.g. the external-source
+   boundary pattern: the incoming event carries the ABSOLUTE value — the
+   body never reads a value back).
+6. **The ONE-source round-trip** — the hook write mirrors the provider
+   anchor's value (`a.value`), so serialize → loadState → nodeToLegacy ship
+   the hook value through the anchor with ZERO changes to those surfaces;
+   the `hooks` FIELD (the names) rides the base data. A reverse-then-re-
+   translate of a hooked page yields the hook VALUE as the authored binding
+   value (the layer is runtime-only — the value survives, the hook layer
+   does not; that IS the contract).
+
+### 14.11 Hooks stress-test review lessons (2026-08-16)
+
+1. **`hook-seam-exempt` is a K4 warn, NOT an `ApplyErrorCode`.** The
+   supervisor gate for a def-shaped provider warns + continues (the mutation
+   is skipped, but the op itself is applied — `status: 'applied'`). The
+   node-level defensive path also warns + returns. Neither path produces a
+   rejected result. The hooks-map-review §7.2 pin 5 and §7.3 guard rails
+   were corrected to reflect this (proofreader finding P1/P2). Tests that
+   assert `status: 'applied'` for hook-seam-exempt are correct.
+2. **Cloned nodes may lack the `hooks` field and source anchors.** `clone()`
+   copies layers and anchors but the `hooks` base-data field is not cloned
+   (the base represents the authored truth — clones inherit layer values,
+   not authored metadata). A clone's anchor profile may differ from the
+   original's (the clone inherits prototype anchors, not compiled in-tree
+   anchors). Hook writes on cloned nodes that lack source/duplex anchors
+   are correctly rejected with `hook-name-unresolved`. The clone-shadowing
+   test in hooks.test.ts (pin e of §7.2 pin-6) uses a specific setup where
+   the cloned node already carries a hook layer — it does NOT test cloning
+   a provider-bearing root and writing hooks on the clone.
+3. **The stress-test probe revealed no engine defects.** All 8 scenarios
+   behaved correctly: rejections (hook-name-unresolved, hook-mode-blocked)
+   work, hook-seam-exempt warn-and-skip works, the clear path (value:
+   undefined) works, multiple hooks maintain O(1), duplex self-provider
+   hooks work. The 3 probe failures were probe-data bugs (incorrect clone
+   setup, incorrect consumer lookup), not engine issues.

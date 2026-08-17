@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — hooks-scenarios: the value-provider slot (SPA scenarios)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .scenario-card, .theme-readout, .session-readout, .counter-readout {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .theme-readout, .session-readout, .counter-readout { background: #eef4ff; font-weight: bold; }
+    .counter-badge {
+      background: #ffe08a; border: 1px solid #b98; border-radius: 10px;
+      display: inline-block; padding: 0 8px; font-weight: bold; }
+    .control-btn { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; margin-right: 4px; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="hooks-scenarios">
+  <!--
+    ============================================================================
+    HOOKS-SCENARIOS — the VALUE-PROVIDER SLOT SPA page
+    (docs/specs/hooks-map-review.md §7 — contract amendment B, the user's
+    directive: single-page application scenarios implementing the hooks logic).
+
+    ONE legacy JSON envelope (translate.md §1 LegacyInitialData). The root
+    carries the three value providers (`theme` / `user` / `counter` — scalar
+    `component` value bindings) + the authored `hooks: ['theme','user',
+    'counter']` field; the scenario CARDS hold the consumer readouts
+    (component target bindings + derived `bindings.*` bakes) and the CONTROL
+    buttons, whose click bodies ship as function-STRING data. Every control
+    body writes its hook through the MANAGED CHANNEL
+    (`context.clientAPI.apply(id, [{targetProp: 'hooks.<name>', mode:
+    'replace', value}])`) — never direct node access (api.md §1 letter;
+    hooks-map-review §7.2 pin 1). The page module (demo/hooks-scenarios.js)
+    is CORE ONLY (dist/core/*) + the envelope data + the harness; a use case
+    needing an outside script/function is a data-authoring mistake.
+
+    The page harness mirrors the supervisor pass-2 flush (compile ->
+    recordResolved -> emit -> apply); the runner checks dispatch the control
+    clicks and assert the SPEC chain: hook write -> source->target cascade ->
+    re-rendered consumer output. The USER CONTRACT is checked directly:
+    repeated hook writes never grow the layer stack (ONE deterministic
+    `hook-<name>` replace-in-place layer — the layer stack stays O(1) after
+    N writes) and the cascade actually repopulates the consumers.
+
+    SECTION MAP (scenario -> card -> documentation)
+    ----------------------------------------------------------------------------
+    S1  Theme switcher                #theme-card  -- hooks.theme writes
+                                    (light/dark) flow from the control buttons
+                                    to the readout (text + derived themeName
+                                    bake) via the source->target cascade
+                                    (hooks-map-review §7.2 pins 1/2/3)
+    S2  User/session panel            #session-card -- login/logout writes
+                                    hooks.user, the readout repopulates
+    S3  Live counter / badge          #counter-card -- the tick controls read
+                                    the readout's derived count bake
+                                    (props.count) and write hooks.counter;
+                                    the badge follows every external update
+    S4  User contract                 -- the smoke/census pins: N hook writes
+                                    -> ONE hook-<name> layer (the layer stack
+                                    stays O(1)); hook-name-unresolved /
+                                    hook-mode-blocked rejections;
+                                    hook-seam-exempt no-op on a def-shaped
+                                    provider; the ONE-source anchor round-trip
+    ============================================================================
+  -->
+
+  <main>
+    <h1>hooks-scenarios — the value-provider slot (SPA scenarios)</h1>
+    <p class="goals">
+      Three real-world scenarios driving the HOOKS contract
+      (<code>docs/specs/hooks-map-review.md</code> §7 — the value-provider
+      slot): a theme switcher, a user/session panel, and a live
+      counter/badge. Each card's controls are authORED buttons whose
+      function-STRING click bodies write <code>hooks.&lt;name&gt;</code>
+      through <code>clientAPI.apply</code> (the managed channel — never
+      direct node access); the source→target cascade repopulates the consumer
+      readouts. The runner checks assert the write → cascade → rendered-output
+      chain and pin the USER CONTRACT: N writes land ONE deterministic
+      <code>hook-&lt;name&gt;</code> replace-in-place layer (the layer stack
+      stays O(1)). The banner is <code>hooks-scenarios</code>; a profile line
+      (<code>[hooks-scenarios:profile]</code>) mirrors the other pages'
+      <code>acc()</code> instrumentation.
+    </p>
+
+    <!-- Framework input: the SPA legacy envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">{"main":{"template":{"root":{"type":"div","props":{"id":"hooks-root"},"children":[{"type":"section","props":{"id":"theme-card"},"css":{"classes":["scenario-card","theme-card"]},"children":[{"type":"h3","props":{"id":"theme-title"},"content":"Scenario 1 — Theme switcher (hooks.theme)"},{"type":"p","props":{"id":"theme-expect"},"css":{"classes":["expect"]},"content":"The control buttons write hooks.theme through clientAPI.apply (managed channel); the source→target cascade re-renders the readout (text + the derived themeName bake)."},{"type":"div","props":{"id":"theme-readout"},"css":{"classes":["theme-readout"]},"component":[{"reference":"theme"}],"derived":{"props":{"themeName":{"$":"bindings.theme"}}}},{"type":"button","props":{"id":"theme-light-btn"},"css":{"classes":["control-btn"]},"content":"Set light theme","component":[{"target":"handlers.click","reference":"SetTheme"}]},{"type":"button","props":{"id":"theme-dark-btn"},"css":{"classes":["control-btn"]},"content":"Set dark theme","component":[{"target":"handlers.click","reference":"SetTheme"}]}]},{"type":"section","props":{"id":"session-card"},"css":{"classes":["scenario-card","session-card"]},"children":[{"type":"h3","props":{"id":"session-title"},"content":"Scenario 2 — User/session panel (hooks.user)"},{"type":"p","props":{"id":"session-expect"},"css":{"classes":["expect"]},"content":"Login/logout write hooks.user; the session readout repopulates through the source→target cascade."},{"type":"div","props":{"id":"session-readout"},"css":{"classes":["session-readout"]},"component":[{"reference":"user"}],"derived":{"props":{"sessionLabel":{"$":"bindings.user"}}}},{"type":"button","props":{"id":"login-btn"},"css":{"classes":["control-btn"]},"content":"Log in as alice","component":[{"target":"handlers.click","reference":"Login"}]},{"type":"button","props":{"id":"logout-btn"},"css":{"classes":["control-btn"]},"content":"Log out","component":[{"target":"handlers.click","reference":"Logout"}]}]},{"type":"section","props":{"id":"counter-card"},"css":{"classes":["scenario-card","counter-card"]},"children":[{"type":"h3","props":{"id":"counter-title"},"content":"Scenario 3 — Live counter / badge (hooks.counter)"},{"type":"p","props":{"id":"counter-expect"},"css":{"classes":["expect"]},"content":"The tick controls are the boundary where the EXTERNAL live source enters: the event arg carries the incoming absolute count and the body pushes it into hooks.counter through the managed channel — the badge follows every push via the source→target cascade."},{"type":"div","props":{"id":"counter-readout"},"css":{"classes":["counter-readout","counter-badge"]},"component":[{"reference":"counter"}],"derived":{"props":{"count":{"$":"bindings.counter"}}}},{"type":"button","props":{"id":"counter-inc-btn"},"css":{"classes":["control-btn"]},"content":"+1","component":[{"target":"handlers.click","reference":"CounterTick"}]},{"type":"button","props":{"id":"counter-dec-btn"},"css":{"classes":["control-btn"]},"content":"-1","component":[{"target":"handlers.click","reference":"CounterTick"}]}]}],"component":[{"reference":"theme","value":"dark"},{"reference":"user","value":"guest"},{"reference":"counter","value":0},{"reference":"SetTheme","value":{"name":"SetTheme","body":"function (event, context) {\n  var value = event.value == null ? 'dark' : String(event.value);\n  var provider = event.target;\n  while (provider && provider.parent) { provider = provider.parent; }\n  if (!provider) return;\n  var res = context.clientAPI.apply(provider.id, [{ targetProp: 'hooks.theme', mode: 'replace', value: value }]);\n  return res.status;\n}"}},{"reference":"Login","value":{"name":"Login","body":"function (event, context) {\n  var value = event.value == null ? 'alice (admin)' : String(event.value);\n  var provider = event.target;\n  while (provider && provider.parent) { provider = provider.parent; }\n  if (!provider) return;\n  var res = context.clientAPI.apply(provider.id, [{ targetProp: 'hooks.user', mode: 'replace', value: value }]);\n  return res.status;\n}"}},{"reference":"Logout","value":{"name":"Logout","body":"function (event, context) {\n  var provider = event.target;\n  while (provider && provider.parent) { provider = provider.parent; }\n  if (!provider) return;\n  var res = context.clientAPI.apply(provider.id, [{ targetProp: 'hooks.user', mode: 'replace', value: 'guest' }]);\n  return res.status;\n}"}},{"reference":"CounterTick","value":{"name":"CounterTick","body":"function (event, context) {\n  var v = Number(event.value);\n  if (Number.isNaN(v)) return;\n  var provider = event.target;\n  while (provider && provider.parent) { provider = provider.parent; }\n  if (!provider) return;\n  var res = context.clientAPI.apply(provider.id, [{ targetProp: 'hooks.counter', mode: 'replace', value: v }]);\n  return res.status;\n}"}}],"hooks":["theme","user","counter"]}},"clientConfig":{"runInstantiation":true,"runRendering":true}}}</script>
+    <script id="server-data" type="application/json">{"goals":["S1 theme switcher: hooks.theme writes through clientAPI.apply (managed channel) cascade into the theme readout (text + derived themeName bake)","S2 session panel: login/logout hooks.user writes repopulate the session readout through the source→target cascade","S3 live counter: the tick controls read the derived count bake and write hooks.counter; the badge follows","S4 user contract: N hook writes land ONE deterministic hook-<name> replace-in-place layer (the layer stack stays O(1)) + the cascade actually re-renders the consumers; hook-name-unresolved / hook-seam-exempt / hook-mode-blocked containments"],"expected":{"census":{"registered":19,"inTree":19,"unplaced":0,"destroyed":0,"prototypes":0,"cloneOps":0}}}</script>
+
+    <div class="card-mount" id="mount-main"></div>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="hooks-scenarios.js"></script>
+</body>
+</html>

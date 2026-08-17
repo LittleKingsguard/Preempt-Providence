@@ -11,12 +11,12 @@
     PATH FORK DEMO — the DERIVED trio (placement / values / link).
     __PAGE_TITLE__ (placement-path-spec §5; derived-fork-variants-review §5.1).
 
-    The static re-expression of the fork-stress tree: the SAME 22-prototype
+    The static re-expression of the fork-stress tree: the SAME __PROTOTYPES__-prototype
     binary topology, compiled by the §2 path enumeration instead of runtime
     clone-instance assembly:
 
       • `preempt-initial-data` carries the LEGACY envelope: the root + TWO
-        prototype nodes per layer 1..11 (22 prototypes, 23 graph nodes).
+        prototype nodes per layer 1..__LAYERS__ (__PROTOTYPES__ prototypes, __NODES__ graph nodes).
         Each prototype declares `placement: { placementName: 'zone-<k>' }`
         (producer / 'container' side); layers ≥ 2 additionally declare
         `placement: { targetPlacement: ['zone-<k-1>'] }` (consumer side —
@@ -27,7 +27,7 @@
         bootstrap pass → emitElements / diffMinimal / applyOps (DomAdapter)
         → render. NO clone-instance ops, NO after-compile expansion, NO
         node creation beyond the prototypes (E2E-1 by construction):
-        Σ 2^k for k = 1..11 + root = 4095 path-states pinned to 23 nodes.
+        Σ 2^k for k = 1..__LAYERS__ + root = __STATES__ path-states pinned to __NODES__ nodes.
       • The page uses ONLY core (dist/core/*) + the shared data-derivation
         helpers (levelCss/cssPropForLevel/linkDefForLevel — demo-only, NOT
         core APIs).
@@ -56,7 +56,7 @@
       <h2>Static derived tree (live DOM)</h2>
       <p class="expect">
         Every element is framework-rendered from path-states: one element per
-        (prototype, path-to-root) pair — 4095 elements, wires = pathKeys.
+        (prototype, path-to-root) pair — __STATES__ elements, wires = pathKeys.
       </p>
       <div id="app"></div>
     </section>
@@ -69,7 +69,7 @@
         structural shape signature (wire-agnostic — the page re-translates the
         legacy envelope, so node ids are mint-time artifacts and the parity is
         key-free: type + props + binary children structure). The full
-        4095-element fragment is ~180MB (nested binary tree) and is NOT
+        __STATES__-element fragment is __SR_SIZE__ (nested binary tree) and is NOT
         embedded; this section shows a truncated sample.
       </p>
       <div class="frame" id="expected">__SR_EXPECTED__</div>

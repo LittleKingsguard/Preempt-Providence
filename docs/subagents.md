@@ -18,6 +18,14 @@ final result verified. Tested-before-implementation is the only acceptable
 order; a delegated prompt that says "implement X and add tests" is out of
 process.
 
+**MODEL (2026-08-16):** the blind-test sub-agents (writer / proofreader /
+page reviewer — AGENTS.md item 10) and the scenario-driven sub-agents
+(scenario / probe / review — AGENTS.md item 11) run on the **Mimo-2.5
+model**. If the model cannot be changed for a specific sub-agent (the
+delegation mechanism exposes no model override), PAUSE and wait for the user
+to manually switch the model before running the loop — never run it with a
+different model.
+
 ## Roles
 
 | Role | Tool set | Guardrails |

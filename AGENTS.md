@@ -46,7 +46,30 @@ Context management guidelines for agents working in this repository:
    (`[derived-fork:pin]`) — NOT totals, which are compile-enumeration-
    dominated (~2.8s baseline) and insensitive to EMIT-side blow-ups. The
    runtime fork-stress pages keep the ~1.5× method-ratio watch (totals,
-   asserted 2.5×) + the 2× tripwire against the placement-derived total.
+   asserted 2.5×) + the 3× tripwire against the placement-derived total
+   (re-baselined 2026-08-16 — the isolated-subprocess measurement exposes the
+   honest ~2.1-2.7× runtime:derived ratio; see the d14 paragraph below).
+   **d14 pages (2026-08-16): BUILT-BUT-NOT-SMOKE-RUN.** The depth-14 pages
+   (2^14 − 1 = 16383 nodes/states) are built for every fork-family set
+   (fork-stress-d14.html, fork-stress-data-d14.html,
+   fork-stress-data-{placement,values,link}-d14.html,
+   path-fork-data-{placement,values,link}-d14.html) as MANUAL/BROWSER scaling
+   probes only — the d12 totals (~150-800ms post the timer-drain + findEl
+   fixes) are too fast to expose pipeline scaling in the automated smoke, so
+   the d14 pages exist for the browser-based scaling watch. They do NOT run
+   in the automated smoke (re-scoped 2026-08-16: the d12 family is the
+   automated tripwire — an O(n²) return still flags there; the d14 pages only
+   made the automated smoke ~2m longer). **Smoke harness isolation (kept):**
+   the fork pages run in an isolated subprocess each (scripts/smoke-page-
+   worker.mjs — every page module retains its ~50MB+ frame, and stacked
+   frames balloon the heap into GC-storm territory) — the guards are
+   unchanged. This made the RUNTIME tripwire measurement HONEST: the isolated
+   runtime:derived ratio is ~2.1-2.7× at d12 (the old 1.39× d12 reading was
+   the accumulated-process GC asymmetry suppressing the later derived pages),
+   so the tripwire is pinned at 3× (the O(n²)-era ~20× blow-up signature
+   still trips). Watch the d12 pass2/compile multiples in the smoke output —
+   the probe's purpose is exposing that scaling shape; for the depth-14 shape
+   open the d14 pages manually in a browser.
 
 5. **Specs and decision records**: behavior contracts live in
    `docs/specs/*.md`; design decisions are recorded in
@@ -153,6 +176,11 @@ Context management guidelines for agents working in this repository:
    new rules from the findings go back into `docs/skills/designing-pages.md`
    §14-style lessons + the relevant specs. The trio must be green before the
    loop is reported complete.
+   **MODEL (2026-08-16):** the blind-test sub-agents (writer / proofreader /
+   page reviewer) run on the **Mimo-2.5 model**. If the model cannot be
+   changed for a specific sub-agent (the delegation mechanism exposes no
+   model override), PAUSE and wait for the user to manually switch the model
+   before running the loop — never run it with a different model.
 
 11. **Stress-test review loop (after major features — break the pipeline
     on purpose)**: run three sequential sub-agents to hunt compile/render
@@ -171,3 +199,8 @@ Context management guidelines for agents working in this repository:
        `docs/defects.md`/`docs/decisions.md` and the full reports are
        appended to `archive/<topic>/<date>-<name>.md` (§"Stress-test review loop").
     Each agent verifies the validation trio (item 4) after its work.
+    **MODEL (2026-08-16):** the scenario-driven sub-agents (scenario /
+    probe / review) run on the **Mimo-2.5 model**. If the model cannot be
+    changed for a specific sub-agent (the delegation mechanism exposes no
+    model override), PAUSE and wait for the user to manually switch the
+    model before running the loop — never run it with a different model.

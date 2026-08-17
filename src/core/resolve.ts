@@ -8,11 +8,82 @@
 import type { Node } from './node.js'
 import type { ChainKind } from './node.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
-import type { Anchor, CompiledState, NodeId, UnresolvedRef } from './types.js'
+import type { Anchor, CompiledState, Link, NodeId, UnresolvedRef } from './types.js'
 
 export interface ProviderHit {
   anchor: Anchor
   owner: Node
+}
+
+/** HOOKS (hooks-map-review.md §7.2 pin 2) — the single value read for a
+ *  provider anchor: the node-local `hook-<name>` layer value FIRST, the
+ *  authored `anchor.value` fallback (the cleared-hook fallback — clearing
+ *  the hook layer restores the authored value). Consulted at the five
+ *  pinned anchor-value read sites (resolve.ts:307/314, resolve.ts:189,
+ *  node.ts seedOwnBindings, node.ts materializeSeam, render-helpers.ts
+ *  emit-time def-fill). */
+export function providerValueFor(owner: Node, anchor: Anchor, name: string): unknown {
+  const hook = owner.layers.find((l) => l.id === `hook-${name}`)
+  if (hook !== undefined && hook.value !== undefined) return hook.value
+  return anchor.value
+}
+
+/** HOOKS — the seam/def-fill source read (materializeSeam + the emit-time
+ *  def-fill): walk a component Link's source/duplex provider anchors through
+ *  `providerValueFor` (the mirror design — serialize/loadState/nodeToLegacy
+ *  ship ONE value via the anchor; the hook layer rides the read for the
+ *  live tree). Preserves the pre-hook behavior for non-string targets. */
+export function providerValueFromLink(link: Link): unknown {
+  for (const a of link.anchorsOf('source')) {
+    if (a.owner === undefined) continue
+    const v = typeof a.target === 'string' ? providerValueFor(a.owner, a, a.target) : a.value
+    if (v !== undefined) return v
+  }
+  for (const a of link.anchorsOf('duplex')) {
+    if (a.owner === undefined) continue
+    const v = typeof a.target === 'string' ? providerValueFor(a.owner, a, a.target) : a.value
+    if (v !== undefined) return v
+  }
+  return undefined
+}
+
+/** HOOKS — the node-local hook name resolution: the source/duplex anchor
+ *  whose target matches the hook name (a hook names a SAME-NODE
+ *  value-provider component binding). */
+export function hookAnchorFor(node: Node, name: string): Anchor | undefined {
+  return node.anchors.find(
+    (a) => (a.role === 'source' || a.role === 'duplex') && typeof a.target === 'string' && a.target === name,
+  )
+}
+
+/** HOOKS (§7.2 pin 5) — the DEF-SHAPED value discrimination (the
+ *  seam/def landmine guard): a provider value that the seam/def machinery
+ *  reads as a def — mintDefPrototypes' `type`-bearing node data, the
+ *  materializeSeam `content`-carrying object, and the handler-def
+ *  `{name, body}` shape. Hooking such a value would tear down the seam. */
+export function isDefShapedValue(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
+  const o = v as Record<string, unknown>
+  return typeof o.type === 'string'
+    || o.content !== undefined
+    || (typeof o.name === 'string' && typeof o.body === 'string')
+}
+
+/** HOOKS (§7.2 pins 1/5) — the write-side gate, shared by the supervisor's
+ *  state-slice pre-check (rejection) and node.applySlice's defensive branch
+ *  (warn + skip, never throw): no source/duplex anchor ⇒ `hook-name-unresolved`;
+ *  a seam/def-shaped provider ⇒ `hook-seam-exempt` (warn + no-op — the
+ *  landmine guard). */
+export function hookWriteGuard(
+  node: Node,
+  name: string,
+): { ok: true; anchor: Anchor } | { ok: false; code: 'hook-name-unresolved' | 'hook-seam-exempt' } {
+  const anchor = hookAnchorFor(node, name)
+  if (!anchor) return { ok: false, code: 'hook-name-unresolved' }
+  if (anchor.options.seam !== undefined || isDefShapedValue(anchor.value)) {
+    return { ok: false, code: 'hook-seam-exempt' }
+  }
+  return { ok: true, anchor }
 }
 
 export interface ArmState {

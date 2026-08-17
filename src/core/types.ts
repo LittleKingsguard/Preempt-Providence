@@ -47,7 +47,7 @@ export interface Node {
   orphan(childAnchor: Anchor): void
   __onLinkDissolve?(anchor: Anchor): void
 }
-interface Link {
+export interface Link {
   readonly id: string
   readonly config: LinkConfig
   readonly anchors: Anchor[]
@@ -158,7 +158,13 @@ export interface LayerApplyOp {
 export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp|LayerApplyOp
 
 export interface LayerMutation {
-  targetProp: 'type'|'content'|'handlers'|`props.${string}`|`css.${string}`
+  /** HOOKS (hooks-map-review.md §7 contract amendment B — the value-provider
+   *  slot): `hooks.<name>` targets a SAME-NODE value-provider hook (a
+   *  `hooks` field names the source/duplex component bindings the node
+   *  exposes for hook writes). `mode` is restricted to 'replace'
+   *  (`hook-mode-blocked`); `value: undefined` CLEARS the hook (the layer is
+   *  removed, the authored anchor value restores). */
+  targetProp: 'type'|'content'|'handlers'|`props.${string}`|`css.${string}`|`hooks.${string}`
   mode: 'replace'|'append'|'replaceAll'
   value: unknown
   sourceName?: string
@@ -190,6 +196,7 @@ export type ApplyStatus =
   | { status:'no-usable-state'; nodeState: NodeState }
   | { status:'rejected'; error: ApplyError }
 export type ApplyErrorCode = 'unknown-node'|'placement-target-blocked'|'link-config'|'cycle-detected'|'single-parent'
+  |'hook-name-unresolved'|'hook-mode-blocked'
 export interface ApplyError { code: ApplyErrorCode; detail?: unknown }
 
 export type DirtyScope = 'remote'|'anchor-populate'|'sweep-candidate'
@@ -233,8 +240,17 @@ export interface NodeLayer {
   id: string; sourceName?: string; type?: string
   props?: Record<string, unknown>; css?: Record<string, unknown>
   content?: unknown; handlers?: unknown[]; anchors?: AnchorDecl[]; derived?: DerivedDecl
+  /** HOOKS (hooks-map-review.md §7.3) — the dedicated hook layer VALUE slot
+   *  (a `hook-<name>` layer). Never a `props.*` key (no authored-prop
+   *  collision); compileLocal ignores it (pass-1 output unchanged). Read by
+   *  `providerValueFor` (hook layer first, authored `a.value` fallback).
+   *  The layer carries NO anchors (removeLayer safety — DEFECT #10). */
+  value?: unknown
+  /** HOOKS — the authored anchor value preserved at the FIRST hook write;
+   *  the clear path (`value: undefined`) restores it to the anchor. */
+  hookFallback?: unknown
 }
-export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl }
+export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[] }
 /** ORIGIN-OWNER — the data shape of a layer-apply minted node (family
  *  children only; an `anchors` field is vetoed with the
  *  `layer-apply-anchors-rejected` warn). */

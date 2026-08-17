@@ -607,13 +607,25 @@ describe('consolidated guards — census re-pins, duplicate-source, ratio-baseli
     expect(link.anchorsOf('source')).toHaveLength(1)
   })
 
-  it('ratio-baseline pins (§8-Q6 split / derived-fork-variants-review §5.2): the smoke carries the derived FAMILY baseline (per-region, placement-derived) + the per-region pins + the unchanged runtime 2× tripwire', () => {
+  it('ratio-baseline pins (§8-Q6 split / derived-fork-variants-review §5.2): the smoke carries the derived FAMILY baseline (per-region, placement-derived) + the per-region pins + the runtime 3× tripwire for the d12 family; the d14 fork pages are built but NOT smoke-run (manual/browser scaling probes only)', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const smoke = readFileSync(join(here, '../../scripts/demo-smoke.mjs'), 'utf8')
     expect(smoke).toContain('[derived-fork:baseline]')
     expect(smoke).toContain('derived FAMILY baseline recorded')
     expect(smoke).toContain('[derived-fork:pin]')
-    expect(smoke).toContain('runtime 2× total tripwire')
+    expect(smoke).toContain('runtime 3× total tripwire')
+    // the d12 family: the placement-derived baseline (path-fork-data.html,
+    // depth 12) + the runtime 3× tripwire + the d12-only depth lists — an
+    // O(n²) return flags on the d12 family
+    expect(smoke).toContain('exceeds 3× the placement-derived baseline')
+    expect(smoke).toContain('depth: 12')
+    expect(smoke).toContain('2, 4, 6, 8, 9, 10, 11, 12')
+    // the d14 fork pages are BUILT (scripts/build-demo.mjs) but NOT part of
+    // the automated smoke — no d14 runs, no d14 family wiring, no d14 tripwire
+    expect(smoke).not.toContain('d14Totals')
+    expect(smoke).not.toContain('path-fork-data-placement-d14.html')
+    expect(smoke).not.toContain('depth: 14')
+    expect(smoke).not.toContain('2, 4, 6, 8, 9, 10, 11, 12, 14')
     // the former single-baseline framing is superseded by the family structure
     expect(smoke).not.toContain('`[path-fork:baseline]`')
   })

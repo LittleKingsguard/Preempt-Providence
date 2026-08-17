@@ -112,12 +112,15 @@ async function emitPage(templateName, outName, doc, serverData) {
   console.log('built demo/mode-toggle.html (client mode default)')
 }
 
-// ---- pages 5-8: fork stress (layered runtime child-creation stress test) ----
-// Depths 2..12 (even + 9..12) — each doubles the node count per layer (2^depth − 1).
+// ---- pages 5-9: fork stress (layered runtime child-creation stress test) ----
+// Depths 2..14 (even + 9..14) — each doubles the node count per layer (2^depth − 1).
+// The d14 page (2^14 − 1 = 16383 nodes) is the SCALING PROBE: the d12 totals
+// (~150-800ms post the timer-drain + findEl fixes) are too fast to expose
+// pipeline scaling, so the depth-14 set joins the family.
 // The four child-creation mechanisms cycle: placement → values → link →
 // handler → repeats with different placement/component names.
 {
-  for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
+  for (const depth of [2, 4, 6, 8, 9, 10, 11, 12, 14]) {
     const { doc, serverData } = buildForkStressPage(depth)
     const template = await readFile(join(ROOT, 'demo', 'fork-stress.template.html'), 'utf8')
     const out = template
@@ -130,41 +133,51 @@ async function emitPage(templateName, outName, doc, serverData) {
   }
 }
 
-// ---- pages 9-16: fork stress, DATA-DRIVEN variant ---------------------------
-// Same depths; the page input is a LEGACY envelope (root + two prototypes per
-// layer, handlers declared by NAME in the data) — the browser module supplies
-// the handler bodies and assembles the tree via the clone-instance op.
+// ---- pages 10-17: fork stress, DATA-DRIVEN variant --------------------------
+// Same depths (+ the d14 scaling probe); the page input is a LEGACY envelope
+// (root + two prototypes per layer, handlers declared by NAME in the data) —
+// the browser module supplies the handler bodies and assembles the tree via
+// the clone-instance op.
 {
-  for (const depth of [2, 4, 6, 8, 9, 10, 11, 12]) {
+  for (const depth of [2, 4, 6, 8, 9, 10, 11, 12, 14]) {
     const { html } = await buildForkStressDataPage(depth)
     await writeFile(join(ROOT, 'demo', `fork-stress-data-d${depth}.html`), html)
     console.log(`built demo/fork-stress-data-d${depth}.html (${2 ** depth - 1} nodes, legacy envelope)`)
   }
-  // single-method d12 variants: the whole tree relies on ONE mechanism
-  // (placement-only / values-only / link-only — spec §4).
-  for (const method of ['placement', 'values', 'link']) {
-    const { html } = await buildForkStressDataPage(12, method)
-    await writeFile(join(ROOT, 'demo', `fork-stress-data-${method}-d12.html`), html)
-    console.log(`built demo/fork-stress-data-${method}-d12.html (${2 ** 12 - 1} nodes, ${method}-only legacy envelope)`)
+  // single-method variants: the whole tree relies on ONE mechanism
+  // (placement-only / values-only / link-only — spec §4). d12 (original pins)
+  // + d14 (the scaling probes — the d12 totals are too fast to expose the
+  // pass-2 scaling shape, AGENTS.md item-4 watch).
+  for (const depth of [12, 14]) {
+    for (const method of ['placement', 'values', 'link']) {
+      const { html } = await buildForkStressDataPage(depth, method)
+      await writeFile(join(ROOT, 'demo', `fork-stress-data-${method}-d${depth}.html`), html)
+      console.log(`built demo/fork-stress-data-${method}-d${depth}.html (${2 ** depth - 1} nodes, ${method}-only legacy envelope)`)
+    }
   }
 }
 
-// ---- page 17: static derived trio (placement / values / link) --------------
+// ---- page 18: static derived trio (placement / values / link) ---------------
 // The static re-expression (placement-path-spec §5): the fork-stress topology
-// compiled by the §2 path enumeration — 4095 path-states from 23 graph nodes,
-// NO clone-instance, NO after-compile expansion. Three method variants (the
-// derived trio, derived-fork-variants-review §5.1): placement (the family
-// baseline, no component fields), values (+ component value on every
+// compiled by the §2 path enumeration — 4095 path-states (d12) from 23 graph
+// nodes, NO clone-instance, NO after-compile expansion. Three method variants
+// (the derived trio, derived-fork-variants-review §5.1): placement (the
+// family baseline, no component fields), values (+ component value on every
 // prototype), link (+ component def on every prototype — the recursive def
 // chain over path-states, 4095 elements post the covered-leaf gate). Builder
 // embeds the legacy envelope + the expected census/parity reference + the SSR
-// fragment.
+// fragment. The d14 trio (2^14 − 1 = 16383 path-states) is the SCALING PROBE
+// for the derived family — the d12 enumeration (~2.8s) dominates the d12
+// totals and hides EMIT-side scaling; d14 re-exposes it (same per-region
+// pins, the d14 placement-derived page is the d14 family baseline).
 {
-  for (const method of ['placement', 'values', 'link']) {
-    const { html } = await buildPathForkPage(method)
-    const outName = method === 'placement' ? 'path-fork-data.html' : `path-fork-data-${method}-d12.html`
-    await writeFile(join(ROOT, 'demo', outName), html)
-    console.log(`built demo/${outName} (23 nodes, 4095 path-states, ONE compile pass, ${method}-derived)`)
+  for (const depth of [12, 14]) {
+    for (const method of ['placement', 'values', 'link']) {
+      const { html } = await buildPathForkPage(method, depth)
+      const outName = depth === 12 && method === 'placement' ? 'path-fork-data.html' : `path-fork-data-${method}-d${depth}.html`
+      await writeFile(join(ROOT, 'demo', outName), html)
+      console.log(`built demo/${outName} (${2 * depth - 1} nodes, ${2 ** depth - 1} path-states, ONE compile pass, ${method}-derived)`)
+    }
   }
 }
 
@@ -204,4 +217,14 @@ async function emitPage(templateName, outName, doc, serverData) {
 // demo/handlers-scenarios.html (envelopes + the expected census) at import.
 {
   await import('./handlers-scenarios-page.mjs')
+}
+
+// ---- page 21: hooks-scenarios (the value-provider slot — SPA scenarios) ----
+// Three real-world cards (theme switcher / session panel / live counter)
+// from ONE legacy envelope whose root carries the providers + the authored
+// `hooks` field; the control bodies (function-STRING data) write
+// `hooks.<name>` through the managed channel. The builder writes
+// demo/hooks-scenarios.html (envelope + the expected census) at import.
+{
+  await import('./hooks-scenarios-page.mjs')
 }

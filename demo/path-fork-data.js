@@ -1,42 +1,45 @@
 /**
  * Static derived-family page + data envelope module — the static re-expression
- * of the fork-stress tree (placement-path-spec §5): the SAME 22-prototype
- * binary topology compiled by the §2 path enumeration instead of runtime
- * clone-instance assembly. THREE method variants (the derived trio,
+ * of the fork-stress tree (placement-path-spec §5): the SAME 2·(depth−1)-
+ * prototype binary topology compiled by the §2 path enumeration instead of
+ * runtime clone-instance assembly. THREE method variants (the derived trio,
  * derived-fork-variants-review §5.1): placement (the original static page),
  * values (component-provided scalar values on every prototype), link (the
  * component def on every prototype — the recursive def chain over
- * path-states). Same 23-node topology, ONE compilePath bootstrap, ZERO
- * clone-instance ops, 4095 elements for every method (the link census holds
- * post the covered-leaf def-fill gate — render.md P-EMIT-3 carve-out letter).
+ * path-states). Depth-parameterized (2026-08-16 — the d14 scaling probes):
+ * d12 = 23 nodes / 4095 path-states / 4095 elements; d14 = 27 nodes / 16383.
+ * Same topology, ONE compilePath bootstrap, ZERO clone-instance ops, 2^depth − 1
+ * elements for every method (the link census holds post the covered-leaf
+ * def-fill gate — render.md P-EMIT-3 carve-out letter).
  *
  * One module, three roles:
  *
- *  1. DATA (`pathForkLegacyData(method)`, exported): the LEGACY envelope
- *     carrying the root + TWO prototype nodes per layer 1..11 (22 prototypes,
- *     23 graph nodes — the R2.2 sibling-shared owner-name topology,
- *     path-fork-review.md R2.2). Each prototype declares
+ *  1. DATA (`pathForkLegacyData(method, depth)`, exported): the LEGACY
+ *     envelope carrying the root + TWO prototype nodes per layer 1..depth−1
+ *     (2·(depth−1) prototypes, 2·depth−1 graph nodes — the R2.2
+ *     sibling-shared owner-name topology, path-fork-review.md R2.2). Each
+ *     prototype declares
  *     `placement: { placementName: 'zone-<k>' }` (producer — the 'container'
  *     role); layers ≥ 2 additionally declare
  *     `placement: { targetPlacement: ['zone-<k-1>'] }` (consumer — one
  *     requested name, the chosen name; BOTH level-(k−1) prototypes own the
  *     shared zone name, so the chosen name's two containers fan out the path
  *     per hop — §1.2/§2.2). NO handler bodies, NO clone-instance: the tree is
- *     compiled by the path enumeration (Σ 2^k for k=1..11 + root = 2^12 − 1 =
- *     4095 path-states pinned to 23 nodes — E2E-1 by construction). The
- *     per-method component fields (values/link) are pure data on the
- *     prototypes — the fork-stress-data.js:125-132 shapes, minus the
- *     `handlers`/`stress:handler` residue (the derived model has no
+ *     compiled by the path enumeration (Σ 2^k for k=1..depth−1 + root =
+ *     2^depth − 1 path-states pinned to 2·depth−1 nodes — E2E-1 by
+ *     construction). The per-method component fields (values/link) are pure
+ *     data on the prototypes — the fork-stress-data.js:125-132 shapes, minus
+ *     the `handlers`/`stress:handler` residue (the derived model has no
  *     after-compile expansion).
  *
- *  2. NODE side (builder): `buildPathForkSurface(method)` compiles the
+ *  2. NODE side (builder): `buildPathForkSurface(method, depth)` compiles the
  *     envelope once (translate → register → compilePath per node →
  *     emitElements → diffMinimal) and returns the full surface;
- *     `pathForkServerData(method)` is the server reference (expected census +
- *     the hashed PAR-5 shape signature); `pathForkSsrSample(method)` renders
- *     the FIRST ops through the REAL SSRFragmentAdapter (PAR-5 parity sample
- *     — the full 4095-element fragment is ~190MB and is never embedded;
- *     parity is the signature). Used by scripts/path-fork-page.mjs.
+ *     `pathForkServerData(method, depth)` is the server reference (expected
+ *     census + the hashed PAR-5 shape signature); `pathForkSsrSample(method)`
+ *     renders the FIRST ops through the REAL SSRFragmentAdapter (PAR-5 parity
+ *     sample — the full 2^depth−1-element fragment is ~180MB at d12 and is
+ *     never embedded; parity is the signature). Used by scripts/path-fork-page.mjs.
  *
  *  3. PAGE (browser, guarded by `typeof document !== 'undefined'` so the
  *     builder can import the data without a DOM): CORE-ONLY imports
@@ -65,7 +68,7 @@ import { levelCss, cssPropForLevel, linkDefForLevel } from './fork-stress-fixtur
 
 /**
  * LegacyInitialData for the static placement-path page: the root plus TWO
- * prototype nodes per layer 1..11 (slot 'a' = div, slot 'b' = span).
+ * prototype nodes per layer 1..depth−1 (slot 'a' = div, slot 'b' = span).
  * Level-1 prototypes are template.root.children (family in-tree, producers
  * only — they own the shared 'zone-1' name); layers ≥ 2 are content payload
  * roots (contentNodes-owned, family-'in-tree' per the F-13 minting) carrying
@@ -74,8 +77,9 @@ import { levelCss, cssPropForLevel, linkDefForLevel } from './fork-stress-fixtur
  * per-slot value css stressor (shared pure helper from fork-stress-fixture.js
  * — demo-only, NOT a core API).
  *
- * Census (placement-path-spec §5.2): 23 nodes → 4095 path-states (Σ 2^k,
- * k=1..11, + root), one per (prototype, owner-path) pair back to root.
+ * Census (placement-path-spec §5.2): 2·depth−1 nodes → 2^depth − 1
+ * path-states (Σ 2^k, k=1..depth−1, + root), one per (prototype, owner-path)
+ * pair back to root. d12: 23 nodes / 4095; d14: 27 nodes / 16383.
  *
  * `method` picks the SINGLE mechanism the whole tree relies on — the derived
  * trio (placement / values / link — derived-fork-variants-review §5.1):
@@ -88,10 +92,10 @@ import { levelCss, cssPropForLevel, linkDefForLevel } from './fork-stress-fixtur
  * NO clone-instance: the derived model has no after-compile expansion — the
  * per-method fields are pure data on the prototypes.
  */
-export function pathForkLegacyData(method = 'placement') {
+export function pathForkLegacyData(method = 'placement', depth = 12) {
   const children = []
   const payload = []
-  for (let k = 1; k <= 11; k += 1) {
+  for (let k = 1; k <= depth - 1; k += 1) {
     for (const slot of ['a', 'b']) {
       const proto = {
         type: slot === 'a' ? 'div' : 'span',
@@ -170,8 +174,8 @@ export function pathForkLegacyData(method = 'placement') {
 
 /** Compile the static envelope: translate → register → ONE path-enumeration
  *  pass (compilePath per node) → emitElements → diffMinimal. */
-export function buildPathForkSurface(method = 'placement') {
-  const doc = pathForkLegacyData(method)
+export function buildPathForkSurface(method = 'placement', depth = 12) {
+  const doc = pathForkLegacyData(method, depth)
   const translated = translateLegacy(doc)
   const events = new EventBridge()
   const supervisor = new Supervisor({ events })
@@ -230,30 +234,34 @@ export function pathForkShapeSig(ops) {
   return shapeSigOfTrees(treeFromOps(ops))
 }
 
-/** Expected census + parity reference embedded in the page (server-data). */
-export function pathForkServerData(method = 'placement') {
-  const s = buildPathForkSurface(method)
+/** Expected census + parity reference embedded in the page (server-data).
+ *  Depth-parameterized (2026-08-16 — the d14 scaling probes): d12 = 23 nodes
+ *  / 4095 states; d14 = 27 nodes / 16383 states. */
+export function pathForkServerData(method = 'placement', depth = 12) {
+  const s = buildPathForkSurface(method, depth)
+  const states = 2 ** depth - 1
   return {
     method,
+    depth,
     expected: {
-      nodes: 23,
-      states: 4095,
-      elements: 4095,
+      nodes: 2 * depth - 1,
+      states,
+      elements: states,
       unplaced: 0,
       cloneOps: 0,
-      // per-level element counts: 2^k at level k (k = 1..11)
-      perLevel: Array.from({ length: 11 }, (_, i) => 2 ** (i + 1)),
+      // per-level element counts: 2^k at level k (k = 1..depth−1)
+      perLevel: Array.from({ length: depth - 1 }, (_, i) => 2 ** (i + 1)),
     },
     serverTreeSig: pathForkShapeSig(s.ops),
   }
 }
 
 /** Cheap SSR SAMPLE: applies only the FIRST `maxOps` ops (root element + early
- *  structure) through the SSRFragmentAdapter. The full 4095-element fragment
- *  is ~190MB (nested binary tree — O(n·depth) serialization) and is NEVER
- *  rendered for embedding; parity is the hashed shape signature. */
-export function pathForkSsrSample(method = 'placement', maxOps = 300) {
-  const { ops } = buildPathForkSurface(method)
+ *  structure) through the SSRFragmentAdapter. The full 2^depth−1-element
+ *  fragment is ~180MB at d12 (nested binary tree — O(n·depth) serialization)
+ *  and is NEVER rendered for embedding; parity is the hashed shape signature. */
+export function pathForkSsrSample(method = 'placement', maxOps = 300, depth = 12) {
+  const { ops } = buildPathForkSurface(method, depth)
   const adapter = new SSRFragmentAdapter()
   applyOps(adapter, ops.slice(0, maxOps))
   return adapter.toString()
@@ -276,6 +284,12 @@ if (typeof document !== 'undefined') {
   const expected = serverData.expected
   // the derived-family method: 'placement' (baseline) | 'values' | 'link'
   const method = serverData.method ?? 'placement'
+  // depth-parameterized family (2026-08-16 — the d14 scaling probes): d12 =
+  // 23 nodes / 4095 path-states; d14 = 27 nodes / 16383 path-states.
+  const depth = serverData.depth ?? 12
+  const familyNodes = 2 * depth - 1
+  const familyStates = 2 ** depth - 1
+  const familyLayers = depth - 1
 
   // ---- profiling -----------------------------------------------------------
   // Measured sections: load (translate), compile (the ONE path-enumeration
@@ -353,11 +367,11 @@ if (typeof document !== 'undefined') {
     const checksT0 = now()
     const trees = treeFromOps(ops)
     // ---- node census (placement-path-spec §5.2) ----------------------------
-    await runner.check('node census: registered=23, in-tree=23, unplaced=0, destroyed=0, cloneOps=0', () => {
+    await runner.check(`node census: registered=${familyNodes}, in-tree=${familyNodes}, unplaced=0, destroyed=0, cloneOps=0`, () => {
       const all = supervisor.allNodes()
-      if (all.length !== 23) throw new Error(`registered: expected 23, got ${all.length}`)
+      if (all.length !== familyNodes) throw new Error(`registered: expected ${familyNodes}, got ${all.length}`)
       const inTree = all.filter((n) => !n.destroyed && n.isInTree)
-      if (inTree.length !== 23) throw new Error(`in-tree: expected 23 (22 prototypes contentNodes-owned + root), got ${inTree.length}`)
+      if (inTree.length !== familyNodes) throw new Error(`in-tree: expected ${familyNodes} (${familyNodes - 1} prototypes contentNodes-owned + root), got ${inTree.length}`)
       const unplaced = all.filter((n) => !n.destroyed && n.state === 'unplaced')
       if (unplaced.length !== 0) throw new Error(`unplaced: expected 0, got ${unplaced.length}`)
       const destroyed = all.filter((n) => n.destroyed)
@@ -369,9 +383,9 @@ if (typeof document !== 'undefined') {
     })
 
     // ---- state census -------------------------------------------------------
-    await runner.check('state census: 4095 path-states, distinct pathKeys, forkKey = pathKey on every state', () => {
-      if (actionable.length !== 4095) throw new Error(`states: expected 4095, got ${actionable.length}`)
-      if (new Set(actionable.map((s) => s.pathKey)).size !== 4095) throw new Error('pathKeys not distinct')
+    await runner.check(`state census: ${familyStates} path-states, distinct pathKeys, forkKey = pathKey on every state`, () => {
+      if (actionable.length !== familyStates) throw new Error(`states: expected ${familyStates}, got ${actionable.length}`)
+      if (new Set(actionable.map((s) => s.pathKey)).size !== familyStates) throw new Error('pathKeys not distinct')
       for (const s of actionable) {
         if (s.forkKey !== s.pathKey) throw new Error(`forkKey ≠ pathKey on ${s.pathKey}`)
         if (s.pathKey !== 'root' && !s.pathKey.startsWith('root/')) throw new Error(`bad pathKey ${s.pathKey}`)
@@ -380,8 +394,8 @@ if (typeof document !== 'undefined') {
     })
 
     // ---- element census + per-level counts ----------------------------------
-    await runner.check('element census: 4095 elements, wires = pathKeys; level k has exactly 2^k elements', () => {
-      if (els.length !== 4095) throw new Error(`elements: expected 4095, got ${els.length}`)
+    await runner.check(`element census: ${familyStates} elements, wires = pathKeys; level k has exactly 2^k elements`, () => {
+      if (els.length !== familyStates) throw new Error(`elements: expected ${familyStates}, got ${els.length}`)
       const perLevel = {}
       for (const e of els) {
         const s = stateByWire.get(e.wire)
@@ -393,7 +407,7 @@ if (typeof document !== 'undefined') {
         const k = layerOfState(s)
         perLevel[k] = (perLevel[k] ?? 0) + 1
       }
-      for (let k = 1; k <= 11; k += 1) {
+      for (let k = 1; k <= familyLayers; k += 1) {
         const n = 2 ** k
         if (perLevel[k] !== n) throw new Error(`level ${k}: expected ${n} elements, got ${perLevel[k]}`)
       }
@@ -405,7 +419,7 @@ if (typeof document !== 'undefined') {
         const attr = el.getAttribute?.('stress:layer')
         if (attr) domLevels[Number(attr)] = (domLevels[Number(attr)] ?? 0) + 1
       }
-      for (let k = 1; k <= 11; k += 1) {
+      for (let k = 1; k <= familyLayers; k += 1) {
         if (domLevels[k] !== 2 ** k) throw new Error(`DOM level ${k}: expected ${2 ** k} elements, got ${domLevels[k]}`)
       }
       if (elOfWire('root') == null) throw new Error('root element missing')
@@ -425,7 +439,7 @@ if (typeof document !== 'undefined') {
         const pair = `${prop}=${m[1].trim()}`
         ;(seenPairs[level] ??= new Set()).add(pair)
       }
-      for (let k = 1; k <= 11; k += 1) {
+      for (let k = 1; k <= familyLayers; k += 1) {
         const mkPair = (slot) => {
           const css = levelCss(k, slot)
           const m = /^([a-z-]+):\s*([^;]+);/.exec(css.style)
@@ -444,7 +458,7 @@ if (typeof document !== 'undefined') {
       for (const s of actionable) {
         const k = layerOfState(s)
         // the root state is a non-leaf too (it declares the same derived prop)
-        const nonLeaf = k === undefined || k < 11
+        const nonLeaf = k === undefined || k < familyLayers
         if (s.props?.['stress:expanded'] !== nonLeaf) {
           throw new Error(`state ${s.pathKey} (L${k}): stress:expanded ${s.props?.['stress:expanded']}, expected ${nonLeaf}`)
         }
@@ -510,33 +524,33 @@ if (typeof document !== 'undefined') {
           }
         }
         // the adapter-key asymmetry pin: exactly the covered layers' elements
-        // (L2..L11 = 4094 − 2) are re-typed (no forkKey, bare-wire keys); the
-        // root + L1 (3) are standalone (forkKey = pathKey)
+        // (L2..L11 = 4094 − 2 at d12) are re-typed (no forkKey, bare-wire
+        // keys); the root + L1 (3) are standalone (forkKey = pathKey)
         const retyped = els.filter((e) => e.forkKey === undefined)
-        if (retyped.length !== 4092) {
-          throw new Error(`link-derived: expected 4092 re-typed def-chain elements (no forkKey), got ${retyped.length}`)
+        if (retyped.length !== familyStates - 3) {
+          throw new Error(`link-derived: expected ${familyStates - 3} re-typed def-chain elements (no forkKey), got ${retyped.length}`)
         }
       })
     }
 
     // ---- treeFromOps reconstructs the binary shape --------------------------
-    await runner.check('treeFromOps: one root; full binary tree (2 children per non-leaf); 2048 leaves at depth 11; 4095 nodes total', () => {
+    await runner.check(`treeFromOps: one root; full binary tree (2 children per non-leaf); ${2 ** familyLayers} leaves at depth ${familyLayers}; ${familyStates} nodes total`, () => {
       if (trees.length !== 1 || trees[0].wire !== 'root') throw new Error(`expected a single root tree, got ${trees.length}`)
       let leaves = 0
       let total = 0
-      const walk = (t, depth) => {
+      const walk = (t, d) => {
         total += 1
         if (t.children.length === 0) {
           leaves += 1
-          if (depth !== 11) throw new Error(`leaf at depth ${depth}, expected 11`)
+          if (d !== familyLayers) throw new Error(`leaf at depth ${d}, expected ${familyLayers}`)
           return
         }
-        if (t.children.length !== 2) throw new Error(`non-leaf at depth ${depth} with ${t.children.length} children`)
-        for (const c of t.children) walk(c, depth + 1)
+        if (t.children.length !== 2) throw new Error(`non-leaf at depth ${d} with ${t.children.length} children`)
+        for (const c of t.children) walk(c, d + 1)
       }
       walk(trees[0], 0)
-      if (total !== 4095) throw new Error(`tree total: expected 4095, got ${total}`)
-      if (leaves !== 2048) throw new Error(`leaves: expected 2048, got ${leaves}`)
+      if (total !== familyStates) throw new Error(`tree total: expected ${familyStates}, got ${total}`)
+      if (leaves !== 2 ** familyLayers) throw new Error(`leaves: expected ${2 ** familyLayers}, got ${leaves}`)
     })
 
     // ---- PAR-5 parity against the builder's SSR snapshot --------------------
@@ -545,9 +559,10 @@ if (typeof document !== 'undefined') {
       if (clientSig !== serverData.serverTreeSig) throw new Error('server/client shape signatures differ')
     })
     await runner.check('SSR sample present: the builder\'s SSRFragmentAdapter fragment (truncated) is embedded', () => {
-      // the full 4095-element fragment is ~180MB (nested binary tree, O(n·depth)
-      // serialization) — NOT embedded; parity is the shape signature above, and
-      // the embedded sample proves the builder's SSR pipeline ran
+      // the full 2^depth−1-element fragment is ~180MB at d12 (nested binary
+      // tree, O(n·depth) serialization) — NOT embedded; parity is the shape
+      // signature above, and the embedded sample proves the builder's SSR
+      // pipeline ran
       if (typeof serverData.expectedSsrSample !== 'string' || !serverData.expectedSsrSample.includes('<app')) {
         throw new Error('expected SSR sample missing from the page data')
       }
@@ -555,7 +570,13 @@ if (typeof document !== 'undefined') {
     PROFILE.checksMs = now() - checksT0
 
     const methodLabel = { placement: 'static', values: 'values-derived', link: 'link-derived' }[method] ?? 'static'
-    runner.summary(`Path Fork (${methodLabel}) — 23 nodes / 4095 path-states`)
+    // the d12 banner keeps the original format; deeper families (the d14
+    // scaling probes) carry the depth marker so the smoke can pin them apart
+    runner.summary(
+      depth === 12
+        ? `Path Fork (${methodLabel}) — ${familyNodes} nodes / ${familyStates} path-states`
+        : `Path Fork (${methodLabel}) — depth ${depth}: ${familyNodes} nodes / ${familyStates} path-states`,
+    )
 
     // ---- census published for the smoke guard -------------------------------
     const censusNodes = supervisor.allNodes()

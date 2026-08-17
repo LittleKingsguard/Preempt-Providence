@@ -155,10 +155,13 @@ export function forkStressLegacyData(depth, method) {
 cycle label) selects the ONE mechanism the whole tree relies on. The builder
 (`scripts/fork-stress-data-page.mjs`) passes it through to
 `forkStressLegacyData(depth, method)` and embeds it in `server-data.method`;
-`demo/build-demo.mjs` emits three d12 pages:
-`fork-stress-data-{placement,values,link}-d12.html`; `demo-smoke.mjs` seeds
-+ imports each and asserts the `Fork Stress (data: <method>) — depth 12`
-banner.
+`demo/build-demo.mjs` emits the single-method variants at BOTH depths:
+`fork-stress-data-{placement,values,link}-d{12,14}.html`; `demo-smoke.mjs` seeds
++ imports each and asserts the `Fork Stress (data: <method>) — depth <dN>`
+banner. (d14 variants added 2026-08-16 as the SCALING PROBES — d12 of each
+method records its own placement baseline + the 2.5× totals ratio guard.
+RE-SCOPED 2026-08-16: the d14 variants are BUILT-BUT-NOT-SMOKE-RUN —
+manual/browser scaling probes; the automated smoke runs the d12 family only.)
 
 - **placement** — the tree is pure `clone-instance` structure. No component
   refs, no sources, no defs. Every node's `stress:kind` is `placement`;
@@ -210,11 +213,13 @@ page now emits exactly 4095.
   "handlers fed in through data" contract (declaration in data, body by
   name).
 - Build + smoke wiring mirror the existing fork-stress pages
-  (`fork-stress-data-d{2,4,6,8,9,10,11,12}.html` + the three
-  `fork-stress-data-{placement,values,link}-d12.html` variants): a builder
+(`fork-stress-data-d{2,4,6,8,9,10,11,12,14}.html` + the
+  `fork-stress-data-{placement,values,link}-d{12,14}.html` variants — the
+  d14 set is the scaling probe, built but NOT run in the automated smoke (the
+  smoke runs depths 2..12; RE-SCOPED 2026-08-16)): a builder
   (`scripts/fork-stress-data-page.mjs`) embeds the LEGACY envelope as
   `preempt-initial-data` + `server-data` (expectations); `demo-smoke.mjs`
-  seeds + imports each depth; `demo/index.html` lists the page.
+  seeds + imports each depth 2..12; `demo/index.html` lists the page.
 - The page's runner checks are the red/green gate (self-verifying demo).
 
 ## Lessons learned (implementation)

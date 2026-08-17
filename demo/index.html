@@ -72,14 +72,17 @@
           <a class="back" href="fork-stress-d9.html">d9</a> ·
           <a class="back" href="fork-stress-d10.html">d10</a> ·
           <a class="back" href="fork-stress-d11.html">d11</a> ·
-          <a class="back" href="fork-stress-d12.html">d12</a>)
+          <a class="back" href="fork-stress-d12.html">d12</a> ·
+          <a class="back" href="fork-stress-d14.html">d14</a>)
           — a demo-only stress test of the forking render system. A binary tree
           is built layer by layer, each layer adding 2 children per node through
           one of the four runtime child-creation mechanisms, cycling: placement →
           component values → component link → idempotent handler → repeats with
           different placement/component names. Depth dN has 2<sup>N</sup> − 1 nodes
           (d12 = 4095 nodes; the memoized, cycle-only parent-chain classifier keeps
-          every layer actionable).
+          every layer actionable). <strong>d14 = 16383 nodes is the SCALING
+          PROBE</strong> — the d12 totals are too fast to expose pipeline scaling
+          (timer-drain + findEl fixes), so depth 14 re-exposes the pass-2 shape.
           Every node renders its <code>stress:layers</code> chain (depth +
           tree-back-to-root). The page uses ONLY core (<code>dist/core/*</code>) and
           handler code — no demo-side render machinery.
@@ -102,7 +105,14 @@
           — the same topology with the per-method component fields on the prototypes
           (values: every path-state renders its own component-provided value; link:
           the def chain re-types every level — 4095 elements post the covered-leaf
-          gate, DEFECT #21). Zero clones for every method.
+          gate, DEFECT #21). Zero clones for every method. The
+          <strong>d14 trio</strong> (<a class="back" href="path-fork-data-placement-d14.html">placement</a> ·
+          <a class="back" href="path-fork-data-values-d14.html">values</a> ·
+          <a class="back" href="path-fork-data-link-d14.html">link</a> —
+          27 nodes → 16383 path-states) is the derived family's SCALING PROBE:
+          the d12 enumeration (~2.8s) dominates the d12 totals and hides
+          emit-side scaling; d14 re-exposes it (same per-region pins, the d14
+          placement page is the d14 family baseline).
         </li>
         <li>
           <a class="back" href="fork-stress-data-d12.html"><strong>Fork stress (data-driven) — prototype-driven assembly from a legacy envelope</strong></a>
@@ -113,13 +123,18 @@
           <a class="back" href="fork-stress-data-d9.html">d9</a> ·
           <a class="back" href="fork-stress-data-d10.html">d10</a> ·
           <a class="back" href="fork-stress-data-d11.html">d11</a> ·
-          <a class="back" href="fork-stress-data-d12.html">d12</a>)
+          <a class="back" href="fork-stress-data-d12.html">d12</a> ·
+          <a class="back" href="fork-stress-data-d14.html">d14</a>)
           — single-method d12 variants:
           <a class="back" href="fork-stress-data-placement-d12.html">placement-only</a> ·
           <a class="back" href="fork-stress-data-values-d12.html">values-only</a> ·
           <a class="back" href="fork-stress-data-link-d12.html">link-only</a>
+          — plus the d14 SCALING-PROBE variants:
+          <a class="back" href="fork-stress-data-placement-d14.html">placement-only</a> ·
+          <a class="back" href="fork-stress-data-values-d14.html">values-only</a> ·
+          <a class="back" href="fork-stress-data-link-d14.html">link-only</a>
           — the same deep binary stress tree (2<sup>N</sup> − 1 nodes, d12 =
-          4095), assembled from a LEGACY envelope alone: <code>preempt-initial-data</code>
+          4095, d14 = 16383), assembled from a LEGACY envelope alone: <code>preempt-initial-data</code>
           carries the legacy format (root + two prototype nodes per layer — one
           per sibling slot) which <code>translateLegacy</code> parses. Each
           prototype declares its <code>stress-expand</code> after-compile handler
@@ -130,6 +145,29 @@
           demo-fixtures, no demo-side render machinery; the shared
           <code>levelCss</code>/<code>cssPropForLevel</code> helpers are pure
           data-derivation (demo-only, not core APIs).
+        </li>
+        <li>
+          <a class="back" href="handlers-scenarios.html"><strong>handlers-scenarios — mocked real-world handler scenarios (blind test #5)</strong></a>
+          — ten use-case cards driven ENTIRELY from legacy JSON envelopes:
+          auth dropdown (AUTH-SEAM), comments panel (layer-apply injection),
+          weather card, cart badge, search filter, tabs, form validation,
+          throwing-handler containment, toast + dismiss, multi-handler nodes.
+          Handler bodies ship as function-STRING data; the page module is
+          core-only plumbing (docs/specs/handlers-scenarios.md).
+        </li>
+        <li>
+          <a class="back" href="hooks-scenarios.html"><strong>hooks-scenarios — the value-provider slot (SPA scenarios)</strong></a>
+          — one SPA envelope with three real-world scenarios driving the HOOKS
+          contract (docs/specs/hooks-map-review.md §7, the value-provider
+          slot): a theme switcher, a user/session panel, and a live
+          counter/badge. Each scenario's controls are authored buttons whose
+          function-STRING bodies write <code>hooks.&lt;name&gt;</code> through
+          the managed channel (<code>clientAPI.apply</code> — never direct
+          node access); the source→target cascade repopulates the consumer
+          readouts. The page checks pin the USER CONTRACT: repeated hook
+          writes never grow the layer stack (one deterministic
+          <code>hook-&lt;name&gt;</code> replace-in-place layer — O(1) after N
+          writes) and the cascade actually re-renders the consumers.
         </li>
       </ul>
     </section>

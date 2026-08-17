@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — hooks-scenarios: the value-provider slot (SPA scenarios)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .scenario-card, .theme-readout, .session-readout, .counter-readout {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .theme-readout, .session-readout, .counter-readout { background: #eef4ff; font-weight: bold; }
+    .counter-badge {
+      background: #ffe08a; border: 1px solid #b98; border-radius: 10px;
+      display: inline-block; padding: 0 8px; font-weight: bold; }
+    .control-btn { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; margin-right: 4px; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="hooks-scenarios">
+  <!--
+    ============================================================================
+    HOOKS-SCENARIOS — the VALUE-PROVIDER SLOT SPA page
+    (docs/specs/hooks-map-review.md §7 — contract amendment B, the user's
+    directive: single-page application scenarios implementing the hooks logic).
+
+    ONE legacy JSON envelope (translate.md §1 LegacyInitialData). The root
+    carries the three value providers (`theme` / `user` / `counter` — scalar
+    `component` value bindings) + the authored `hooks: ['theme','user',
+    'counter']` field; the scenario CARDS hold the consumer readouts
+    (component target bindings + derived `bindings.*` bakes) and the CONTROL
+    buttons, whose click bodies ship as function-STRING data. Every control
+    body writes its hook through the MANAGED CHANNEL
+    (`context.clientAPI.apply(id, [{targetProp: 'hooks.<name>', mode:
+    'replace', value}])`) — never direct node access (api.md §1 letter;
+    hooks-map-review §7.2 pin 1). The page module (demo/hooks-scenarios.js)
+    is CORE ONLY (dist/core/*) + the envelope data + the harness; a use case
+    needing an outside script/function is a data-authoring mistake.
+
+    The page harness mirrors the supervisor pass-2 flush (compile ->
+    recordResolved -> emit -> apply); the runner checks dispatch the control
+    clicks and assert the SPEC chain: hook write -> source->target cascade ->
+    re-rendered consumer output. The USER CONTRACT is checked directly:
+    repeated hook writes never grow the layer stack (ONE deterministic
+    `hook-<name>` replace-in-place layer — the layer stack stays O(1) after
+    N writes) and the cascade actually repopulates the consumers.
+
+    SECTION MAP (scenario -> card -> documentation)
+    ----------------------------------------------------------------------------
+    S1  Theme switcher                #theme-card  -- hooks.theme writes
+                                    (light/dark) flow from the control buttons
+                                    to the readout (text + derived themeName
+                                    bake) via the source->target cascade
+                                    (hooks-map-review §7.2 pins 1/2/3)
+    S2  User/session panel            #session-card -- login/logout writes
+                                    hooks.user, the readout repopulates
+    S3  Live counter / badge          #counter-card -- the tick controls read
+                                    the readout's derived count bake
+                                    (props.count) and write hooks.counter;
+                                    the badge follows every external update
+    S4  User contract                 -- the smoke/census pins: N hook writes
+                                    -> ONE hook-<name> layer (the layer stack
+                                    stays O(1)); hook-name-unresolved /
+                                    hook-mode-blocked rejections;
+                                    hook-seam-exempt no-op on a def-shaped
+                                    provider; the ONE-source anchor round-trip
+    ============================================================================
+  -->
+
+  <main>
+    <h1>hooks-scenarios — the value-provider slot (SPA scenarios)</h1>
+    <p class="goals">
+      Three real-world scenarios driving the HOOKS contract
+      (<code>docs/specs/hooks-map-review.md</code> §7 — the value-provider
+      slot): a theme switcher, a user/session panel, and a live
+      counter/badge. Each card's controls are authORED buttons whose
+      function-STRING click bodies write <code>hooks.&lt;name&gt;</code>
+      through <code>clientAPI.apply</code> (the managed channel — never
+      direct node access); the source→target cascade repopulates the consumer
+      readouts. The runner checks assert the write → cascade → rendered-output
+      chain and pin the USER CONTRACT: N writes land ONE deterministic
+      <code>hook-&lt;name&gt;</code> replace-in-place layer (the layer stack
+      stays O(1)). The banner is <code>hooks-scenarios</code>; a profile line
+      (<code>[hooks-scenarios:profile]</code>) mirrors the other pages'
+      <code>acc()</code> instrumentation.
+    </p>
+
+    <!-- Framework input: the SPA legacy envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <div class="card-mount" id="mount-main"></div>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="hooks-scenarios.js"></script>
+</body>
+</html>

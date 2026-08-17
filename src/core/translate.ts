@@ -110,6 +110,16 @@ export interface LegacyNodeData {
    *  merged declaration (derived-state.md §2/§8: layers have no legacy
    *  home; the round-trip is value-equivalent, not shape-exact) */
   derived?: DerivedDecl
+  /** HOOKS (hooks-map-review.md §7, contract amendment B) — the
+   *  value-provider slot: a STRING-ARRAY of same-node provider component
+   *  names (each names a `component` binding with a `reference` matching
+   *  the entry — the `component-source-duplicate` guard means at most one
+   *  anchor per name). The names round-trip; the VALUE lives in the
+   *  component binding (the hook write mirrors the provider anchor's
+   *  value — ONE source). A non-array field, or a non-string member,
+   *  warns `hooks-shape-invalid` + skips (the children-shape-invalid
+   *  discipline). */
+  hooks?: string[]
 }
 
 export interface LegacyTemplateData {
@@ -371,6 +381,25 @@ function baseFrom(
     // data throws `derived-invalid` at translate, never reaches compile
     validateDerived(derived)
     base.derived = derived
+  }
+  if (nodeData.hooks !== undefined) {
+    // HOOKS §7.2 pin 4 — the K4 unknown-key gap is closed FOR THIS FIELD:
+    // `hooks` is a schema-known key with `hooks-shape-invalid` containment
+    // (a non-array field, or a non-string member, warns + skips — the
+    // children-shape-invalid discipline; never a silent drop)
+    if (!Array.isArray(nodeData.hooks)) {
+      warn(warnings, 'hooks-shape-invalid', path, 'hooks must be an array of hook names; field skipped')
+    } else {
+      const kept: string[] = []
+      nodeData.hooks.forEach((h, i) => {
+        if (typeof h !== 'string' || h.length === 0) {
+          warn(warnings, 'hooks-shape-invalid', `${path}.hooks[${i}]`, 'a hook name must be a non-empty string; entry skipped')
+          return
+        }
+        kept.push(h)
+      })
+      if (kept.length > 0) base.hooks = kept
+    }
   }
   return base
 }
@@ -1042,6 +1071,11 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   data.type = node.type
   if (node.content !== undefined) data.content = node.content
   if (node.props && Object.keys(node.props).length > 0) data.props = { ...node.props }
+  // HOOKS §7.2 pin 4 — the authored field round-trips (the derived/handlers
+  // precedent): the NAMES ship on reverse; the VALUE ships via the component
+  // binding (`binding.value = a.value` below — the mirror makes the anchor
+  // the ONE value source). Re-translate reproduces the same field + value.
+  if (node.base.hooks !== undefined && node.base.hooks.length > 0) data.hooks = [...node.base.hooks]
   if (node.css && Object.keys(node.css).length > 0) {
     // D3/F7 — a serialized style STRING ALWAYS parses back to the
     // Record<string,string> OBJECT (no provenance tracking: a pre-serialized

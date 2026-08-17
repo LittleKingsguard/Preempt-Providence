@@ -2,6 +2,7 @@ import type { ForkPathKey, MinimalElement, RenderAdapter, RenderOp } from './ren
 import type { Anchor, NodeRef } from './types.js'
 import { kebabKey } from './translate.js'
 import { defPrototypesFor, defRootPrototypeFor } from './registry.js'
+import { providerValueFromLink } from './resolve.js'
 
 /** D4/STL-1 — serialize one css.cssDef value (a `StyleNode[]` or a single
  *  StyleNode `{selector, styles}`) into RULE STRINGS `{selector}{kebab-case
@@ -67,6 +68,18 @@ export function wireKey(wire: NodeRef, forkKey?: ForkPathKey): string {
   return forkKey === undefined ? wire : `${wire}\x00${forkKey}`
 }
 
+/** DEFECT #22 (2026-08-16) — the bare-wire prefix-scan counter: findEl's
+ *  bare fallback iterates the whole store (O(n) per lookup) — composite-keyed
+ *  path-states + bare append wires made the initial renders O(n²) (the
+ *  Firefox-profiler findEl hotspot; the derived pages' apply ≈ 1.2s in the
+ *  shim). The applyOps/treeFromOps O(1) bare indexes keep the count linear;
+ *  this diagnostic pins the regression class deterministically (no timing). */
+let findElScans = 0
+
+export function findElScanCount(): number {
+  return findElScans
+}
+
 /** ForkKey-aware element lookup: exact (wire, forkKey) match first, then —
  *  for a BARE wire (append/remove ops carry the arm wire without its
  *  forkKey, render.ts:57/71) — any element stored under `wireKey(wire, …)`
@@ -87,6 +100,7 @@ export function findEl<P>(
   for (const store of stores) {
     if (!store) continue
     for (const [k, v] of store) {
+      findElScans += 1
       if (k.startsWith(prefix)) return v
     }
   }
@@ -152,13 +166,29 @@ type ForkAware<P, E> = RenderAdapter<P, E> & {
 export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): void {
   const fk = adapter as unknown as ForkAware<P, E>
   const created = new Map<string, P>()
+  // DEFECT #22 (2026-08-16) — the per-call O(1) bare-wire index over the
+  // created elements: the append/remove ops carry BARE wires while the
+  // path-states are stored composite (wireKey(wire, forkKey)) — findEl's
+  // prefix fallback was O(n) per lookup (O(n²) initial renders — the
+  // Firefox-profiler findEl hotspot). The index resolves bare wires in O(1)
+  // within the call; the persistent (adapter wires) fallback stays for
+  // elements mounted by earlier calls.
+  const createdBare = new Map<string, P>()
   const persistent = (fk.wires ?? fk.fragments)
-  const has = (w: NodeRef, forkKey?: ForkPathKey): P | undefined => findEl([created, persistent], w, forkKey)
+  const has = (w: NodeRef, forkKey?: ForkPathKey): P | undefined => {
+    if (forkKey !== undefined) return findEl([created, persistent], w, forkKey)
+    const hit = createdBare.get(w)
+    if (hit !== undefined) return hit
+    return findEl([persistent], w)
+  }
   for (const op of ops) {
     switch (op.kind) {
-      case 'create':
-        created.set(wireKey(op.wire, op.forkKey), fk.createEl!(op.type, op.wire, op.forkKey))
+      case 'create': {
+        const el = fk.createEl!(op.type, op.wire, op.forkKey)
+        created.set(wireKey(op.wire, op.forkKey), el)
+        createdBare.set(op.wire, el)
         break
+      }
       case 'set':
         fk.setProp!(op.wire, op.name, op.value, op.forkKey)
         break
@@ -172,6 +202,7 @@ export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): v
         const w = has(op.wire, op.forkKey)
         if (w && fk.removeEl) fk.removeEl(op.wire, op.forkKey)
         created.delete(wireKey(op.wire, op.forkKey))
+        createdBare.delete(op.wire)
         break
       }
       case 'styles':
@@ -185,6 +216,10 @@ export function applyOps<P, E>(adapter: RenderAdapter<P, E>, ops: RenderOp[]): v
 export function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => boolean }): RenderTree[] {
   const skip = opts?.skip
   const byWire = new Map<string, RenderTree>()
+  // DEFECT #22 — the O(1) bare-wire index over the created trees (the edges'
+  // owner/child wires are bare; findEl's prefix fallback was O(n) per edge —
+  // O(n²) on the demo checks' treeFromOps).
+  const byWireBare = new Map<string, RenderTree>()
   const edges: Array<{ owner: string; child: string }> = []
   const propVals = new Map<string, Record<string, unknown>>()
   for (const op of ops) {
@@ -193,6 +228,7 @@ export function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => b
         const tree: RenderTree = { wire: op.wire, type: op.type, props: {}, children: [] }
         if (op.forkKey !== undefined) tree.forkKey = op.forkKey
         byWire.set(wireKey(op.wire, op.forkKey), tree)
+        byWireBare.set(op.wire, tree)
         break
       }
       case 'set':
@@ -213,8 +249,8 @@ export function treeFromOps(ops: RenderOp[], opts?: { skip?: (name: string) => b
   for (const e of edges) {
     // forkKey-aware resolution: append edges carry the bare arm wire while
     // create entries live under wireKey(wire, forkKey) (DEFECT #1 completion)
-    const owner = findEl([byWire], e.owner)
-    const child = findEl([byWire], e.child)
+    const owner = byWireBare.get(e.owner) ?? byWire.get(e.owner)
+    const child = byWireBare.get(e.child) ?? byWire.get(e.child)
     if (owner && child) owner.children.push(child)
   }
   const childWires = new Set(edges.map((e) => e.child))
@@ -686,8 +722,12 @@ function emitDefChildTree(
       (a) => (a.role === 'target' || a.role === 'duplex') && typeof a.target === 'string' && a.options.seam !== undefined,
     )
     if (seamTarget) {
-      const value = seamTarget.link.anchorsOf('source').find((p) => p.value !== undefined)?.value
-        ?? seamTarget.link.anchorsOf('duplex').find((p) => p.value !== undefined)?.value
+      // HOOKS (§7.2 pin 2) — the emit-time def-fill read goes through
+      // `providerValueFromLink` (per-anchor `providerValueFor`). A
+      // def-named hook never lands (hook-seam-exempt), so this stays the
+      // authored def for seam names; the hook layer first / authored
+      // fallback precedence holds for every provider anchor.
+      const value = providerValueFromLink(seamTarget.link)
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
         const nested = value as { type?: string; content?: unknown; children?: unknown; css?: Record<string, unknown> }
         if (seamTarget.options.seam === 'content') {

@@ -18,7 +18,7 @@ import { SingleParentError } from './errors.js'
 import { Link } from './link.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
 import { registerNode, scheduleSweep, markPending, resolveNodeRef, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, unregisterMinted, handlerDef, compileHandlerBody } from './registry.js'
-import { resolveArms, resolvePathTargets } from './resolve.js'
+import { resolveArms, resolvePathTargets, providerValueFor, providerValueFromLink, hookWriteGuard } from './resolve.js'
 import { logCompilePass, compilePassLogEnabled } from './debug.js'
 import { validateDerived, applyDerived } from './derived.js'
 // detachNodeSafe (the shared sibling-preserving detach, DEFECT #12) is the
@@ -265,15 +265,18 @@ function pathChildrenFor(node: Node, pathNodes: ReadonlySet<NodeId>): NodeId[] {
 }
 
 /** Seed a bindings record with the node's OWN published provider values
- *  (source/duplex anchors): `bindings[name] = anchor.value` when the value is
+ *  (source/duplex anchors): `bindings[name] = <provider value>` when the value is
  *  set and the name is not already present (skip-if-present — a resolved/
  *  consumed value or a same-name duplex resolution wins). Consumed-first key
- *  order is preserved (own names are appended only). */
+ *  order is preserved (own names are appended only). HOOKS (§7.2 pin 2) —
+ *  the value read goes through `providerValueFor`: the node-local
+ *  `hook-<name>` layer value wins over the authored `anchor.value`. */
 function seedOwnBindings(node: Node, bindings: Record<string, unknown>): void {
   for (const a of node.anchors) {
     if (typeof a.target !== 'string') continue
-    if ((a.role === 'source' || a.role === 'duplex') && a.value !== undefined) {
-      if (bindings[a.target] === undefined) bindings[a.target] = a.value
+    if (a.role === 'source' || a.role === 'duplex') {
+      const v = providerValueFor(node, a, a.target)
+      if (v !== undefined && bindings[a.target] === undefined) bindings[a.target] = v
     }
   }
 }
@@ -689,6 +692,11 @@ export class Node {
         // derived rides the layer-copy loop too (spec §2): a clone inherits
         // its prototype's derived declarations (fork-stress assembly)
         derived: l.derived ? { ...l.derived, ...(l.derived.props ? { props: { ...l.derived.props } } : {}) } : undefined,
+        // HOOKS (§7.2 pin-6 e — clone-shadowing): a hook layer rides the
+        // copy (the clone carries the field via base + its OWN local layer
+        // + the mirrored anchor value — no global registry)
+        value: l.value,
+        hookFallback: l.hookFallback,
       }))
     }
     copy.compileLocal()
@@ -1282,9 +1290,71 @@ export class Node {
       } else if (m.targetProp.startsWith('css.')) {
         const key = m.targetProp.slice('css.'.length)
         this.addLayer(makeLayer(id, src, { css: { [key]: m.value } }))
+      } else if (m.targetProp.startsWith('hooks.')) {
+        // HOOKS (hooks-map-review.md §7 — the value-provider slot): a
+        // `hooks.<name>` write lands ONE deterministic `hook-<name>`
+        // replace-in-place layer (the user's single-source constraint —
+        // NEVER the seq-based `slice-${seq}` scheme above; the reserved
+        // `hook-` prefix avoids collision with arbitrary layer-apply ids).
+        // Defensive containment here (warn + skip, never throw); the
+        // supervisor's state-slice pre-check already rejected the op-level
+        // failures (`hook-name-unresolved` / `hook-mode-blocked`) and
+        // warned the seam-exempt no-op before this ever runs.
+        this.applyHookSlice(m.targetProp.slice('hooks.'.length), m.mode, m.value, src)
       }
     }
     scheduleSweep(true)
+  }
+
+  /** HOOKS §7.3 — the hook write: resolve the name against the node's own
+   *  source/duplex anchors (`hook-name-unresolved` / `hook-seam-exempt`
+   *  containment), mirror the provider anchor's value (`a.value = value`) so
+   *  serializeNode/loadState/nodeToLegacy ship ONE value source (the anchor
+   *  — they already ship `a.value`; zero changes there; the FIELD carries
+   *  only the NAMES — the value lives in the component binding), and land
+   *  ONE `hook-<name>` layer holding the VALUE ONLY — no anchors (removeLayer
+   *  safety, DEFECT #10), no props keys (no authored-prop collision — the
+   *  value rides the layer's dedicated `value` slot). Same-value writes
+   *  short-circuit (the seam-content precedent). `mode` is 'replace' only
+   *  (`hook-mode-blocked`). `value: undefined` CLEARS the hook: the layer is
+   *  removed and the authored value (preserved as `hookFallback` at the
+   *  first write) restores to the anchor. */
+  private applyHookSlice(name: string, mode: LayerMutationList[number]['mode'], value: unknown, src: string | undefined): void {
+    if (name.length === 0) {
+      console.warn(`hook-name-unresolved at ${this.id}: hooks.<name> needs a name; mutation skipped`)
+      return
+    }
+    if (mode !== 'replace') {
+      console.warn(`hook-mode-blocked at ${this.id}: hooks.${name} accepts 'replace' only; mutation skipped`)
+      return
+    }
+    const guard = hookWriteGuard(this, name)
+    if (!guard.ok) {
+      if (guard.code === 'hook-name-unresolved') {
+        console.warn(`hook-name-unresolved at ${this.id}: no source/duplex anchor named "${name}"; mutation skipped`)
+      } else {
+        console.warn(`hook-seam-exempt at ${this.id}: "${name}" is a seam/def-shaped provider; hook write skipped (a hook write would tear down the seam)`)
+      }
+      return
+    }
+    const anchor = guard.anchor
+    const layerId = `hook-${name}`
+    const existing = this.layers.find((l) => l.id === layerId)
+    if (value === undefined) {
+      // clear: remove the hook layer, restore the authored value
+      if (existing !== undefined) {
+        anchor.value = (existing as { hookFallback?: unknown }).hookFallback
+        this.removeLayer(layerId)
+      }
+      return
+    }
+    if (existing !== undefined && existing.value === value) return
+    if (existing !== undefined) {
+      this.addLayer(makeLayer(layerId, src, { value, hookFallback: (existing as { hookFallback?: unknown }).hookFallback }))
+    } else {
+      this.addLayer(makeLayer(layerId, src, { value, hookFallback: anchor.value }))
+    }
+    anchor.value = value
   }
 
   private applyPropSlice(id: string, key: string, mode: LayerMutationList[number]['mode'], value: unknown, src: string | undefined): void {
@@ -1398,8 +1468,12 @@ export class Node {
       }
       if (seam === undefined) continue
       const link = linkOf(a)
-      const value = link.anchorsOf('source').find((p) => p.value !== undefined)?.value
-        ?? link.anchorsOf('duplex').find((p) => p.value !== undefined)?.value
+      // HOOKS (§7.2 pin 2/5) — the seam def read goes through
+      // `providerValueFromLink` (per-anchor `providerValueFor`: hook layer
+      // first, authored value fallback). A def-named hook can never land
+      // (hook-seam-exempt blocks the write), so this stays the authored
+      // def for seam names — the guard, not the read, protects the seam.
+      const value = providerValueFromLink(link)
       if (seam === 'content') {
         // ALS-7 (G28) — content-target text delivery: the def's own `content`
         // field (when the def has one) lands as a layer `content` VALUE,

@@ -590,8 +590,10 @@ The fork-stress-data page (`demo/fork-stress-data.js`; spec
 `docs/specs/fork-stress-data.md`) is re-expressed from clone-instance
 assembly to the static model:
 
-- The legacy envelope carries the root + **22 prototype nodes** (two per
-  layer × 11 layers — the existing prototype shape, fork-stress-data.md
+- The legacy envelope carries the root + **2·(depth−1) prototype nodes** (two
+  per layer × (depth−1) layers — depth-parameterized 2026-08-16 for the d14
+  scaling probes; d12 = 22 prototypes × 11 layers, d14 = 26 × 13 — the
+  existing prototype shape, fork-stress-data.md
   §1.3/§"Data envelope"), each prototype carrying:
   - producer side: `placement: { placementName: '<zone-<k>>' }` — the R2.2
     sibling-shared owner-name topology: BOTH level-(k−1) prototypes own the
@@ -604,9 +606,13 @@ assembly to the static model:
     level k ≥ 2 (a single request name per node — the chosen name; the
     level-1 prototypes and root are producers only).
 - **No handler bodies, no `clone-instance`, no after-compile expansion.**
-  The tree is compiled by the §2 path enumeration: 4095 path-states
-  (Σ 2^k for k=1..11 + root = 2^12 − 1; R2.2 bijection) pinned to 23 graph
-  nodes. E2E-1 holds by construction: no node creation beyond the
+  The tree is compiled by the §2 path enumeration: 2^depth − 1 path-states
+(Σ 2^k for k=1..depth−1 + root; R2.2 bijection — d12 = 4095 pinned to 23
+   graph nodes, d14 = 16383 pinned to 27) — the depth parameterization and
+   the d14 trio are the SCALING PROBES (2026-08-16, §5.2 census table;
+   RE-SCOPED 2026-08-16: the d14 pages are BUILT-BUT-NOT-SMOKE-RUN — the
+   automated smoke carries the d12 family only).
+  E2E-1 holds by construction: no node creation beyond the
   prototypes at any pipeline stage — the contentNodes-ownership minting
   (§6.2 translate row) adds ANCHORS, never nodes (10.af.1(b)).
 - The runtime fork-stress page (`docs/specs/fork-stress.md`) is KEPT as-is
@@ -632,13 +638,19 @@ KEPT for the runtime pages, re-pinned per the F-13 reading below):
 | profile | census fields published to the profile line (fork-stress-data.js:592-618 pattern) + smoke ratio guard (demo-smoke.mjs:284-295 — placement baseline + TODO, §8 Q6/§10.ad) |
 
 **The derived-family census (derived-fork-variants-review §5.1 — the static
-page is now a THREE-variant family, all IDENTICAL per-method):**
+page is now a THREE-variant family at TWO depths, all IDENTICAL per-method — the
+d14 rows are the SCALING PROBES, added 2026-08-16; RE-SCOPED 2026-08-16: the
+d14 pages are BUILT-BUT-NOT-SMOKE-RUN — manual/browser scaling probes, the
+automated smoke pins the d12 family only):**
 
 | Page (method) | registered | states | elements | cloneOps | passes |
 | --- | --- | --- | --- | --- | --- |
-| `path-fork-data.html` (placement-derived — the family baseline) | 23 | 4095 | 4095 | 0 | 1 |
+| `path-fork-data.html` (placement-derived d12 — the d12 family baseline) | 23 | 4095 | 4095 | 0 | 1 |
 | `path-fork-data-values-d12.html` (values-derived) | 23 | 4095 | 4095 | 0 | 1 |
 | `path-fork-data-link-d12.html` (link-derived) | 23 | 4095 | 4095 (post the covered-leaf def-fill gate, DEFECT #21 — render.md DFC-1) | 0 | 1 |
+| `path-fork-data-placement-d14.html` (placement-derived d14 — the d14 family baseline) | 27 | 16383 | 16383 | 0 | 1 |
+| `path-fork-data-values-d14.html` (values-derived) | 27 | 16383 | 16383 | 0 | 1 |
+| `path-fork-data-link-d14.html` (link-derived) | 27 | 16383 | 16383 | 0 | 1 |
 
 The link-derived element census holds ONLY because the covered-childless
 def-fill gate (render-helpers.ts `coveredChildless`) suppresses the covered
@@ -760,7 +772,7 @@ implementation: the final review returned **PROCEED-TO-IMPLEMENT**
 | Q3 | **Per-path event emission.** | per-path events for the affected set; the focused-node filter lifts to the affected set; the "≤1 `state` event per node per tick" letter dies — per-path keys fall out of `forkKey = pathKey` (events.ts needs no code change). | §9 Q3, §10.ac.4 |
 | Q4 | **The runtime fork-stress page's fate.** | both ship: the runtime page is kept (census asserts kept, re-pinned per F-13) and the static page is added alongside. | §9 Q4, §10.af.1 F-13 |
 | Q5 | **Legacy first-match-break nuance.** | preference-ordered first-match-with-known-container wins; every zone of the chosen name gets an instance; silent abort on less-favored update alerts (trigger identity + relevance pre-check). | §9 Q5, §10.z C-2/C-3 |
-| Q6 | **Bootstrap cost shape.** | DEFERRED at round 1; decided at round 4; RE-SPLIT 2026-08-16 (derived-fork-variants-review §5.2): the static page became a THREE-variant family — the RUNTIME family keeps its total-ratio guard (2.5× asserted vs the placement baseline, demo-smoke.mjs:290-301) and the 2× tripwire against the placement-derived total; the DERIVED family pins **per-region emit/diff/apply ratios vs the placement-derived page** (NOT totals — totals are compile-enumeration-dominated and insensitive to EMIT-side blow-ups), recorded as `[derived-fork:baseline]` + `[derived-fork:pin]` lines. The former "static page is its own reference, no method variants" framing is SUPERSEDED (§10.ad N-5, §10.af R-5). | §9 Q6, §10.ad |
+| Q6 | **Bootstrap cost shape.** | DEFERRED at round 1; decided at round 4; RE-SPLIT 2026-08-16 (derived-fork-variants-review §5.2): the static page became a THREE-variant family — the RUNTIME family keeps its total-ratio guard (2.5× asserted vs the placement baseline, demo-smoke.mjs:290-301) and the 3× tripwire against the placement-derived total (re-baselined 2026-08-16 — isolated-subprocess smoke measurement, ~2.1-2.7× honest at both depths); the DERIVED family pins **per-region emit/diff/apply ratios vs the placement-derived page** (NOT totals — totals are compile-enumeration-dominated and insensitive to EMIT-side blow-ups), recorded as `[derived-fork:baseline]` + `[derived-fork:pin]` lines. The former "static page is its own reference, no method variants" framing is SUPERSEDED (§10.ad N-5, §10.af R-5). | §9 Q6, §10.ad |
 | Q7 | **Path-key stability under moves.** | relocation cost accepted: any re-zone/move re-compiles downstream (subtree re-key ⇒ element re-create); documented as a known performance drain, optimizable later; the incremental guarantees apply to non-placement mutations (E2E-2/3) and additions (E2E-4). | §9 Q7 |
 | Q8 | **Component resolution inside path-states.** | path-only resolution (the state's own single-parent chain to root); verified: identical ancestor trees ⇒ identical bindings ⇒ identity = pathKey alone (§2.2). | §9 Q8, §10.aa R2-Q4, §10.ab |
 
