@@ -32,6 +32,15 @@ export interface RenderNodeState {
    *  (the NAMES only; the VALUE rides the anchors' `value` — the mirror
    *  keeps ONE source, SER-R1). */
   hooks?: string[]
+  /** HOOKS-ARRAY (§9.4 item 1) — the kind discriminator record ships
+   *  alongside the names; loadState re-validates the closed union at the
+   *  schema boundary (SER-R1). */
+  hooksKind?: Record<string, string>
+  /** HOOKS-ARRAY (OPTION C — §9.2 pin 5) — the batch PAYLOAD records keyed
+   *  by hook name. Rows are DATA (ship once); the minted nodes are DERIVED
+   *  (serialize-excluded via the origin-layer filter). loadState re-seeds
+   *  them so a re-mint can reproduce the batch. */
+  batches?: Record<string, unknown>
 }
 
 export type SerializedRenderDoc = {
@@ -117,6 +126,8 @@ export function serializeNode(node: Node): RenderNodeState {
   if (content !== undefined) state.content = content
   if (node.derived !== undefined) state.derived = node.derived
   if (node.base.hooks !== undefined && node.base.hooks.length > 0) state.hooks = [...node.base.hooks]
+  if (node.base.hooksKind !== undefined && Object.keys(node.base.hooksKind).length > 0) state.hooksKind = { ...node.base.hooksKind }
+  if (node.batches && Object.keys(node.batches).length > 0) state.batches = { ...node.batches }
   // deterministic anchor order for stable round-trips
   state.anchors.sort((x, y) => {
     const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, duplex: 3, target: 4, container: 5, content: 6, component: 7 }
@@ -152,6 +163,8 @@ interface SeededNode {
   forkKey?: string
   derived?: DerivedDecl
   hooks?: string[]
+  hooksKind?: Record<string, string>
+  batches?: Record<string, unknown>
 }
 
 function assertNoLiveTargets(v: unknown): void {
@@ -206,6 +219,43 @@ function parseNodeState(v: unknown): SeededNode {
     }
     seed.hooks = o.hooks as string[]
   }
+  if (o.hooksKind !== undefined) {
+    // HOOKS-ARRAY §9.4 item 1 — the kind record rides the schema boundary
+    // (SER-R1): a non-object value, a non-string key, or a kind outside the
+    // closed union (value/component/placement) is rejected here.
+    if (typeof o.hooksKind !== 'object' || o.hooksKind === null || Array.isArray(o.hooksKind) || Object.keys(o.hooksKind).length === 0) {
+      throw new Error('NodeSchema-shape-mismatch')
+    }
+    for (const [name, kind] of Object.entries(o.hooksKind)) {
+      if (name.length === 0 || typeof kind !== 'string' || (kind !== 'value' && kind !== 'component' && kind !== 'placement')) {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+    }
+    seed.hooksKind = o.hooksKind as Record<string, string>
+  }
+  if (o.batches !== undefined) {
+    // HOOKS-ARRAY (OPTION C) — the batch record rides the schema boundary
+    // (SER-R1): a non-object value is rejected; the record shape is
+    // re-validated (prototypeName string, rows array, layerId string,
+    // mintKind in the closed union).
+    if (typeof o.batches !== 'object' || o.batches === null || Array.isArray(o.batches) || Object.keys(o.batches).length === 0) {
+      throw new Error('NodeSchema-shape-mismatch')
+    }
+    for (const [name, rec] of Object.entries(o.batches)) {
+      if (name.length === 0 || typeof rec !== 'object' || rec === null) throw new Error('NodeSchema-shape-mismatch')
+      const r = rec as Record<string, unknown>
+      if (typeof r.prototypeName !== 'string' || !Array.isArray(r.rows) || typeof r.layerId !== 'string') {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+      if (r.mintKind !== undefined && r.mintKind !== 'component' && r.mintKind !== 'placement') {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+      if (r.placementName !== undefined && typeof r.placementName !== 'string') {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+    }
+    seed.batches = o.batches as Record<string, unknown>
+  }
   return seed
 }
 
@@ -228,6 +278,39 @@ export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
   // the template's derived rule is validated at the same schema boundary as
   // every content entry (derived-state.md §7)
   validateDerived((template as { derived?: unknown }).derived)
+  // HOOKS-ARRAY §9.4 item 1 (SER-R1) — the template's kind record is
+  // validated at the same boundary: a malformed `hooksKind` (non-object,
+  // empty, or a kind outside the closed union) is rejected like any other
+  // malformed schema member.
+  const templateHooksKind = (template as { hooksKind?: unknown }).hooksKind
+  if (templateHooksKind !== undefined) {
+    if (typeof templateHooksKind !== 'object' || templateHooksKind === null || Array.isArray(templateHooksKind) || Object.keys(templateHooksKind).length === 0) {
+      throw new Error('NodeSchema-shape-mismatch')
+    }
+    for (const [name, kind] of Object.entries(templateHooksKind)) {
+      if (name.length === 0 || typeof kind !== 'string' || (kind !== 'value' && kind !== 'component' && kind !== 'placement')) {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+    }
+  }
+  // HOOKS-ARRAY (OPTION C, SER-R1) — the template's batch records are
+  // validated at the same boundary (shape + the closed mintKind union).
+  const templateBatches = (template as { batches?: unknown }).batches
+  if (templateBatches !== undefined) {
+    if (typeof templateBatches !== 'object' || templateBatches === null || Array.isArray(templateBatches) || Object.keys(templateBatches).length === 0) {
+      throw new Error('NodeSchema-shape-mismatch')
+    }
+    for (const rec of Object.values(templateBatches)) {
+      if (typeof rec !== 'object' || rec === null) throw new Error('NodeSchema-shape-mismatch')
+      const r = rec as Record<string, unknown>
+      if (typeof r.prototypeName !== 'string' || !Array.isArray(r.rows) || typeof r.layerId !== 'string') {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+      if (r.mintKind !== undefined && r.mintKind !== 'component' && r.mintKind !== 'placement') {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+    }
+  }
   const groups = new Map<string, Array<{ seed: SeededNode; idx: number }>>()
   const seeds: SeededNode[] = []
   for (const item of doc.content) {

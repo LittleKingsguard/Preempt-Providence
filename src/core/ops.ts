@@ -1,7 +1,7 @@
-import type { AnchorDecl, LayerApplyOp, LayerMutationList, LinkConfigNameHub, MutationOp, NodeBaseData, NodeId, PlacementAttachOp, PlacementTrigger, StateSliceOp } from './types.js'
+import type { AnchorDecl, BatchRecord, LayerApplyOp, LayerMutationList, LinkConfigNameHub, MutationOp, NodeBaseData, NodeId, PlacementAttachOp, PlacementTrigger, RowsClearOp, RowsMintOp, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
 import { Node, findCycle, ancestorConsumesZone } from './node.js'
-import { markPending, registerMinted } from './registry.js'
+import { markPending, registerMinted, defPrototypesFor } from './registry.js'
 import { Link } from './link.js'
 
 export interface OpContext {
@@ -191,6 +191,114 @@ export function layerApply(op: LayerApplyOp, ctx: OpContext): { minted: NodeId[]
   return { minted, doorways: [target.id, ...minted] }
 }
 
+/** HOOKS-ARRAY (CONTRACT AMENDMENT C §9.2 pins 3/5 — options C) — the
+ *  rows-mint executor: ONE atomic mint op. Resolves the prototype BY NAME
+ *  (the `prototypeName` → the per-name component Link's translate-minted def
+ *  prototypes), then mints ONE family node per raw data row (each row's
+ *  fields become VALUE-BEARING source anchors on the minted node), marks
+ *  each minted node's `originLayer` + registers it, applies the batch layer
+ *  on the target, and records the PAYLOAD (the `batches[hookName]` record —
+ *  Option C, the single control handle). The layerId is NODE-SCOPED
+ *  (`hook-${target.id}-${hookName}-rows` — DEFECT #23: the module-level
+ *  mintedByLayer/mintedByOrigin registry keys by origin string, so an
+ *  unscoped id would let one node's teardown cross-destroy another's set).
+ *  FAIL-WITH-WARNING: a `prototypeName` with no prototypes throws
+ *  `rows-prototype-unresolved` (the supervisor rejects the op + warns) —
+ *  never a silent zero-row mint. Re-applying the SAME hookName REPLACES the
+ *  batch (the same-layerId replace pin — distinct from layer-apply's no-op);
+ *  payload-control teardown lives in the supervisor (a `rows-clear` op / the
+ *  `batches` record removal). */
+export function rowsMint(op: RowsMintOp, ctx: OpContext): { minted: NodeId[]; doorways: NodeId[]; layerId: string } {
+  const target = toNode(op.target)
+  const layerId = `hook-${target.id}-${op.hookName}-rows`
+  const hub = target.hubFor ?? ctx.hub ?? undefined
+  // prototype-by-name resolution — the per-name component Link's def
+  // prototypes (registry.js:78-86); FAIL-WITH-WARNING on empty.
+  const protoLink = hub.linkFor(op.prototypeName, 'component')
+  const protos = defPrototypesFor(protoLink)
+  if (protos.length === 0) {
+    console.warn(`rows-prototype-unresolved at ${target.id}: prototype "${op.prototypeName}" has no def prototypes; rows-mint rejected`)
+    throw new ApplyError('rows-prototype-unresolved' as never, { prototypeName: op.prototypeName })
+  }
+  const shape = protos[0]!
+  // PAYLOAD-CONTROLLED replace: a re-mint on the SAME hookName first tears
+  // down the prior batch (the control record + layer removal) so the minted
+  // set never accumulates (the single-source constraint).
+  const existing = target.layers.find((l) => l.id === layerId)
+  if (existing !== undefined) {
+    target.removeLayer(layerId)
+  }
+  // §9.4 item 7 — the `rows: []` CLEAR contract: an empty batch is a CLEAR,
+  // NOT a sticky empty record (distinct from the B5 `{children: []}` no-op).
+  // After the prior-batch teardown above, nothing mints and no record is
+  // written — the hook is simply absent.
+  if ((op.rows ?? []).length === 0) {
+    const batches = (target as unknown as { batches?: Record<string, BatchRecord> }).batches ?? {}
+    delete batches[op.hookName]
+    return { minted: [], doorways: [target.id], layerId }
+  }
+  const minted: NodeId[] = []
+  const fam = target.familyLinkFor()
+  let priority = fam.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
+  for (const row of op.rows ?? []) {
+    const node = new Node({ ...row, type: row.type ?? shape.type, css: row.css ?? shape.css } as NodeBaseData, hub)
+    node.originLayer = layerId
+    registerMinted(node.id, layerId)
+    minted.push(node.id)
+    node.addAnchor('child', node, { priority }, fam)
+    priority += 1
+    // the row's fields as VALUE-BEARING source anchors (per-row provider
+    // anchors — consumers resolving a field name fan out per row, §9.2 pin 6)
+    for (const key of Object.keys(row)) {
+      if (key === 'type' || key === 'css' || key === 'children' || key === 'props' || key === 'content' || key === 'handlers') continue
+      const fieldLink = hub.linkFor(key, 'component')
+      const anchor = node.addAnchor('source', key, {}, fieldLink)
+      if (anchor !== null) anchor.value = (row as unknown as Record<string, unknown>)[key]
+    }
+    // §9.4 item 8 — the 'placement' kind: each minted row requests the
+    // SPECIFIED target placement (a `content` anchor on the shared per-name
+    // placement Link — the consumer side of the zone registry, P3 §1.1). The
+    // zone itself rides the EXISTING placement-attach/content-anchor surface
+    // (a container node offering the zone via its `container` anchor on the
+    // same per-name placement Link); this op only mints the rows' REQUEST
+    // side — no placement-path machinery, no F3-veto interplay here.
+    if (op.mintKind === 'placement' && op.placementName !== undefined) {
+      node.addAnchor('content', op.placementName, {}, hub.linkFor(op.placementName, 'placement'))
+    }
+  }
+  const decls = minted.map((_, i) => ({ role: 'child', target, options: { priority: i, origin: layerId } } as AnchorDecl))
+  target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls })
+  // OPTION C — the payload record (the single control handle)
+  const batch: BatchRecord = {
+    prototypeName: op.prototypeName,
+    rows: op.rows,
+    layerId,
+    mintKind: op.mintKind,
+    ...(op.placementName !== undefined ? { placementName: op.placementName } : {}),
+  }
+  ;(target as unknown as { batches?: Record<string, BatchRecord> }).batches ??= {}
+  ;(target as unknown as { batches: Record<string, BatchRecord> }).batches[op.hookName] = batch
+  return { minted, doorways: [target.id, ...minted], layerId }
+}
+
+/** HOOKS-ARRAY (§9.4 item 6 — the PAYLOAD-CONTROLLED teardown). Operates on
+ *  the `batches[hookName]` record (the SINGLE handle): deletes the record
+ *  and tears down the minted set via the record's layerId with the
+ *  NO-PROMOTION override (rowsTeardown) — the minting apparatus
+ *  (`removeLayer`/`teardownMinted`/the registry) is internal, never invoked
+ *  directly by external code. An unknown hookName (no record) is a contained
+ *  no-op (applied, nothing to clear). */
+export function rowsClear(op: RowsClearOp, ctx: OpContext): { doorways: NodeId[]; layerId?: string } {
+  const target = toNode(op.target)
+  const batches = (target as unknown as { batches?: Record<string, BatchRecord> }).batches ?? {}
+  const record = batches[op.hookName]
+  if (record === undefined) return { doorways: [target.id] }
+  delete batches[op.hookName]
+  target.rowsTeardown(record.layerId)
+  target.removeLayer(record.layerId)
+  return { doorways: [target.id], layerId: record.layerId }
+}
+
 export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } {
   switch (op.kind) {
     case 'attach': {
@@ -227,6 +335,16 @@ export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } 
     case 'layer-apply': {
       const la = op as LayerApplyOp
       const res = layerApply(la, ctx)
+      return { doorways: res.doorways }
+    }
+    case 'rows-mint': {
+      const rm = op as RowsMintOp
+      const res = rowsMint(rm, ctx)
+      return { doorways: res.doorways }
+    }
+    case 'rows-clear': {
+      const rc = op as RowsClearOp
+      const res = rowsClear(rc, ctx)
       return { doorways: res.doorways }
     }
     case 'clone-instance': {

@@ -11,7 +11,13 @@ directory.
 
 | ID | Defect | Found by | Class | Fix shape | Record |
 | --- | --- | --- | --- | --- | --- |
-| — none — | (all defects fixed; the FIXED table below is the active fix history) | | | | |
+| — none — | (all open defects fixed; the FIXED table below is the active fix history) | | | | |
+
+## FIXED
+
+| ID | Defect | Fixed (date) | Fix |
+| --- | --- | --- | --- |
+| **DEFECT #23** | The recorded rows-mint batch layerId `hook-<name>-rows` (hooks-array-injection-review.md §9.2 pin 2/5) is HOOK-NAME-SCOPED only, NOT node-scoped — but `mintedByLayer` is a module-level registry and `mintedByOrigin` scans it by ORIGIN STRING with no scoping to the calling node; `teardownMinted` resolves through that global scan. Two nodes each declaring `hooksKind: {items: 'component'}` would mint under the SAME origin string `hook-items-rows`, so a `removeLayer('hook-items-rows')` on ONE node's batch would tear down BOTH nodes' minted sets (cross-node collision — payload identifiers NOT unique as recorded; also destroys the keyed-reuse association) | 2026-08-19 | NODE-SCOPED layerId landed in the `rowsMint` executor (src/core/ops.ts): `hook-${target.id}-${hookName}-rows` — the module-level `mintedByOrigin` scan now matches only one node's set per id; the legacy-bridge `legacy-kids-${nodeRef}` precedent (src/core/legacy-handlers.ts:224) mirrored; the `batches[hookName]` record key stays the hook name (node-local) while the LAYER id + origin marker are node-qualified. Tests: tests/unit/hooks-array.test.ts (node-scoped layerId pins incl. the round-trip record). Record: hooks-array-injection-review.md §9.2 pin 2/5 + §9.8 |
 
 ## FIXED
 

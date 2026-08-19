@@ -16,8 +16,8 @@ import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes } from './hand
 import type { HandlerContext, HandlerPhase } from './handlers.js'
 import { unregisterContentNode, resolveNodeRef } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
-import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply } from './ops.js'
-import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger } from './types.js'
+import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
+import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
 
 let journalSeq = 0
 
@@ -369,13 +369,13 @@ export class Supervisor {
     minted?: NodeId[]
   } {
     const node = op.node as Node | undefined
-    if (!node && op.kind !== 'clone-instance' && op.kind !== 'layer-apply') {
+    if (!node && op.kind !== 'clone-instance' && op.kind !== 'layer-apply' && op.kind !== 'rows-mint' && op.kind !== 'rows-clear') {
       return { status: 'rejected', error: { code: 'unknown-node' } }
     }
 
     // before-compile: phase handlers run before the op executes (and its
     // compile/apply happens). Errors are contained by dispatchPhase.
-    const phaseTarget = op.kind === 'layer-apply' ? (op.target as Node | undefined) : node
+    const phaseTarget = op.kind === 'layer-apply' || op.kind === 'rows-mint' || op.kind === 'rows-clear' ? (op.target as Node | undefined) : node
     if (phaseTarget) this.runPhaseOnNode('before-compile', phaseTarget)
 
     try {
@@ -417,6 +417,21 @@ export class Supervisor {
               }
               console.warn(`hook-seam-exempt at ${(node as Node).id}: "${name}" is a seam/def-shaped provider; hook write skipped (a hook write would tear down the seam)`)
               continue
+            }
+            // HOOKS-ARRAY §9.4 item 2 (CONTRACT AMENDMENT C) — the KIND gate:
+            // a scalar `hooks.<name>` VALUE write targets the VALUE-provider
+            // surface only. A name DECLARED as a non-value kind
+            // (`'component'`/`'placement'` — the minting kinds) is
+            // rejected with `hook-kind-mismatch`: those hooks mint nodes;
+            // they never take a scalar hook write. Undeclared names and
+            // explicit `'value'` kinds keep the shipped state-slice
+            // behavior.
+            const kind = ((node as Node).base.hooksKind ?? {})[name]
+            if (kind !== undefined && kind !== 'value') {
+              return {
+                status: 'rejected',
+                error: { code: 'hook-kind-mismatch', detail: `hooks.${name}: declared kind "${kind}" mints nodes — scalar value writes are rejected` },
+              }
             }
           }
         }
@@ -583,6 +598,76 @@ export class Supervisor {
         for (const id of res.minted) this.markPass2(id)
         return { status: 'applied', journalId: entry!.id, dirtied: res.doorways, minted: res.minted }
       }
+      if (op.kind === 'rows-mint') {
+        // HOOKS-ARRAY (CONTRACT AMENDMENT C §9.2 pins 2/3/5) — the rows-mint
+        // op: mint per-row nodes from a prototype by name + register the
+        // minted set (the layer-apply visibility precedent), journal the
+        // batch, and run the MINT-SIDE consumer walk (each minted row's
+        // source anchors' links' target owners markPass2 — the cascade that
+        // the scalar E2E-3 host-scoped walk does not cover, §9.2 pin 7). The
+        // KIND GATE: a declared `hooksKind[hookName]` must admit the op's
+        // kind ('component' yields the component mint; 'placement' the
+        // placement mint) — a mismatch is rejected here (the write-surface
+        // gate, pin 2).
+        const target = op.target as Node | undefined
+        if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
+        const rowsOp = op as unknown as RowsMintOp
+        const declared = (target.base.hooksKind ?? {})[rowsOp.hookName]
+        if (declared !== undefined && declared !== rowsOp.mintKind) {
+          return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: declared kind "${declared}" ≠ op kind "${rowsOp.mintKind}"` } }
+        }
+        if (declared === undefined && rowsOp.mintKind !== 'component') {
+          return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: undeclared hook — only 'component' is implied; declare hooksKind` } }
+        }
+        const res = rowsMint(rowsOp as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes })
+        for (const id of res.minted) {
+          const n = resolveNodeRef(id)
+          if (n) this.registerNode(n)
+        }
+        const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways, minted: res.minted })
+        // MINT-SIDE consumer walk: consumers of any minted row's source/duplex
+        // field names are dirtied + pass-2'ed (the cascade the amendment pins)
+        const consumed = new Set<string>()
+        for (const id of res.minted) {
+          const n = resolveNodeRef(id)
+          if (!n) continue
+          for (const a of n.anchors) {
+            if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+            for (const ta of a.link.anchorsOf('target')) {
+              const consumer = ta.owner
+              if (!consumer || consumed.has(consumer.id)) continue
+              consumed.add(consumer.id)
+              this.markPass2(consumer.id)
+            }
+          }
+        }
+        this.emitStructure('rows-mint', target.id)
+        this.markPass2(target.id)
+        // NOTE: the minted rows are NOT independently pass-2'ed — their
+        // element states are produced by the ancestor/consumer compiles that
+        // include them in the focused slice. Marking each row dirty would
+        // recompile the CONSUMER from the row's NARROW slice (only that row +
+        // its walk path), overwriting the consumer's full multi-provider arm
+        // set with a single-provider result (the pin-6 fan-out must survive
+        // the flush). The consumers marked below compile last and win.
+        const dirtied = [...new Set([...res.doorways, ...consumed])]
+        return { status: 'applied', journalId: entry!.id, dirtied, minted: res.minted }
+      }
+      if (op.kind === 'rows-clear') {
+        // HOOKS-ARRAY (§9.4 item 6) — the PAYLOAD-CONTROLLED teardown: the
+        // `batches[hookName]` record is the single handle (delete it → the
+        // no-promotion rowsTeardown via the record's layerId). The minting
+        // apparatus is never addressed directly.
+        const target = op.target as Node | undefined
+        if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
+        const res = rowsClear(op as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes })
+        const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways })
+        this.emitStructure('rows-clear', target.id)
+        this.markPass2(target.id)
+        return entry
+          ? { status: 'applied', journalId: entry.id, dirtied: res.doorways }
+          : { status: 'applied', dirtied: res.doorways }
+      }
 
       return { status: 'no-usable-state', nodeState: (node as Node)?.state ?? 'unplaced' }
     } catch (e: unknown) {
@@ -624,7 +709,8 @@ export class Supervisor {
     const entry = this.undoStack.pop()!
     this.redoStack.push(entry)
     const kind = entry.op.kind
-    const node = entry.op.node as Node
+    const rawNode = entry.op.node ?? entry.op.target
+    const node = rawNode as Node
     if (!node) return
     const resolved = this.nodes.get(node.id) ?? node
     if (kind === 'attach') {
@@ -632,6 +718,21 @@ export class Supervisor {
       detachNodeSafe(resolved)
     } else if (kind === 'destroy') {
       // destroy is terminal; undo is a no-op for destroyed nodes
+    } else if (kind === 'rows-mint') {
+      // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
+      // CONTROLLED teardown: clear the batch record + rowsTeardown via the
+      // record's layerId (the record is the undo handle; the operation is
+      // redoable by re-applying the journaled mint op).
+      const hookName = (entry.op as { hookName?: string }).hookName
+      if (hookName !== undefined) {
+        const batches = (resolved as unknown as { batches?: Record<string, { layerId: string }> }).batches ?? {}
+        const record = batches[hookName]
+        if (record) {
+          delete batches[hookName]
+          resolved.rowsTeardown(record.layerId)
+          resolved.removeLayer(record.layerId)
+        }
+      }
     }
   }
 

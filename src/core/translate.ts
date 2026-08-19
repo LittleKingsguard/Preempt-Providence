@@ -35,7 +35,7 @@ import { Link } from './link.js'
 import { registerContentNode, registerDefPrototypes, registerDefRootPrototype, defRootPrototypeFor, registerHandlerDef, setTranslateUserData } from './registry.js'
 import { wrapLegacyHandler } from './legacy-handlers.js'
 import { validateDerived } from './derived.js'
-import type { Anchor, DerivedDecl, DerivedExpr, LinkConfigNameHub, NodeBaseData } from './types.js'
+import type { Anchor, DerivedDecl, DerivedExpr, HookKind, LinkConfigNameHub, NodeBaseData } from './types.js'
 export type LegacyHandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
 
 export interface LegacyHandlerDef {
@@ -120,6 +120,17 @@ export interface LegacyNodeData {
    *  warns `hooks-shape-invalid` + skips (the children-shape-invalid
    *  discipline). */
   hooks?: string[]
+  /** HOOKS-ARRAY (§9.4 item 1, CONTRACT AMENDMENT C) — the kind
+   *  discriminator for the hooks declared in `hooks`: a name→HookKind
+   *  record mapping declared hook names to their operation kind
+   *  (`'value'`/`'component'`/`'placement'`). A non-object field warns
+   *  `hooks-kind-shape-invalid` + is skipped; a non-string kind value warns
+   *  `hooks-kind-shape-invalid` + skips that entry; a kind outside the
+   *  closed union warns `hooks-kind-unknown` + skips that entry. A hooks
+   *  name with NO hooksKind entry is implicitly `'value'` (documented
+   *  default — NOT a silent reclassification). The record round-trips
+   *  (baseFrom/nodeToLegacy/serialize/loadState). */
+  hooksKind?: Record<string, HookKind>
 }
 
 export interface LegacyTemplateData {
@@ -399,6 +410,32 @@ function baseFrom(
         kept.push(h)
       })
       if (kept.length > 0) base.hooks = kept
+    }
+  }
+  if (nodeData.hooksKind !== undefined) {
+    // HOOKS-ARRAY §9.4 item 1 — the kind discriminator rides the schema
+    // boundary with `hooks-kind-shape-invalid` / `hooks-kind-unknown`
+    // containment (the hooks-shape-invalid discipline; never a silent drop).
+    if (typeof nodeData.hooksKind !== 'object' || nodeData.hooksKind === null || Array.isArray(nodeData.hooksKind)) {
+      warn(warnings, 'hooks-kind-shape-invalid', path, 'hooksKind must be a name→kind record; field skipped')
+    } else {
+      const kept: Record<string, HookKind> = {}
+      for (const [name, kind] of Object.entries(nodeData.hooksKind)) {
+        if (name.length === 0) {
+          warn(warnings, 'hooks-kind-shape-invalid', `${path}.hooksKind`, 'a hook kind key must be a non-empty name; entry skipped')
+          continue
+        }
+        if (typeof kind !== 'string' || kind.length === 0) {
+          warn(warnings, 'hooks-kind-shape-invalid', `${path}.hooksKind.${name}`, 'a hook kind must be a non-empty string; entry skipped')
+          continue
+        }
+        if (kind !== 'value' && kind !== 'component' && kind !== 'placement') {
+          warn(warnings, 'hooks-kind-unknown', `${path}.hooksKind.${name}`, `unknown hook kind "${kind}" (value/component/placement); entry skipped`)
+          continue
+        }
+        kept[name] = kind as HookKind
+      }
+      if (Object.keys(kept).length > 0) base.hooksKind = kept
     }
   }
   return base
@@ -1076,6 +1113,11 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   // binding (`binding.value = a.value` below — the mirror makes the anchor
   // the ONE value source). Re-translate reproduces the same field + value.
   if (node.base.hooks !== undefined && node.base.hooks.length > 0) data.hooks = [...node.base.hooks]
+  // HOOKS-ARRAY §9.4 item 1 — the kind discriminator round-trips with the
+  // names (baseFrom → nodeToLegacy → baseFrom stays anchor-identical).
+  if (node.base.hooksKind !== undefined && Object.keys(node.base.hooksKind).length > 0) {
+    data.hooksKind = { ...node.base.hooksKind }
+  }
   if (node.css && Object.keys(node.css).length > 0) {
     // D3/F7 — a serialized style STRING ALWAYS parses back to the
     // Record<string,string> OBJECT (no provenance tracking: a pre-serialized

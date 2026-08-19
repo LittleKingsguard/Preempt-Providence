@@ -155,7 +155,58 @@ export interface LayerApplyOp {
   decls: AnchorDecl[]
   nodes: NodeBaseData[]
 }
-export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp|LayerApplyOp
+/** HOOKS-ARRAY (§9.4 items 3-8, CONTRACT AMENDMENT C) — the rows-mint op:
+ *  mints ONE family node per raw data row from a prototype resolved by
+ *  NAME (`prototypeName` → the per-name component Link's def prototypes),
+ *  attaches each row's fields as VALUE-BEARING source anchors, and applies
+ *  a NODE-SCOPED batch layer `hook-${target.id}-${hookName}-rows`
+ *  (DEFECT #23). `kind: 'component'` mints with the components only;
+ *  `kind: 'placement'` ALSO routes the minted set into the specified
+ *  `placementName` target zone. The payload is the CONTROL MECHANISM —
+ *  teardown/deletion operates on the `batches[hookName]` record, never on
+ *  the minting apparatus directly. */
+export interface RowsMintOp {
+  kind: 'rows-mint'
+  target: Node
+  hookName: string
+  /** the mint KIND discriminator (the hook declaration's operation kind):
+   *  `'component'` mints family nodes with the components only; `'placement'`
+   *  ALSO routes the minted set into the specified `placementName` zone. */
+  mintKind: 'component' | 'placement'
+  prototypeName: string
+  placementName?: string
+  rows: NodeBaseData[]
+  sourceName?: string
+}
+/** HOOKS-ARRAY (§9.4 item 6 — the payload-controlled teardown). The op is
+ *  the PAYLOAD-CONTROL: it deletes the `batches[hookName]` record (the
+ *  SINGLE handle) and tears down the minted set via the record's layerId —
+ *  the minting apparatus (`removeLayer`/`teardownMinted`/the registry) is
+ *  INTERNAL and never addressed directly by external code. Rows never
+ *  PROMOTE (a promoted row would reverse-ship as authored content — data
+ *  corruption); the no-promotion override applies to the rows namespace. */
+export interface RowsClearOp {
+  kind: 'rows-clear'
+  target: Node
+  hookName: string
+  sourceName?: string
+}
+/** HOOKS-ARRAY (OPTION C — the batch storage cell, §9.2 pin 5) — the
+ *  PAYLOAD record that is the single control handle for a hook-driven mint
+ *  batch: write it → mint/replace; clear/remove it → payload-controlled
+ *  teardown; read it → the batch + the minted set + the round-trip source.
+ *  Held as a RUNTIME field on Node (`node.batches[hookName]` — base is
+ *  frozen, so the record is a mutable node-level slot), serialized alongside
+ *  the node for the serialized-doc re-mint (rows are DATA, the minted nodes
+ *  are DERIVED). */
+export interface BatchRecord {
+  prototypeName: string
+  rows: NodeBaseData[]
+  layerId: string
+  mintKind: 'component' | 'placement'
+  placementName?: string
+}
+export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp|LayerApplyOp|RowsMintOp|RowsClearOp
 
 export interface LayerMutation {
   /** HOOKS (hooks-map-review.md §7 contract amendment B — the value-provider
@@ -196,7 +247,7 @@ export type ApplyStatus =
   | { status:'no-usable-state'; nodeState: NodeState }
   | { status:'rejected'; error: ApplyError }
 export type ApplyErrorCode = 'unknown-node'|'placement-target-blocked'|'link-config'|'cycle-detected'|'single-parent'
-  |'hook-name-unresolved'|'hook-mode-blocked'
+  |'hook-name-unresolved'|'hook-mode-blocked'|'hook-kind-mismatch'|'rows-prototype-unresolved'
 export interface ApplyError { code: ApplyErrorCode; detail?: unknown }
 
 export type DirtyScope = 'remote'|'anchor-populate'|'sweep-candidate'
@@ -250,7 +301,15 @@ export interface NodeLayer {
    *  the clear path (`value: undefined`) restores it to the anchor. */
   hookFallback?: unknown
 }
-export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[] }
+export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind> }
+/** HOOKS-ARRAY (§9.4 item 1 — CONTRACT AMENDMENT C) — the closed kind union
+ *  a `hooksKind` declaration may name: `'value'` (the shipped §7 scalar
+ *  value-provider slot), `'component'` (the hook mints nodes with
+ *  components), `'placement'` (the hook mints nodes with the SPECIFIED
+ *  TARGET PLACEMENT + components). An unknown kind warns `hooks-kind-unknown`
+ *  at translate + skips that entry; the union is closed (a future kind is a
+ *  spec change). */
+export type HookKind = 'value' | 'component' | 'placement'
 /** ORIGIN-OWNER — the data shape of a layer-apply minted node (family
  *  children only; an `anchors` field is vetoed with the
  *  `layer-apply-anchors-rejected` warn). */

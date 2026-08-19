@@ -2,6 +2,7 @@ import type {
   Anchor,
   AnchorDecl,
   AnchorTarget,
+  BatchRecord,
   CompileResult,
   CompiledState,
   DerivedDecl,
@@ -346,6 +347,17 @@ export class Node {
    *  minted node becomes authored content) and by the doomed path.
    *  Runtime-only; never serialized. */
   originLayer: string | undefined
+  /** HOOKS-ARRAY (OPTION C — the batch storage cell, §9.2 pin 5) — the
+   *  PAYLOAD records for hook-driven mint batches, keyed by hook name. The
+   *  single control handle: write → mint/replace; clear/remove → payload-
+   *  controlled teardown; read → the batch + the minted set + the round-trip
+   *  source. A MUTABLE runtime slot (base is frozen — the record is not
+   *  authored data, it is the runtime payload); serialized alongside the
+   *  node for the serialized-doc re-mint (rows are DATA, the minted nodes
+   *  are DERIVED) and excluded from nodeToLegacy's reverse (the minted
+   *  children are origin-excluded; the record ships only via the serialized
+   *  doc path). */
+  batches: Record<string, BatchRecord> = {}
 
   private readonly _anchors: Anchor[]
   private readonly _dirty: Set<DirtyScope>
@@ -380,6 +392,10 @@ export class Node {
     this.id = id ?? data.id ?? mintNodeId()
     this.base = { ...data }
     Object.freeze(this.base)
+    // HOOKS-ARRAY — seed the batch records from serialized data (the
+    // round-trip source: the serialized-doc path re-mints from these)
+    const seedBatches = (data as unknown as { batches?: Record<string, BatchRecord> }).batches
+    if (seedBatches && typeof seedBatches === 'object') this.batches = { ...seedBatches }
     this.layers = []
     this._anchors = []
     this._dirty = new Set<DirtyScope>()
@@ -670,6 +686,27 @@ export class Node {
           detachNodeSafe(node)
           node.originLayer = undefined
         }
+      }
+      unregisterMinted(id)
+    }
+  }
+
+  /** HOOKS-ARRAY (§9.4 item 6 — payload-controlled teardown, NO-PROMOTION
+   *  override for the rows namespace). Identical to `teardownMinted` EXCEPT
+   *  the survivor-promotion branch is suppressed: a hook-minted row is
+   *  TRANSIENT DATA — promoting it (originLayer cleared + unregistered ⇒
+   *  reverse-emitted as authored content) would ship raw rows the author
+   *  never wrote through nodeToLegacy (payload corruption, the R-1 letter).
+   *  Every minted row of the batch is DOOMED (sibling-preserving detach →
+   *  sweep cascade-destroy) regardless of where it moved. Called internally
+   *  by the PAYLOAD-CONTROL clear — never addressed directly by external
+   *  code. */
+  rowsTeardown(layerId: string): void {
+    for (const id of mintedByOrigin(layerId)) {
+      const node = resolveNodeRef(id)
+      if (node) {
+        detachNodeSafe(node)
+        node.originLayer = undefined
       }
       unregisterMinted(id)
     }
@@ -1326,6 +1363,11 @@ export class Node {
     }
     if (mode !== 'replace') {
       console.warn(`hook-mode-blocked at ${this.id}: hooks.${name} accepts 'replace' only; mutation skipped`)
+      return
+    }
+    const kind = (this.base.hooksKind ?? {})[name]
+    if (kind !== undefined && kind !== 'value') {
+      console.warn(`hook-kind-mismatch at ${this.id}: hooks.${name} declared kind "${kind}" mints nodes; scalar value write skipped`)
       return
     }
     const guard = hookWriteGuard(this, name)

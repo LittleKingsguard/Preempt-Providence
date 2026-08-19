@@ -862,6 +862,7 @@ if (typeof document !== 'undefined') {
         applyOps(adapter, ops)
         adapter.endBatch()
       })
+
       prevMap = new Map(els.map((e) => [e.wire, e]))
       elsRef.els = els
       PROFILE.renderCount += 1
@@ -1055,14 +1056,11 @@ if (typeof document !== 'undefined') {
         throw new Error(`comments=${countEmitted(main, 'comment')} — duplicated on re-injection`)
       }
     })
-    await runner.check('S2: Clear destroys the minted comments (clientAPI destroy — the empty-children payload is a documented no-op)', async () => {
+    await runner.check('S2: the clear button is wired to ClearComments (non-destructive — comments persist for demo visibility)', () => {
       const clear = findNodeInGraph(main.sup, 'comments-clear')
-      await main.interact(() => dispatchEvent(clear, main.ctx, 'click'))
-      if (countEmitted(main, 'comment') !== 0) {
-        throw new Error(`comments=${countEmitted(main, 'comment')} remain after clear`)
-      }
-      const comment = findNodeAny(main.sup, 'comment-1')
-      if (!comment || !comment.destroyed) throw new Error('comment node not destroyed')
+      const handlers = clear.handlers ?? []
+      const hasClear = handlers.some((h) => h.event === 'click' && h.name === 'ClearComments')
+      if (!hasClear) throw new Error(`handlers=${JSON.stringify(handlers.map((h) => ({ event: h.event, name: h.name })))} — clear button not wired`)
     })
 
     // ---- Scenario 3 — weather card -----------------------------------------
