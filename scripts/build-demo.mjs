@@ -228,3 +228,12 @@ async function emitPage(templateName, outName, doc, serverData) {
 {
   await import('./hooks-scenarios-page.mjs')
 }
+
+// ---- page 22: hooks-array-scenarios (the rows-mint + cascade — SPA scenarios) ----
+// The rows-mint op (prototype-by-name, per-row value-bearing source anchors,
+// node-scoped layerId) + a cross-row consumer resolving the multi-provider
+// fan-out. The builder writes demo/hooks-array-scenarios.html (envelope +
+// the expected census) at import.
+{
+  await import('./hooks-array-scenarios-page.mjs')
+}

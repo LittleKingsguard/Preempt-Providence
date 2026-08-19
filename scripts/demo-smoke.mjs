@@ -610,6 +610,54 @@ function assertLegacyShapeCensus(prof) {
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
 
+// ---- hooks-array-scenarios page (the rows-mint + cascade — SPA scenarios) ---
+// One legacy envelope: the root carries a `hooksKind: {'item-list':'component'}`
+// declaration + a pre-minted def prototype for `'item'`. The page module runs
+// `rows-mint` (prototype-by-name, per-row value-bearing source anchors,
+// node-scoped layerId = DEFECT #23 fix); the runner checks assert BOTH sides
+// of the cascade (row source anchors + cross-row consumer fan-out). Census
+// guard: page publishes registered/inTree/... on the profile; builder embeds
+// expected census in server-data. Profile guard: `rowsMinted` must equal 3.
+{
+  const pageHtml = await readFile(`${base}demo/hooks-array-scenarios.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/hooks-array-scenarios.js`).catch((e) => {
+    console.error('hooks-array-scenarios failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__hooksArrayScenariosDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__hooksArrayScenariosProfile
+  if (!prof) {
+    console.error('hooks-array-scenarios profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`hooks-array-scenarios profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  // USER CONTRACT — the rows-mint mints exactly 3 rows
+  if (prof.rowsMinted !== 3) {
+    console.error(`hooks-array-scenarios USER CONTRACT violation: rowsMinted=${prof.rowsMinted}, expected 3`)
+    process.exit(1)
+  }
+  const serverData = JSON.parse(byId.get('server-data').textContent)
+  const exp = serverData.expected.census
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'prototypes', 'cloneOps']) {
+    if (typeof prof[f] !== 'number' || prof[f] !== exp[f]) {
+      console.error(`hooks-array-scenarios census mismatch on "${f}": page=${prof[f]} expected=${exp[f]}`)
+      process.exit(1)
+    }
+  }
+}
+
+// Give microtasks a chance (Supervisor event flushes + async page checks).
+await new Promise((r) => setTimeout(r, 250))
+
 // inline pages' banners (walked from the parent's mounted shim) + the
 // worker-run pages' banners (shipped back per page — the parent never mounts
 // the fork-family pages in its own shim)

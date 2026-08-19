@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — hooks-array-scenarios: the rows-mint + cascade demo</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .scenario-card, .row-list, .cross-row-output {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .row-list { background: #eef4ff; }
+    .cross-row-output { background: #fff8e7; font-weight: bold; }
+    .control-btn { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; margin-right: 4px; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="hooks-array-scenarios">
+  <!--
+    ============================================================================
+    HOOKS-ARRAY-SCENARIOS — the ROWS-MINT + CASCADE demo
+    (docs/specs/hooks-array-injection-review.md §9.2 — CONTRACT AMENDMENT C)
+
+    ONE legacy JSON envelope (translate.md §1 LegacyInitialData). The root
+    carries the row prototype binding + the `hooksKind` declaration
+    (`item-list: 'component'`); the row template + the cross-row consumer
+    carry component target bindings. The page module (demo/hooks-
+    array-scenarios.js) runs `rows-mint` during bootstrap (NOT from a
+    handler body — the mint is infrastructure, not a user interaction),
+    then the runner checks assert BOTH SIDES of the cascade: (1) the
+    minted rows carry per-row value-bearing source anchors that the
+    consumers resolve via the multi-provider fan-out (§9.2 pin 6), and
+    (2) a cross-row consumer reads a field name and sees N arms (the
+    multi-provider compile fan-out). The USER CONTRACT is pinned:
+    the mint-side walk dirties the consumers, the census matches, and
+    the profile totals reflect the fan-out compile cost.
+
+    SECTION MAP
+    ---------------------------------------------------------------------------
+    S1  Row list             #row-list      -- rows minted from prototype via
+                                             rows-mint; per-row source anchors
+                                             carry the row field values
+    S2  Cross-row consumer   #cross-row     -- consumer references `title`;
+                                             resolves N arms (the pin-6
+                                             fan-out): each arm has
+                                             bindings.title = row value
+    S3  User contract        -- census + profile pins: rows registered,
+                                             consumers dirty, fan-out arms
+                                             counted
+    ============================================================================
+  -->
+
+  <main>
+    <h1>hooks-array-scenarios — rows-mint + cascade (SPA scenarios)</h1>
+    <p class="goals">
+      The HOOKS-ARRAY engine extension
+      (<code>docs/specs/hooks-array-injection-review.md</code> §9) in
+      action: a <code>rows-mint</code> op (prototype-by-name, per-row
+      value-bearing source anchors, node-scoped layerId) followed by a
+      cross-row consumer that resolves the multi-provider fan-out
+      (§9.2 pin 6). The runner checks assert both sides of the cascade
+      and pin the census + profile totals. The banner is
+      <code>hooks-array-scenarios</code>.
+    </p>
+
+    <!-- Framework input: the SPA legacy envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <div class="card-mount" id="mount-main"></div>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="hooks-array-scenarios.js"></script>
+</body>
+</html>
