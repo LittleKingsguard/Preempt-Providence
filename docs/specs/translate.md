@@ -489,18 +489,18 @@ paths are excluded from the parity claim (legal legacy, no seam).
 Array-form parity is scoped to graph-level N bindings + `props.<key>`
 apply paths only.
 
-**Accepted emission-layer gaps (parity, known — tracked: NP5/NP9 RESOLVED
-2026-08-19, N3 still accepted as a follow-up; review doc Appendix E.3):**
-two value-shape gaps were ACCEPTED; neither blocks the K7/K8 parity claim
-(props scalar + duplicates). **NP5/NP9 LANDED — an object emission seam
-(`bakeValue`, decisions.md OTGE row, RENDER_PROCESS_NOTES §10.10.7).** N3 is
-tracked in `docs/pending.md` (PARKED — emission-layer known gaps), revisit
-when a consumer needs the propagated null shape:
+**Accepted emission-layer gaps (parity — NP5/NP9 + N3 BOTH RESOLVED 2026-08-19;
+review doc Appendix E.3):** two value-shape gaps were ACCEPTED; neither
+blocked the K7/K8 parity claim (props scalar + duplicates). **NP5/NP9 LANDED —
+the object emission seam (`bakeValue`, JSON string encoding); N3 LANDED — null
+passthrough on the derived seam (authored-present nulls carry as `key: null`,
+computed/missing nulls omit).** Both: decisions.md OTGE/NULL-PASSTHROUGH row +
+RENDER_PROCESS_NOTES §10.10.7:
 
 | Gap | Symptom | Current code | Resolution shape |
 | --- | --- | --- | --- |
 | **NP5/NP9 — object values bake `[object Object]`** | A binding whose value is an OBJECT (non-def payload, `props.<key>` object) coerced to the literal `[object Object]` via `String()` in both adapters (`escapeText`/`escapeAttr`, the css-style/text bakes) — there was NO object emission seam: `scalarBinding` (`render-helpers.ts:502-509`) admits only `string`/`number`/`boolean`, so an object value fell through to the coercing bakes | `scalarBinding` `render-helpers.ts:502-509` (scalar gate) | **RESOLVED 2026-08-19 — `bakeValue(v)` seam (JSON string encoding, user directive):** plain objects (non-null, non-array) → `JSON.stringify(v)`, scalars/arrays keep existing coercion; applied at `adapters.ts` `escapeText`/`escapeAttr`, `DomAdapter.setProp` (text/form, css.*, prop/attr), `SSRFragmentAdapter.setProp` (text + cssDef), and the `render-helpers.ts` def-content bakes (def.content / spec.content / seam-resolved nested.content incl. seam 'content'/'type' delivery). Unchanged: `css:classes` arrays (`join`), `ruleBody` (nested CSS objects recurse). Tests: DOM-NP5 ×2 + FRG-NP5 ×2 |
-| **N3 — null injection is lost on the derived seam** | A legacy deep-inject of NULL (key present, value null) is semantically lost: `applyDerived` omits null keys at `derived.ts:244` (`value !== null && value !== undefined`), so the derived record that reaches the adapters never carries the key at all (vs. present-with-null); the authored key-present half is only visible pre-bake (`seedOwnBindings` publishes the null at `node.ts:280` — `providerValueFor` returns null, `bindings[name] = null`), then the derived seam drops it | `derived.ts:244` (null-key omit), `node.ts:280` (null published), `render-helpers.ts:502-509` (`scalarBinding` also skips null — no text wire) | PARKED — a **null-preserving derived read**: either carry `key: null` through `applyDerived` (and decide how the adapters bake a null — set attribute? omit?) or document key-present-null as UNSUPPORTED-on-derived and keep the omission as the intentional contract. Revisit when a consumer needs the propagated shape (pending.md); re-verify review-doc Appendix E.3 first |
+| **N3 — null injection is lost on the derived seam** | A legacy deep-inject of NULL (key present, value null) was semantically lost: `applyDerived` dropped null keys, so the derived record that reached the adapters never carried the key at all (vs. present-with-null); the authored key-present half was only visible pre-bake (`seedOwnBindings` publishes the null at `node.ts:280` — `providerValueFor` returns null, `bindings[name] = null`), then the derived seam dropped it | `derived.ts` `applyDerived` (null-key omit), `node.ts:280` (null published), `render-helpers.ts:502-509` (`scalarBinding` also skips null — no text wire) | **RESOLVED 2026-08-19 — null passthrough (user directive):** `applyDerived` carries an AUTHORED-PRESENT null as `key: null` — a LITERAL `null` declaration or a `$` read of a PRESENT-null `bindings.<k>`/`props.<k>` slot (`nullIsAuthored`/`pathSourcePresent`, derived.ts) — while COMPUTED/MISSING nulls (falsy `$if` no-else, missing source, `$gt` non-match) keep the historical omit (DV-F2/DV-H11 contract unchanged). The carried null bakes as the JSON string `"null"` (OTGE-consistent). Tests: DV-N3 ×5 + DOM-N3/FRG-N3 |
 
 **Target-syntax normalization (post-kernel, D7):** the K1/K2 kernel accepts
 the FLAT `props.<key>` form only (one segment — derived writes flat keys,

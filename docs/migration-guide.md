@@ -363,6 +363,10 @@ Every demo page uses the same pattern after an op:
   pre-serialized string-authored style round-trips as an object on save.
 - Object values bake `[object Object]` via `String()` in both adapters (no
   object emission seam); null keys are omitted on the derived seam (N3).
+  **RESOLVED 2026-08-19** — object emission seam (`bakeValue`, JSON string
+  encoding) + null passthrough (authored-present nulls carry as `key: null`;
+  computed/missing nulls still omit) — decisions.md OTGE/NULL-PASSTHROUGH
+  row, RENDER_PROCESS_NOTES §10.10.7.
 - `css.*` family, `props` whole-dict, and nested-binding injection paths are
   **legacy gaps** — declared but not implemented as seams
   (`docs/specs/translate.md` §2.1 table "Not implemented (gap)" rows).

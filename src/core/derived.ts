@@ -157,6 +157,39 @@ function concatPart(v: unknown): string {
   return String(v)
 }
 
+/** N3 (2026-08-19) — authored-PRESENCE check: is a null read coming from a
+ *  source slot that EXISTS with a null value (present-null — key authored)
+ *  vs a MISSING slot (`?? null` collapses both to null, so the applyDerived
+ *  seam needs this to decide carry-vs-omit)? Only `bindings.<k>` / `props.<k>`
+ *  `$` reads carry the distinction; other roots (content/type/pathKey/
+ *  placement/children.length/unresolved.length) have no present-null concept —
+ *  a null there is always absence. */
+function pathSourcePresent(path: string, ctx: DerivedContext): boolean {
+  if (path.startsWith('bindings.') && path.length > 'bindings.'.length) {
+    const key = path.slice('bindings.'.length)
+    return key.length > 0 && Object.prototype.hasOwnProperty.call(ctx.cs.bindings, key)
+  }
+  if (path.startsWith('props.') && path.length > 'props.'.length) {
+    const key = path.slice('props.'.length)
+    return key.length > 0 && (ctx.node.props ?? {})[key] !== undefined
+  }
+  return false
+}
+
+/** N3 (2026-08-19) — is an evaluated-null derived result AUTHORED-PRESENT (a
+ *  literal `null` declaration, or a `$` read of a present-null bindings/props
+ *  slot) vs a COMPUTED/MISSING null (a falsy `$if` without `else`, a missing
+ *  source, a non-match `$gt`)? Authored-present nulls CARRY as `key: null`;
+ *  computed/missing nulls keep the existing omit. */
+function nullIsAuthored(expr: DerivedExpr, ctx: DerivedContext): boolean {
+  if (expr === null) return true
+  if (typeof expr === 'object' && expr !== null && !Array.isArray(expr)) {
+    const o = expr as { $?: unknown }
+    if (typeof o.$ === 'string') return pathSourcePresent(o.$, ctx)
+  }
+  return false
+}
+
 /** Whitelisted path read (spec §3): a MISSING source yields null. Whole-array
  *  reads of children/unresolved are rejected at validation; unknown roots
  *  here are unreachable via supported paths and totalize to null. */
@@ -230,10 +263,12 @@ export function evaluateDerived(expr: DerivedExpr, ctx: DerivedContext): unknown
 
 /**
  * Bake a node's merged derived declaration into a compiled state (spec §4).
- * Clone-before-merge is mandatory: `cs.props` aliases the pass-1 cache, so
- * the returned copy (or undefined when nothing derived) is what the CALLER
- * assigns — cs.props / the pass-1 canon are never mutated in place. A result
- * of null/undefined OMITS the key.
+ *  Clone-before-merge is mandatory: `cs.props` aliases the pass-1 cache, so
+ *  the returned copy (or undefined when nothing derived) is what the CALLER
+ *  assigns — cs.props / the pass-1 canon are never mutated in place. A result
+ *  of undefined OMITS the key; a null result OMITS unless AUTHORED-PRESENT
+ *  (N3, 2026-08-19 — a literal `null` declaration or a present-null
+ *  bindings/props `$` read carries as `key: null`).
  */
 export function applyDerived(node: Node, cs: CompiledState): Record<string, unknown> | undefined {
   const props = node.derived?.props
@@ -241,7 +276,13 @@ export function applyDerived(node: Node, cs: CompiledState): Record<string, unkn
   const evaluated: Record<string, unknown> = {}
   for (const key of Object.keys(props)) {
     const value = evaluateDerived(props[key]!, { node, cs })
-    if (value !== null && value !== undefined) evaluated[key] = value
+    if (value === undefined) continue
+    // N3 (2026-08-19) — null passthrough: an AUTHORED-PRESENT null (literal
+    // declaration or a present-null bindings/props `$` read) carries as
+    // `key: null`; a COMPUTED/MISSING null (falsy $if no-else, missing
+    // source, $gt non-match) keeps the historical omit.
+    if (value === null && !nullIsAuthored(props[key]!, { node, cs })) continue
+    evaluated[key] = value
   }
   if (Object.keys(evaluated).length === 0) return undefined
   return { ...cs.props, ...evaluated }

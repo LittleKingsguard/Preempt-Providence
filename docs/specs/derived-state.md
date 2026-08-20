@@ -139,9 +139,15 @@ if (node.derived?.props) {
   (both actionable branches — the no-target branch sees only SELF-provided
   bindings via publishOwn, the arm branch sees the resolved arm bindings;
   "resolved binding" means whatever THIS branch's state carries).
-- **Null omission**: an expression evaluating to `null`/`undefined` OMITS
-  the key (the prop simply does not exist in the state — a conditional
-  bake; a binding whose provider value is undefined reads as null here).
+- **Null handling (N3, 2026-08-19 — null passthrough)**: an expression
+  evaluating to `undefined`, OR to a COMPUTED/MISSING null (a falsy `$if`
+  without `else`, a missing source — a binding whose provider value is
+  undefined reads as null here, a `$gt` non-match), OMITS the key (the prop
+  simply does not exist in the state — a conditional bake). An
+  AUTHORED-PRESENT null — a LITERAL `null` declaration or a `$` read of a
+  PRESENT-null `bindings.<k>`/`props.<k>` slot — CARRIES as `key: null` and
+  bakes as the JSON string `"null"` at the adapters (OTGE-consistent;
+  decisions.md OTGE/NULL-PASSTHROUGH row, RENDER_PROCESS_NOTES §10.10.7).
 - **Determinism**: evaluation is a pure function of (node pass-1, cs) —
   the same compile twice yields equal states.
 

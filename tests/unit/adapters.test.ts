@@ -481,6 +481,11 @@ describe('DOM-* DomAdapter', () => {
       expect(elOf(adapter, 'w')!.getAttribute('data-payload')).toBe('{"k":"v","n":3}')
       expect(elOf(adapter, 'w')!.getAttribute('data-payload')).not.toContain('[object Object]')
     })
+    it('DOM-N3 bare-prop NULL value → the JSON string "null" (OTGE-consistent present-null bake)', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'data-nullsig', null)
+      expect(elOf(adapter, 'w')!.getAttribute('data-nullsig')).toBe('null')
+    })
     it('DOM-H18 prop:title → setAttribute title', () => {
       adapter.createEl('div', 'w')
       adapter.setProp('w', 'prop:title', 't')
@@ -643,6 +648,11 @@ describe('FRG-* SSRFragmentAdapter', () => {
       adapter.createEl('div', 'w')
       adapter.setProp('w', 'prop:title', { a: '<x>', q: '&"' })
       expect(adapter.fragments.get('w')!.openTag).toContain('title="{&quot;a&quot;:&quot;&lt;x&gt;&quot;,&quot;q&quot;:&quot;&amp;\\&quot;&quot;}"')
+    })
+    it('FRG-N3 attr NULL value → the JSON string "null" attribute', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'prop:title', null)
+      expect(adapter.fragments.get('w')!.openTag).toContain('title="null"')
     })
     it('FRG-H4 css:id → openTag contains id="k"', () => {
       adapter.createEl('div', 'w')

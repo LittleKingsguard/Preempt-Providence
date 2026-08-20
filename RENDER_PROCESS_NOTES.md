@@ -1303,7 +1303,7 @@ marker as §10.9 (line ~581) — fold Pillar A–G (§10.1–§10.8) into
 design congeals; §10 here stays the live canon until then, and the sweep
 list (specs + skill + summary + migration citations) is recorded there.
 
-### 10.10.7 Object emission seam — NP5/NP9 JSON string encoding (DECIDED, 2026-08-19)
+### 10.10.7 Object emission seam — NP5/NP9 JSON string encoding + N3 null passthrough (DECIDED, 2026-08-19)
 
 - **DECIDED:** a plain-OBJECT value reaching a string bake at the emission
   layer serializes as `JSON.stringify` instead of `String()`'s literal
@@ -1317,10 +1317,21 @@ list (specs + skill + summary + migration citations) is recorded there.
   seam-resolved nested.content, incl. the seam 'content'/'type' delivery
   shapes). `ruleBody` (`render-helpers.ts`) is UNCHANGED — nested CSS objects
   recurse into block rules before any scalar bake; `css:classes` arrays keep
-  their `join(' ')` path. N3 (key-present-null loss on the derived seam,
-  `derived.ts:244`) stays a PARKED accepted gap — revisit when a consumer
-  needs the propagated null shape (user directive 2026-08-19: JSON encoding
-  first, circle back to N3). Tests: `tests/unit/adapters.test.ts` DOM-NP5 ×2
-  + FRG-NP5 ×2. Encoding: `docs/decisions.md` (OTGE row),
-  `docs/specs/translate.md` "Accepted emission-layer gaps",
-  `docs/pending.md` (PARKED — emission-layer known gaps).
+  their `join(' ')` path.
+- **DECIDED (N3 — null passthrough, follow-up to NP5/NP9, user directive
+  2026-08-19):** an AUTHORED-PRESENT null now survives the derived seam as
+  `key: null` instead of being dropped. `applyDerived` (`derived.ts`)
+  distinguishes authored-present-null (a LITERAL `null` declaration, or a
+  `$` read of a PRESENT-null `bindings.<k>`/`props.<k>` slot —
+  `nullIsAuthored`/`pathSourcePresent`) from COMPUTED/MISSING null (a falsy
+  `$if` without `else`, a missing source, a `$gt` non-match) — computed/
+  missing nulls keep the historical omit (DV-F2/DV-H11 "missing → omitted"
+  contract UNCHANGED). The carried `key: null` bakes through `bakeValue`
+  (`String(null)` = the JSON string `"null"`), OTGE-consistent with the
+  object seam. Tests: `tests/unit/derived.test.ts` DV-N3 ×5 (present-null
+  binding survives, missing omits, literal-null declaration carries,
+  computed `$if`-null omits, minimalFromState emits `prop:flag: null`);
+  `tests/unit/adapters.test.ts` DOM-N3 + FRG-N3 attr pin. Encoding:
+  `docs/decisions.md` (OTGE/NULL-PASSTHROUGH row), `docs/specs/translate.md`
+  "Accepted emission-layer gaps", `docs/pending.md` (emission-gap row —
+  NP5/NP9 + N3 now RESOLVED).

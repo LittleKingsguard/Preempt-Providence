@@ -501,6 +501,60 @@ describe('DV-H12 — per-arm states + diff stability (D4)', () => {
   })
 })
 
+describe('DV-N3 — present-null passthrough on the derived seam (N3, DECIDED 2026-08-19)', () => {
+  it('a PRESENT null binding value survives to the derived record as `key: null` (the authored key-present half is not dropped)', () => {
+    const root = makeRoot({ type: 'root' })
+    // self-provided null: seedOwnBindings publishes bindings.flag = null (node.ts:280)
+    const n = childOf(root, makeNode({ type: 'div', derived: { props: { flag: { $: 'bindings.flag' } } } }))
+    addComponentSource(n, 'flag', null)
+
+    const cr = root.compile([root, n])
+    const s = cr.actionable.find(cs => cs.nodeId === n.id)!
+    expect('flag' in s.props).toBe(true)
+    expect(s.props.flag).toBeNull()
+  })
+
+  it('a MISSING binding still OMITS the key (DV-F2/DV-H11 contract preserved — no regression)', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({ type: 'div', derived: { props: { ghost: { $: 'bindings.never' } } } }))
+    const cr = root.compile([root, n])
+    const s = cr.actionable.find(cs => cs.nodeId === n.id)!
+    expect('ghost' in s.props).toBe(false)
+    expect(s.unresolved).toEqual([])
+    expect(cr.warnings).toHaveLength(0)
+  })
+
+  it('a declared LITERAL null is authored-present and survives as `key: null`', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({ type: 'div', derived: { props: { clear: null } } }))
+    const cr = root.compile([root, n])
+    const s = cr.actionable.find(cs => cs.nodeId === n.id)!
+    expect('clear' in s.props).toBe(true)
+    expect(s.props.clear).toBeNull()
+  })
+
+  it('a COMPUTED null ($if with no else on a falsy cond) is absence — the key stays omitted', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({
+      type: 'div',
+      derived: { props: { pick: { $if: { cond: { $: 'bindings.never' }, then: 'Y' } } } },
+    }))
+    const cr = root.compile([root, n])
+    const s = cr.actionable.find(cs => cs.nodeId === n.id)!
+    expect('pick' in s.props).toBe(false)
+  })
+
+  it('minimalFromState emits the present-null as the JSON string "null" (OTGE-consistent bake)', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({ type: 'div', derived: { props: { flag: { $: 'bindings.flag' } } } }))
+    addComponentSource(n, 'flag', null)
+    const cr = root.compile([root, n])
+    const s = cr.actionable.find(cs => cs.nodeId === n.id)!
+    const me = minimalFromState(s)
+    expect(me.props['prop:flag']).toBeNull()
+  })
+})
+
 describe('DV-F1 — validation fail-fast at EVERY declaration boundary (§7)', () => {
   const malformed: Array<{ label: string; decl: unknown }> = [
     { label: 'non-object decl', decl: 42 },
