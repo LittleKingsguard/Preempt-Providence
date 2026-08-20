@@ -64,6 +64,13 @@ class El {
   addEventListener(evt: string, fn: (e: unknown) => void): void {
     ;(this.listeners[evt] ??= []).push(fn)
   }
+  removeEventListener(evt: string, fn: (e: unknown) => void): void {
+    const arr = this.listeners[evt]
+    if (arr) {
+      const i = arr.indexOf(fn)
+      if (i !== -1) arr.splice(i, 1)
+    }
+  }
   remove(): void {
     this.removed = true
     if (this.parent) {
@@ -444,7 +451,7 @@ describe('DOM-* DomAdapter', () => {
     })
   })
 
-  describe('on: bindings (DOM-H15, H16, F5)', () => {
+  describe('on: bindings (DOM-H15, H16, F5-flip, F6..F12 — retained-handler-map)', () => {
     it('DOM-H15 on:click with onEvent injects and dispatches (wire, domEvent)', () => {
       const received: Array<[string, unknown]> = []
       adapter = new DomAdapter(mountEl(mount), {
@@ -461,11 +468,119 @@ describe('DOM-* DomAdapter', () => {
       adapter.setProp('w', 'on:click', '{}')
       expect(() => elOf(adapter, 'w')!.dispatch('click', {})).not.toThrow()
     })
-    it('DOM-F5 two sets on same on:click → two listeners, no dedupe', () => {
+    it('DOM-F5 two sets on same on:click → ONE listener (REPLACE semantics, the retained map)', () => {
       adapter.createEl('button', 'w')
       adapter.setProp('w', 'on:click', 'a')
       adapter.setProp('w', 'on:click', 'b')
-      expect(elOf(adapter, 'w')!.listeners['click']).toHaveLength(2)
+      const el = elOf(adapter, 'w')!
+      expect(el.listeners['click']).toHaveLength(1)
+      let calls = 0
+      el.dispatch('click', {})
+    })
+    it('DOM-F6 on:click set then undefined → listener REMOVED; dispatch no longer fires', () => {
+      const received: unknown[] = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (_w, ev) => received.push(ev) })
+      adapter.createEl('button', 'w')
+      adapter.setProp('w', 'on:click', '{}')
+      elOf(adapter, 'w')!.dispatch('click', { n: 1 })
+      expect(received).toHaveLength(1)
+      adapter.setProp('w', 'on:click', undefined)
+      expect(elOf(adapter, 'w')!.listeners['click'] ?? []).toHaveLength(0)
+      elOf(adapter, 'w')!.dispatch('click', { n: 2 })
+      expect(received).toHaveLength(1) // the second dispatch did not fire
+    })
+    it('DOM-F6b re-set after undefined rebinds (single listener again)', () => {
+      const received: unknown[] = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (_w, ev) => received.push(ev) })
+      adapter.createEl('button', 'w')
+      adapter.setProp('w', 'on:click', '{}')
+      adapter.setProp('w', 'on:click', undefined)
+      adapter.setProp('w', 'on:click', '{}')
+      expect(elOf(adapter, 'w')!.listeners['click']).toHaveLength(1)
+      elOf(adapter, 'w')!.dispatch('click', {})
+      expect(received).toHaveLength(1)
+    })
+    it('DOM-F7 removeEl purges the retained listener (old element stops firing)', () => {
+      const received: unknown[] = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (_w, ev) => received.push(ev) })
+      adapter.createEl('button', 'w')
+      adapter.setProp('w', 'on:click', '{}')
+      const el = elOf(adapter, 'w')!
+      adapter.removeEl('w')
+      expect(el.removed).toBe(true)
+      expect((el.listeners['click'] ?? []).length).toBe(0)
+      el.dispatch('click', {})
+      expect(received).toHaveLength(0)
+    })
+    it('DOM-F8 duplicate createEl purges the OLD (still-mounted) element listener', () => {
+      const received: unknown[] = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (_w, ev) => received.push(ev) })
+      const e1 = adapter.createEl('button', 'w') as unknown as El
+      adapter.setProp('w', 'on:click', '{}')
+      const e2 = adapter.createEl('button', 'w') as unknown as El
+      expect(elOf(adapter, 'w')).toBe(e2)
+      expect(mount.children).toContain(e1) // DOM-F4: the old stays mounted
+      expect((e1.listeners['click'] ?? []).length).toBe(0) // its listener is gone
+      e1.dispatch('click', {})
+      expect(received).toHaveLength(0)
+    })
+    it('DOM-F9 multiple on:<event> per node are independent (removing one keeps the other)', () => {
+      const received: Array<[string, unknown]> = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (w, ev) => received.push([w, ev]) })
+      adapter.createEl('button', 'w')
+      adapter.setProp('w', 'on:click', '{}')
+      adapter.setProp('w', 'on:focus', '{}')
+      adapter.setProp('w', 'on:click', undefined)
+      expect((elOf(adapter, 'w')!.listeners['click'] ?? []).length).toBe(0)
+      expect((elOf(adapter, 'w')!.listeners['focus'] ?? []).length).toBe(1)
+      elOf(adapter, 'w')!.dispatch('focus', { f: 1 })
+      expect(received).toEqual([['w', { f: 1 }]])
+    })
+    it('DOM-F10 forkKey arms keep independent listener state', () => {
+      const received: Array<[string, unknown]> = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (w, ev) => received.push([w, ev]) })
+      adapter.createEl('button', 'w', 'fk1')
+      adapter.createEl('button', 'w', 'fk2')
+      adapter.setProp('w', 'on:click', '{}', 'fk1')
+      adapter.setProp('w', 'on:click', '{}', 'fk2')
+      adapter.setProp('w', 'on:click', undefined, 'fk1')
+      expect((elOf(adapter, 'w', 'fk1')!.listeners['click'] ?? []).length).toBe(0)
+      expect((elOf(adapter, 'w', 'fk2')!.listeners['click'] ?? []).length).toBe(1)
+      elOf(adapter, 'w', 'fk2')!.dispatch('click', { k: 'fk2' })
+      expect(received).toEqual([['w', { k: 'fk2' }]])
+    })
+    it('DOM-F11 re-entrant self-removal during dispatch does not throw (live-array skip semantics)', () => {
+      adapter = new DomAdapter(mountEl(mount), {
+        onEvent: () => adapter.setProp('w', 'on:click', undefined),
+      })
+      adapter.createEl('button', 'w')
+      adapter.setProp('w', 'on:click', '{}')
+      expect(() => elOf(adapter, 'w')!.dispatch('click', {})).not.toThrow()
+      expect((elOf(adapter, 'w')!.listeners['click'] ?? []).length).toBe(0)
+    })
+    it('DOM-F12 SSR double-slot: a raw onclick attr COEXISTS with the listener (native attr inert)', () => {
+      const received: unknown[] = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (_w, ev) => received.push(ev) })
+      adapter.createEl('button', 'w')
+      elOf(adapter, 'w')!.setAttribute('onclick', 'true') // what SSR inlines (FRG-H18b)
+      adapter.setProp('w', 'on:click', '{}')
+      elOf(adapter, 'w')!.dispatch('click', {})
+      expect(received).toHaveLength(1) // only the addEventListener slot fires
+      expect(elOf(adapter, 'w')!.getAttribute('onclick')).toBe('true') // attr still there
+      adapter.setProp('w', 'on:click', undefined)
+      elOf(adapter, 'w')!.dispatch('click', {})
+      expect(received).toHaveLength(1) // listener slot dropped; attr alone fires nothing
+    })
+    it('DOM-F12b reused (hydrated css.id) element binds on: via the normal wires path', () => {
+      const received: unknown[] = []
+      adapter = new DomAdapter(mountEl(mount), { onEvent: (_w, ev) => received.push(ev) })
+      mount.querySelectorAll = [Object.assign(new El('div'), { id: 'a' })]
+      adapter.hydrate('root', { template: { css: { id: 'a' } }, content: [] })
+      expect(adapter.reused.has('a')).toBe(true)
+      adapter.createEl('button', 'w')
+      adapter.setProp('w', 'on:click', '{}')
+      elOf(adapter, 'w')!.dispatch('click', {})
+      expect(received).toHaveLength(1)
     })
   })
 

@@ -39,6 +39,19 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   private readonly mount: HTMLElement
   private readonly onEvent: ((wire: NodeRef, event: Event) => void) | undefined
   private stylesEl: HTMLElement | null = null
+  /** RETAINED HANDLER MAP (2026-08-20 — the listener-removal un-park;
+   *  doc: docs/specs/retained-handler-map-review.md). The EXACT function
+   *  references this adapter passed to `addEventListener`, keyed by
+   *  `wireKey(wire, forkKey)` then event name — `removeEventListener` needs
+   *  the same reference object, and the previous anonymous-closure pattern
+   *  kept none (removal was a parked no-op). Attach = REPLACE (remove the old
+   *  exact fn first — supersedes the additive DOM-F5 contract), detach
+   *  (`on:<event>` set with undefined) = `removeEventListener(evt, fn)` +
+   *  delete, purge on removeEl AND on duplicate createEl (the old element
+   *  stays mounted per DOM-F4 but must stop firing). Derived/replayable
+   *  state in the same class as `wires` — a pure function of (op stream,
+   *  onEvent), never pipeline semantics. */
+  private readonly listeners = new Map<string, Map<string, { el: unknown; fn: (e: Event) => void }>>()
   /** A (2026-08-16) — the DETACHED INITIAL-BUILD batch: while a batch is
    *  open, created elements are HELD BACK from the live mount; the append
    *  ops re-parent them under their owners; `endBatch` mounts ONLY the roots
@@ -81,7 +94,13 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): HTMLElement {
     const el = document.createElement(type)
     el.dataset.wire = wire
-    this.wires.set(wireKey(wire, forkKey), el)
+    const key = wireKey(wire, forkKey)
+    // DOM-F8 (retained-handler-map): a duplicate create overwrites the wire
+    // entry but the PRIOR element stays mounted (DOM-F4) — purge its retained
+    // listeners so the orphaned (still live) element stops dispatching.
+    const prev = this.wires.get(key)
+    if (prev) this.purgeListeners(key, prev)
+    this.wires.set(key, el)
     if (this.batchEls) this.batchEls.push(el)
     else this.mount.appendChild(el)
     return el
@@ -120,12 +139,43 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
         el.setAttribute(key, bakeValue(val))
       }
     } else if (name.startsWith('on:')) {
-      if (val === undefined) return
       const evtName = name.slice(3)
+      if (val === undefined) {
+        // DOM-F6 (retained-handler-map): undefined = real detach — drop the
+        // EXACT listener this adapter bound (R7 row 2026-08-14 was the
+        // parked no-op). SSR (FRG-H18) drops its inline attr; DOM now
+        // converges.
+        const evtMap = this.listeners.get(wireKey(wire, forkKey))
+        if (evtMap) {
+          const entry = evtMap.get(evtName)
+          if (entry) {
+            ;(el as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener(evtName, entry.fn)
+            evtMap.delete(evtName)
+            if (evtMap.size === 0) this.listeners.delete(wireKey(wire, forkKey))
+          }
+        }
+        return
+      }
       const onEvent = this.onEvent
-      el.addEventListener(evtName, (domEvent: Event) => {
+      const handler = (domEvent: Event) => {
         if (onEvent) onEvent(wire, domEvent)
-      })
+      }
+      // DOM-F5-flip (retained-handler-map): REPLACE semantics — re-setting the
+      // same slot drops the previous (exact) listener before re-binding, so
+      // one slot never accumulates listeners (the additive contract was the
+      // parked DOM-F5; stale closures on handler churn are the hazard fixed).
+      const key = wireKey(wire, forkKey)
+      const prev = this.listeners.get(key)?.get(evtName)
+      if (prev) {
+        ;(el as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener(evtName, prev.fn)
+      }
+      el.addEventListener(evtName, handler)
+      let evtMap = this.listeners.get(key)
+      if (!evtMap) {
+        evtMap = new Map()
+        this.listeners.set(key, evtMap)
+      }
+      evtMap.set(evtName, { el, fn: handler })
     } else {
       const attr = name.startsWith('prop:') ? name.slice(5) : name
       if (val === undefined) {
@@ -147,15 +197,30 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   }
 
   removeEl(wire: NodeRef, forkKey?: ForkPathKey): void {
-    const el = this.wires.get(wireKey(wire, forkKey))
+    const key = wireKey(wire, forkKey)
+    const el = this.wires.get(key)
     if (el) {
+      // DOM-F7 (retained-handler-map): purge the retained listeners BEFORE
+      // the element leaves — the detached element must not keep live
+      // closures (or fire again if it outlives the op).
+      this.purgeListeners(key, el)
       if (this.batchEls) {
         const i = this.batchEls.indexOf(el)
         if (i !== -1) this.batchEls.splice(i, 1)
       }
       el.remove()
-      this.wires.delete(wireKey(wire, forkKey))
+      this.wires.delete(key)
     }
+  }
+
+  /** Remove every listener this adapter bound for one `(wire, forkKey)` slot
+   *  from the element, and drop the slot from the retained map. */
+  private purgeListeners(key: string, el: unknown): void {
+    const evtMap = this.listeners.get(key)
+    if (!evtMap) return
+    const remove = (el as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener.bind(el)
+    for (const [evt, { fn }] of evtMap) remove(evt, fn)
+    this.listeners.delete(key)
   }
 
   hydrate(_rootWire: NodeRef, vdom: unknown): void {

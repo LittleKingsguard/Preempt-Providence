@@ -67,6 +67,13 @@ export function installSmokeShim() {
     addEventListener(evt, fn) {
       ;(this.listeners[evt] ??= []).push(fn)
     }
+    removeEventListener(evt, fn) {
+      const arr = this.listeners[evt]
+      if (arr) {
+        const i = arr.indexOf(fn)
+        if (i !== -1) arr.splice(i, 1)
+      }
+    }
     remove() {
       this.removed = true
       if (this.parent) {

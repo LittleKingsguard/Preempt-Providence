@@ -148,7 +148,7 @@ numerically. The context shape and dispatch contract are owned by
 interface HandlerContext {
   clientAPI: ClientAPI     // sole mutation channel
   supervisor: Supervisor   // journal / phases / registration
-  tree: { getNode; allNodes; ancestorsOf; descendantsOf }
+  tree: { getNode; allNodes; ancestorsOf; descendantsOf; getState }
 }
 type HandlerBody = (ctx: HandlerContext, ...args: unknown[]) => void
 ```
@@ -158,9 +158,15 @@ type HandlerBody = (ctx: HandlerContext, ...args: unknown[]) => void
 node's **compiled pass-1 state** (always fresh — every mutation path runs
 `compileLocal` synchronously, node.md §5). This is the sanctioned read channel;
 writes still go exclusively through `clientAPI.apply`. Pass-2 **resolved**
-values (component `bindings`/fork arms) are not exposed on `Node` today —
-`clientAPI.getState` returns surface only (`nodeId`/`status`/`pathKey`/`state`);
-see handlers.md §2.1 TODO(code) for exposing them read-only.
+values (component `bindings`, fork arms, `pathKey`) are exposed READ-ONLY:
+`ctx.tree.getState(id): CompiledState[]` (non-draining —
+`supervisor.getResolvedStates`, never consumes the renderer's snapshot) and
+`node.resolved: CompiledState[]` (read-only getter populated by pass-2;
+`supervisor.recordResolved` seeds it after a direct bootstrap full compile).
+`clientAPI.getState` returns surface only
+(`nodeId`/`status`/`pathKey`/`state`); `supervisor.takePass2States()` remains
+renderer-owned and draining — a handler getter must never call it.
+Contract: handlers.md §2.1; tests: resolved-exposure.test.ts (Workstream B).
 
 (`node` and `event` reach the body as dispatch args — `dispatchEvent(node, ctx,
 event, ...args)`; event handlers are matched by `event`/`name`.)

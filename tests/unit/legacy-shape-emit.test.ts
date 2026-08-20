@@ -248,6 +248,7 @@ describe('D4 — adapter-side rule-string dedup (defensive half)', () => {
       delete this.attrs[k]
     }
     addEventListener(_e: string, _fn: unknown): void {}
+    removeEventListener(_e: string, _fn: unknown): void {}
     remove(): void {
       this.removed = true
     }
