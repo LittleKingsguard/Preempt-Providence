@@ -309,16 +309,55 @@ targets.
 | `type` | Structural | single `NodeData` prototype sub-tree (never an array) | deep-merge prototype: replaces host `type`; injects layers for `props.*`, `css.id`, `css.classes`, `css.style.*`, `css.styleNodes`, `content`, `children`, `handlers`, `placement`, `component` | **ANCHOR-LAYER SEAM (D7, LANDED 2026-08-14)** — translate plans the binding with `options.seam = 'type'` (F17) and no `component-target-gap` warn; at assembly the resolved def's CHILDREN links + PLACEMENT links pass to the consumer node as an ANCHOR LAYER (parent anchor ON the resolved node, §2 mapping row). `target: 'type'` is the legacy form of the fork-suite 'values' method (provider-side `{reference, value}` is the new-system twin). The old def→re-type emission seam (`isLinkDef`) survives ONLY for the 1:1 fork-stress link method (render.md §3.4.2) |
 | `content` | Slot | scalar string, or `NodeData`/`NodeData[]` (`_instantiatedNodes` ⇒ children) | injects scalar into `content` layer; instantiated nodes into `children` layer | **D5 + D7, LANDED (F13):** a `target: 'content'` binding delivers the def's TEXT CONTENT ONLY — the def's `content` FIELD VALUE lands in the consumer's content slot via the content-target seam (NOT `scalarBinding`, NOT the def's children — no subtree, no dual-parse). Subtree delivery happens ONLY via `target: 'children'` / `target: 'type'` (the anchor-layer seam). The legacy scalar-vs-NodeData dual form is discontinued (D5) |
 | `children` | Children slot | `NodeData`/`NodeData[]` child sub-trees | injects virtual child sub-trees into `children` layer; loop-guarded (`Component.isAppliedInAncestors()`) | **ANCHOR-LAYER SEAM (D7, LANDED)** — translate plans the binding with `options.seam = 'children'` (F17) and no `component-target-gap` warn; the resolved def's children (PRE-MINTED out-of-tree `'component'`-token prototypes, F16) materialize on the consumer as an anchor layer (D8: never emitted by the host, never attached by translate) |
-| `props` | Properties | object dict (`Record<string, any>`) | injects/overwrites the host's whole `props` dict | NOT implemented (gap) |
+| `props` | Properties | object dict (`Record<string, any>`) | injects/overwrites the host's whole `props` dict | K2 syntax edge — `component-target-skipped` (malformed form); no whole-dict seam (see register) |
 | `props.<propertyName>` | Property key | any primitive or object value | deep-injects onto one host `props` key (`props.disabled`, `props.placeholder`, …) | **IMPLEMENTED (flat `props.<key>` only — kernel K1/K2, landed)**: the anchor carries `options.applyPath` (K5 persistence) and the node gains the synthesized `derived.props.<key> = { $: 'bindings.<ref>' }` read (apply of the RESOLVED value; at a self-provider that is its own `value`). Carve-outs warn `component-target-skipped` with no synthesis: dotted keys, dotted references, `props.id` (reserved derived key), authored-derived keys (no warn — authored wins), and the D7 syntax edges (`props.`, `props:name`, `props.name.`, bare `props`) |
-| `css` | Style object | dict `{ id, classes, style, cssDef }` | injects into host `css` object | NOT implemented (gap) |
-| `css.id` | Element id | string | injects `node.css.id` | NOT implemented (gap) |
-| `css.classes` | Class list | string or `string[]` | injects `node.css.classes` | NOT implemented (gap) |
-| `css.style` | Style dict | `Record<string,string>` | injects style key-value pairs | NOT implemented (gap) |
-| `css.style.<property>` | Style property | string/numeric CSS value | injects one inline style property | NOT implemented (gap) |
-| `handlers` | Handlers list | `HandlerDef`/`Handler` or array | injects into `node.handlers` | NOT implemented (gap) |
+| `css` | Style object | dict `{ id, classes, style, cssDef }` | injects into host `css` object | **BLOCKED (2026-08-20)** — `component-target-skipped`, no apply; batch css rides `target: 'type'` → prototype (register) |
+| `css.id` | Element id | string | injects `node.css.id` | **BLOCKED (2026-08-20)** — never set by component (register) |
+| `css.classes` | Class list | string or `string[]` | injects `node.css.classes` | **IMPLEMENTED (2026-08-20, APPEND seam)** — flat `css.classes` only: synthesized `derived.css.classes = { $: 'bindings.<ref>' }` + `applyPath: 'css.classes'`; the compiled bake APPENDS host-then-injected (string → one class, array in order); carve-outs mirror `props.<key>` (dotted reference, authored-derived-wins); reverse strips + emits `target: 'css.classes'` (register) |
+| `css.style` | Style dict | `Record<string,string>` | injects style key-value pairs | **BLOCKED (2026-08-20)** — `component-target-skipped`, no apply (register) |
+| `css.style.<property>` | Style property | string/numeric CSS value | injects one inline style property | **BLOCKED (2026-08-20)** — `component-target-skipped` (regex member route), no apply (register) |
+| `handlers` | Handlers list | `HandlerDef`/`Handler` or array | injects into `node.handlers` | NOT a legacy import target (2026-08-20) — bare form → generic not-known warn; the member seam below is the channel |
 | `handlers.<eventName>` | Event binding | `HandlerDef` or JS string body | binds one event/lifecycle hook (`handlers.click`, `handlers.submit`, …). Legacy lifecycle hook NAMES (`handlers.beforeAssembly`, `handlers.beforePreprocess`, `handlers.afterAssembly`, …) are DELIBERATELY NOT SUPPORTED in the new version — no mapping; as a TARGET PATH they warn `handler-phase-unknown` + skip (N5 — the 3-phase set is closed; event-only reuse); separately, a handler DEF whose `phase` is a legacy lifecycle name warns `handler-phase-unknown` (K8, closed 3-set) and the definition is skipped | **HANDLER-SEAM (D6 un-park, LANDED 2026-08-15)** — the event suffix plans WITHOUT the `component-target-gap` warn (`options.handlerEvent` persisted verbatim, F17-style); the def registers by reference and compile materializes ONE provenance-marked handlers layer on the consumer (handlers.md §6); legacy lifecycle names as the suffix stay excluded — **EXCEPT `afterAssembly` (the AUTH-SEAM carve-out, 2026-08-16 — decisions.md AUTH-SEAM row):** it maps to the `after-compile` PHASE (`handlerPhase: 'after-compile'` planned on the anchor, `AnchorOptions.handlerPhase` — the consumer's ASSEMBLY is its after-compile pass; tests AU1-AU3); the def-root NEVER executes the handler — the compiled entries COPY onto the TYPE-target consumer (`seam-handlers-def` layer) which re-homes the def's children in-tree |
-| `component` | Nested binding | `ComponentBinding` or array | injects nested component bindings onto the host's `component` array | NOT implemented (gap) |
+| `component` | Nested binding | `ComponentBinding` or array | injects nested component bindings onto the host's `component` array | NOT a legacy import target (2026-08-20) — nested components are added by the `type`-seam prototype fill (F16/D8), not a `.target` path; bare form → generic not-known warn |
+
+**Deep-injection target register (the §2.1 rows beyond the implemented
+seams — DISPOSITIONS SET 2026-08-20, decisions.md CSS-CLASSES row):** the
+register records the final YE/NO per target. `css.classes` LANDED as the
+ONE css-family deep-injection seam (APPEND semantics — the compiled bake merges
+host classes first, injected after; scalar coerces to one class; missing/null
+source keeps the authored list). The rest of the css family is BLOCKED:
+batch css rides `target: 'type'` → the def prototype (SED-1 def-fill already
+delivers def type + css), `css.id` must never be set by component, and
+`css.style.*` has no write seam (all → `component-target-skipped`, warn+skip,
+never throw — the D7 section below is a pure doc artifact: the bare-`props`
+form is intercepted by the K2 syntax-edge branch before any gap channel).
+`handlers` (whole-dict) and `component` (nested-binding) are NOT legacy import
+targets at all — their bare forms fall to the generic "not a known legacy
+target path" gap warn (`handlers.<event>` via the HANDLER-SEAM and nested
+components via the type-seam prototype are the real channels).
+
+| Target | Disposition (2026-08-20) | Mechanism |
+| --- | --- | --- |
+| `props.<key>` | **LANDED (K1/K2, flat)** | existing seam — `applyPath`, synthesized `derived.props.<k> = { $: 'bindings.<ref>' }` |
+| `props` (whole-dict) | **DOC ARTIFACT** | never reaches a gap channel — bare `props` is a K2 syntax edge (`component-target-skipped`); any real whole-dict write would SPLIT per-key into the flat seam |
+| `css.classes` | **LANDED (2026-08-20, APPEND)** | the ONLY css-family seam: `applyPath: 'css.classes'` + synthesized `derived.css.classes = { $: 'bindings.<ref>' }`; `applyDerived` appends host-then-injected (string → one class, array appends in order); carve-outs mirror `props.<key>` (dotted reference, authored-derived-wins); reverse strips the synthesized key + emits `target: 'css.classes'` (N1 extension); needs the `css.<field>` derived root (`validatePath`) + `DerivedDecl.css` |
+| `css` (whole dict) | **BLOCKED** | `component-target-skipped` — batch css goes through `target: 'type'` → prototype (SED-1 def-fill ships def type + classes + cssDef), never a dict target |
+| `css.id` | **BLOCKED** | `component-target-skipped` — explicitly never set by component (id identity is auto-id/authoring domain) |
+| `css.style` / `css.style.<property>` | **BLOCKED** | `component-target-skipped` (incl. the `/^css\.style\.[^.\s]+$/` regex member route) — no inline-style injection seam |
+| `css.` / `css.id.` / `css.classes.` / `css.style.` | syntax edge | `component-target-skipped` "empty css sub-element" — not valid labels by themselves (2026-08-20) |
+| `css.<other>` / `css.cssDef` / `css.classes.x` | not-known path | generic `component-target-gap` "not a known legacy target path" |
+| `handlers.<event>` | **LANDED (HANDLER-SEAM, D6)** | existing seam (+ AUTH-SEAM `afterAssembly` phase carve-out) |
+| `handlers` (whole-dict) | **NOT A LEGACY TARGET** | generic not-known warn — legacy never supported the whole-dict form; member-form is the channel |
+| `component` (nested binding) | **NOT A LEGACY TARGET** | generic not-known warn — nested components are added by the TYPE-seam prototype fill (F16/D8), not a `.target` path |
+| `type` / `content` / `children` | **LANDED (D7 anchor-layer seam)** | existing seam (F17) |
+
+`classifyTarget` (`src/core/translate.ts:501-566`) hosts the whole grammar; the
+css-family block + trailing-dot edges live in `CSS_BLOCKED_TARGETS` and the
+`css.classes` seam branch; `applyDerived`/`validatePath`/`validateDerived`
+(`derived.ts`) carry the `css.<field>` root + append bake (node.ts
+`applyDerivedBake`). Every disposition warns + skips (never throws); the anchor
+is ALWAYS kept (K8). Tests: `tests/unit/translate.test.ts` K8 block/seam/edges,
+`tests/unit/derived.test.ts` DV-C1, `tests/unit/reverse.test.ts` N1 css.classes.
 
 **Core binding semantics (legacy, §6.3 of RENDER_PROCESS_NOTES.md):**
 
@@ -484,10 +523,9 @@ fork-stress link-method emit path, render.md §3.4); `handlers.<event>` wires
 via the HANDLER-SEAM (D6 un-park, LANDED 2026-08-15 — `options.handlerEvent`
 persisted at translate, ONE provenance-marked handlers layer materialized on
 the consumer at compile, def-shaped `{name, body}` values register by
-reference; handlers.md §6). `css.*` family
-paths are excluded from the parity claim (legal legacy, no seam).
-Array-form parity is scoped to graph-level N bindings + `props.<key>`
-apply paths only.
+reference; handlers.md §6). The `css.*` family is split: `css.classes` is the ONE seam (LANDED 2026-08-20, append — §2 register); the other members (`css`, `css.id`, `css.style`, `css.style.<prop>`) are BLOCKED (`component-target-skipped`) — batch css rides the `type`-seam prototype.
+Array-form parity is scoped to graph-level N bindings + `props.<key>` +
+`css.classes` apply paths only.
 
 **Accepted emission-layer gaps (parity — NP5/NP9 + N3 BOTH RESOLVED 2026-08-19;
 review doc Appendix E.3):** two value-shape gaps were ACCEPTED; neither
@@ -521,10 +559,9 @@ emission dropped the apply path. Two further divergence notes: **(N1) reverse
 emitted `node.derived` UNCONDITIONALLY** — once K1 synthesizes derived,
 reversed documents would ship `bindings.*` machinery the backend cannot
 interpret; K5 strips synthesized derived on reverse (landed). **(N2)
-non-`props.*` targets** (`content`/`children`/`handlers`/`css.*`/`type`)
-silently no-oped — post-kernel they warn via the gap-target code
-(`component-target-gap`, DECIDED — K8 pre-anchor vocabulary pass,
-Appendix E.1). Under the landed semantics:
+non-`props.*` targets** (`content`/`children`/`handlers.*`/`type` plan as
+seams; the css block + not-known forms warn per the §2.1 register — K8
+pre-anchor vocabulary pass, Appendix E.1). Under the landed semantics:
 `{reference, target}` = consumer + local apply to `<target>`;
 `{reference, value, target}`
 = provider + self-apply of the resolved value (self-provider ⇒ its own

@@ -247,6 +247,44 @@ describe('K5/N1 — reverse emission (applyPath → legacy target; synthesized d
     expect(again.root.derived?.props?.authored).toBe('AUTH')
   })
 
+  it('N1/css.classes — reverse strips the synthesized css.classes, emits target: css.classes, re-translate round-trips clean', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: { reference: 'a', value: ['x'], target: 'css.classes' },
+        },
+      },
+      content: [],
+    })
+    expect(t.root.derived?.css?.classes).toEqual({ $: 'bindings.a' })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'a', value: ['x'], target: 'css.classes' })
+    // the synthesized key does NOT leak onto the emitted derived
+    expect(out.template.root.derived).toEqual({})
+    // re-translate re-synthesizes the seam cleanly — no warning, no collision
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+    expect(compAnchors(again.root)).toEqual([{ role: 'duplex', target: 'a', value: ['x'], applyPath: 'css.classes' }])
+    expect(again.root.derived?.css?.classes).toEqual({ $: 'bindings.a' })
+  })
+
+  it('N1/css.classes — reverse strips ONLY the synthesized key alongside an authored props key', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: { reference: 'a', value: ['x'], target: 'css.classes' },
+          derived: { props: { authored: 'AUTH' } },
+        },
+      },
+      content: [],
+    })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.component).toEqual({ reference: 'a', value: ['x'], target: 'css.classes' })
+    expect(out.template.root.derived).toEqual({ props: { authored: 'AUTH' } })
+  })
+
   it('K6/K5 — template.component (root) applyPath round-trips as { reference, value, target }', () => {
     const doc: LegacyInitialData = {
       template: { root: { type: 'app' }, component: { reference: 'rootp', value: 'rv', target: 'props.rt' } },

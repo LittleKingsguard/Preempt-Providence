@@ -644,6 +644,63 @@ describe('DV-F1 — validation fail-fast at EVERY declaration boundary (§7)', (
   })
 })
 
+describe('DV-C1 — the css derived root (css.classes seam, 2026-08-20)', () => {
+  it('css.<field> paths are legal reads; bare css / css. / deep paths are not', () => {
+    expect(() => validateDerived({ css: { classes: { $: 'css.classes' } } })).not.toThrow()
+    expect(() => validateDerived({ css: { classes: { $concat: [{ $: 'css.classes' }, 'x'] } } })).not.toThrow()
+    expectDerivedInvalid(() => validateDerived({ css: { classes: { $: 'css' } } }))
+    expectDerivedInvalid(() => validateDerived({ css: { classes: { $: 'css.' } } }))
+    expectDerivedInvalid(() => validateDerived({ css: { classes: { $: 'css.a.b' } } }))
+    // non-expr css values must fail the gate too (the css key was previously
+    // silently ignored)
+    expectDerivedInvalid(() => validateDerived({ css: { classes: { $bogus: 1 } } }))
+    expectDerivedInvalid(() => validateDerived({ css: [1] }))
+  })
+
+  it('an authored css.classes root round-trips the legacy envelope immediately (no seam needed)', () => {
+    const doc: LegacyInitialData = {
+      template: { root: { type: 'div', derived: { css: { classes: { $concat: ['kern-', { $: 'type' }] } } } } },
+      content: [],
+    }
+    const t = translateLegacy(doc)
+    expect(t.warnings).toEqual([])
+    expect(t.root.derived?.css?.classes).toEqual({ $concat: ['kern-', { $: 'type' }] })
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.derived).toEqual({ css: { classes: { $concat: ['kern-', { $: 'type' }] } } })
+  })
+
+  it('css.classes derived APPLIES by appending onto the host class list (compile bake)', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({ type: 'card', css: { classes: ['host-a', 'host-b'] } }))
+    targetAnchor(n, 'theme')
+    addComponentSource(root, 'theme', ['injected'])
+    // the layer carries the seam's synthesized read (what translate plans)
+    n.addLayer({ id: 'L', derived: { css: { classes: { $: 'bindings.theme' } } } })
+    const cs = statesFor([root, n], n.id)[0]!
+    // host classes stay FIRST, injected appended — never replaced, never duped
+    expect(cs.css.classes).toEqual(['host-a', 'host-b', 'injected'])
+  })
+
+  it('css.classes derived appends a scalar string as ONE class onto an empty host', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({ type: 'card' }))
+    targetAnchor(n, 'theme')
+    addComponentSource(root, 'theme', 'single')
+    n.addLayer({ id: 'L', derived: { css: { classes: { $: 'bindings.theme' } } } })
+    const cs = statesFor([root, n], n.id)[0]!
+    expect(cs.css.classes).toEqual(['single'])
+  })
+
+  it('css.classes derived with a missing binding stays the authored list (omit, no append)', () => {
+    const root = makeRoot({ type: 'root' })
+    const n = childOf(root, makeNode({ type: 'card', css: { classes: ['host'] } }))
+    targetAnchor(n, 'nope') // never provided
+    n.addLayer({ id: 'L', derived: { css: { classes: { $: 'bindings.nope' } } } })
+    const cs = statesFor([root, n], n.id)[0]!
+    expect(cs.css.classes).toEqual(['host'])
+  })
+})
+
 describe('DV-F2 — non-existent binding → null → key omitted (§4, §7)', () => {
   it('a derived expression over a never-provided binding omits the key and changes no unresolved state', () => {
     const root = makeRoot({ type: 'root' })

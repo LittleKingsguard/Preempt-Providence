@@ -483,16 +483,18 @@ interface BindingPlan {
 }
 
 /** K8 NP1/D7 — target-syntax edges (component-target-skipped): `props.`,
- *  `props:name`, `props.name.`, bare `props`, dotted `props.a.b` keys. */
+ *  `props:name`, `props.name.`, bare `props`, dotted `props.a.b` keys, and
+ *  the css trailing-dot forms (`css.`, `css.<member>.`). */
 
-/** K8 NP1 — flat known-vocabulary targets (recognition-only gap,
- *  component-target-gap): every §2.1 vocabulary path EXCEPT `props.<key>`.
- *  `css.style.<key>` / `handlers.<event>` add the dotted member rows.
- *  The D7 seam set `type`/`content`/`children` is EXCLUDED from the gap
- *  (they plan as seam candidates instead, F17). */
-const KNOWN_GAP_TARGETS: ReadonlySet<string> = new Set([
-  'props', 'css', 'css.id', 'css.classes', 'css.style', 'handlers', 'component',
-])
+/** K8 (2026-08-20) — BLOCKED css-family targets (component-target-skipped):
+ *  `css.classes` is the ONLY css-family seam (append); the whole dict, the
+ *  element id and the inline-style paths refuse the write — batch css rides
+ *  `target: 'type'` → prototype, `css.id` must never be set by component.
+ *  `handlers` (whole-dict) and `component` (nested-binding) are NOT legacy
+ *  import targets either — their bare forms fall through to the not-known
+ *  warn (the member `handlers.<event>` and the type-seam prototype cover the
+ *  real uses). */
+const CSS_BLOCKED_TARGETS: ReadonlySet<string> = new Set(['css', 'css.id', 'css.style'])
 
 /** K1/K2 — classify one `target` string: returns the apply path + synthesized
  *  derived declaration for the flat `props.<key>` seam, the D7 anchor-layer
@@ -557,8 +559,34 @@ function classifyTarget(
     }
     return { handlerEvent: event }
   }
-  if (KNOWN_GAP_TARGETS.has(target) || /^css\.style\.[^.\s]+$/.test(target)) {
-    warn(warnings, 'component-target-gap', path, `target "${target}" is a valid legacy injection path with no translate-time seam (recognition only); no apply`)
+  if (target === 'css.classes') {
+    // CSS.CLASSES SEAM (2026-08-20) — the ONLY css-family deep-injection path.
+    // Mirrors the flat `props.<key>` seam: plan the applyPath + synthesize a
+    // `derived.css.classes = { $: 'bindings.<ref>' }` read (the compiled bake
+    // APPENDS the resolved value onto the host's class list — node.ts
+    // applyDerivedBake). Carve-outs mirror props.<key>: dotted reference,
+    // authored-derived wins.
+    if (reference.includes('.')) {
+      warn(warnings, 'component-target-skipped', path, `reference "${reference}" is dotted — bindings.<ref> synthesis is impossible; no apply`)
+      return {}
+    }
+    if (authoredDerived?.css?.classes !== undefined) {
+      // authored-derived wins: skip synthesis, no warn (deliberate)
+      return {}
+    }
+    return { applyPath: target, synthesized: { css: { classes: { $: `bindings.${reference}` } } } }
+  }
+  if (CSS_BLOCKED_TARGETS.has(target) || /^css\.style\.[^.\s]+$/.test(target)) {
+    // K8 (2026-08-20) — BLOCKED css targets: warn + skip, never throw. The
+    // whole-dict/batch form has no seam (type → prototype delivers def css);
+    // `css.id` must not be set by component; `css.style.*` have no write seam.
+    warn(warnings, 'component-target-skipped', path, `target "${target}" is a blocked css-family target (no component injection seam; batch css via target 'type' → prototype, css.id is never set by component); no apply`)
+    return {}
+  }
+  if (target.startsWith('css.') && target.endsWith('.')) {
+    // `css.` / `css.<member>.` are not valid labels by themselves — the sub
+    // element must exist (2026-08-20, mirrors the `props.` empty-key edge)
+    warn(warnings, 'component-target-skipped', path, `target "${target}": empty css sub-element (syntax edge); no apply`)
     return {}
   }
   warn(warnings, 'component-target-gap', path, `target "${target}" is not a known legacy target path; no apply`)
@@ -653,20 +681,40 @@ function planBindings(
 function mergeSynthesized(base: DerivedDecl | undefined, plans: BindingPlan[]): DerivedDecl | undefined {
   let merged = base
   for (const plan of plans) {
-    if (plan.synthesized?.props) merged = mergeDecl(merged, plan.synthesized)
+    if (plan.synthesized) merged = mergeDecl(merged, plan.synthesized)
   }
   return merged
 }
 
 /** Merge an extra declaration into a base one, skipping keys that already
- *  exist (authored wins, no duplicate keys). */
+ *  exist (authored wins, no duplicate keys). Handles the props AND the css
+ *  (css.classes seam, 2026-08-20) sub-declarations. */
 function mergeDecl(base: DerivedDecl | undefined, extra: DerivedDecl): DerivedDecl | undefined {
-  if (!extra.props) return base
-  const props: Record<string, DerivedExpr> = { ...(base?.props ?? {}) }
-  for (const [key, value] of Object.entries(extra.props)) {
-    if (!(key in props)) props[key] = value
+  const merged: { props?: Record<string, DerivedExpr>; css?: Record<string, DerivedExpr> } = {}
+  let touched = false
+  if (extra.props) {
+    const props: Record<string, DerivedExpr> = { ...(base?.props ?? {}) }
+    for (const [key, value] of Object.entries(extra.props)) {
+      if (!(key in props)) props[key] = value
+    }
+    merged.props = props
+    touched = true
+  } else if (base?.props) {
+    merged.props = base.props
+    touched = true
   }
-  return { props }
+  if (extra.css) {
+    const css: Record<string, DerivedExpr> = { ...(base?.css ?? {}) }
+    for (const [key, value] of Object.entries(extra.css)) {
+      if (!(key in css)) css[key] = value
+    }
+    merged.css = css
+    touched = true
+  } else if (base?.css) {
+    merged.css = base.css
+    touched = true
+  }
+  return touched ? merged : undefined
 }
 
 /** Create the component anchors for the planned bindings (source for a
@@ -1146,17 +1194,32 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
     // authored-derived-wins carve-out skips BOTH — so key+shape match is
     // exact; the shape check guards runtime-added anchors.)
     const props: Record<string, DerivedExpr> = derived.props ? { ...derived.props } : {}
+    const css: Record<string, DerivedExpr> = derived.css ? { ...derived.css } : {}
     for (const a of compAnchors) {
       const applyPath = a.options.applyPath
-      if (typeof applyPath !== 'string' || !applyPath.startsWith('props.')) continue
-      const key = applyPath.slice('props.'.length)
-      const v = props[key]
-      if (v !== undefined && typeof v === 'object' && v !== null && !Array.isArray(v)) {
-        const expr = v as { $?: unknown }
-        if (expr.$ === `bindings.${a.target}`) delete props[key]
+      if (typeof applyPath !== 'string') continue
+      if (applyPath.startsWith('props.')) {
+        const key = applyPath.slice('props.'.length)
+        const v = props[key]
+        if (v !== undefined && typeof v === 'object' && v !== null && !Array.isArray(v)) {
+          const expr = v as { $?: unknown }
+          if (expr.$ === `bindings.${a.target}`) delete props[key]
+        }
+      } else if (applyPath === 'css.classes') {
+        // css.classes seam (2026-08-20): the SAME synthesized-shape strip for
+        // the css root — a `derived.css.classes` key synthesized from a
+        // 'css.classes' applyPath anchor is never authored
+        const v = css.classes
+        if (v !== undefined && typeof v === 'object' && v !== null && !Array.isArray(v)) {
+          const expr = v as { $?: unknown }
+          if (expr.$ === `bindings.${a.target}`) delete css.classes
+        }
       }
     }
-    data.derived = Object.keys(props).length > 0 ? { props } : {}
+    const out: DerivedDecl = {}
+    if (Object.keys(props).length > 0) out.props = props
+    if (Object.keys(css).length > 0) out.css = css
+    data.derived = out
   }
   // DEFECT #14 fix (blind test #4): the seam handlers layer is
   // provenance-marked (sourceName 'handler-seam') and its bindings reverse via

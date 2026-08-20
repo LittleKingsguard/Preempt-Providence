@@ -286,7 +286,7 @@ export type DerivedExpr =
   | { $if: { cond: DerivedExpr; then: DerivedExpr; else?: DerivedExpr } }
   | { $eq: [DerivedExpr, DerivedExpr] }
   | { $gt: [DerivedExpr, DerivedExpr] }
-export interface DerivedDecl { props?: Record<string, DerivedExpr> }
+export interface DerivedDecl { props?: Record<string, DerivedExpr>; css?: Record<string, DerivedExpr> }
 export interface NodeLayer {
   id: string; sourceName?: string; type?: string
   props?: Record<string, unknown>; css?: Record<string, unknown>

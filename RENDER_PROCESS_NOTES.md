@@ -1335,3 +1335,32 @@ list (specs + skill + summary + migration citations) is recorded there.
   `docs/decisions.md` (OTGE/NULL-PASSTHROUGH row), `docs/specs/translate.md`
   "Accepted emission-layer gaps", `docs/pending.md` (emission-gap row —
   NP5/NP9 + N3 now RESOLVED).
+
+### 10.10.8 File css-family target disposition — css.classes append seam; the rest blocked (DECIDED, 2026-08-20)
+
+- **DECIDED: `component[].target` vocabulary finalization (user directives
+  2026-08-20):** `css.classes` is the ONLY css-family deep-injection seam —
+  flat form only, planned like the flat `props.<key>` seam
+  (`applyPath: 'css.classes'` + synthesized `derived.css.classes =
+  { $: 'bindings.<ref>' }`, `classifyTarget` translate.ts). The compiled bake
+  APPENDS: `applyDerived` (`derived.ts`) merges host-then-injected onto
+  `cs.css.classes` (a scalar coerces to one class, an array appends in order,
+  a missing/null source keeps the authored list) and `node.ts`
+  `applyDerivedBake` lands the result at all three bake sites (clone-before-
+  merge preserved). The new `css.<field>` derived root (`validatePath`,
+  `validateDerived`, `pathValue`) enables readback; `DerivedDecl` gains `css`.
+- **DECIDED (blocked):** the other css targets are BLOCKED (`component-target-
+  skipped`, warn + skip never throw): `css` (whole dict — batch css flows via
+  `target:'type'` → the def prototype, SED-1 def-fill ships def type + classes
+  + cssDef), `css.id` (explicitly never set by component), `css.style` and
+  `css.style.<prop>` (no inline-style write seam; regex member route included).
+  `handlers` (whole-dict) and `component` (nested-binding) are NOT legacy
+  import targets at all — their bare forms fall to the generic not-known gap
+  warn (`handlers.<event>` member seam + the type-seam prototype cover the real
+  uses). `css.`/`css.<member>.` trailing-dot forms are syntax edges (empty
+  sub-element — not valid labels). Reverse: the synthesized `css.classes` key
+  is stripped (N1 extension) and `target: 'css.classes'` emitted from the
+  applyPath; authored `css` derived keys re-emit. Tests: translate.test.ts K8
+  block/seam/edges, derived.test.ts DV-C1, reverse.test.ts N1 css.classes.
+  Encoding: `docs/decisions.md` CSS-CLASSES row, `docs/specs/translate.md`
+  §2.1 register.

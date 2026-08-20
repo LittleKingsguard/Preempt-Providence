@@ -367,9 +367,14 @@ Every demo page uses the same pattern after an op:
   encoding) + null passthrough (authored-present nulls carry as `key: null`;
   computed/missing nulls still omit) — decisions.md OTGE/NULL-PASSTHROUGH
   row, RENDER_PROCESS_NOTES §10.10.7.
-- `css.*` family, `props` whole-dict, and nested-binding injection paths are
-  **legacy gaps** — declared but not implemented as seams
-  (`docs/specs/translate.md` §2.1 table "Not implemented (gap)" rows).
+- The `component[].target` deep-injection vocabulary is FINALIZED
+  (2026-08-20): `css.classes` is an implemented APPEND seam; `css` whole-dict,
+  `css.id`, `css.style.*` are BLOCKED (warn+skip — batch css rides `target:
+  'type'` → prototype); bare `handlers`/`component` are not legacy target
+  paths at all. Every disposition (symptom / mechanism / warn channel) is in
+  the per-row register `docs/specs/translate.md` §2.1 **"Deep-injection
+  target register"** (the code recognition routes live in `translate.ts:501-
+  566`).
 - Placeholder consumers whose provider arrives via SSR payload injection have
   no translate-time analog for unplaced payload providers (S-R4.3) — the
   placeholder stays unresolved until its provider is actually in the family.

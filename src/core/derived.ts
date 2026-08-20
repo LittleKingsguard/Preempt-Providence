@@ -38,7 +38,7 @@ function validatePath(path: unknown): void {
   if (typeof path !== 'string' || path.length === 0) throw derivedInvalid(path)
   const parts = path.split('.')
   const root = parts[0]!
-  if (root === 'props' || root === 'bindings') {
+  if (root === 'props' || root === 'bindings' || root === 'css') {
     if (parts.length !== 2 || parts[1] === '') throw derivedInvalid(path)
     return
   }
@@ -106,12 +106,22 @@ export function validateDerived(derived: unknown): asserts derived is DerivedDec
   if (typeof derived !== 'object' || derived === null || Array.isArray(derived)) throw derivedInvalid(derived)
   const decl = derived as Record<string, unknown>
   const props = decl.props
-  if (props === undefined) return
-  if (typeof props !== 'object' || props === null || Array.isArray(props)) throw derivedInvalid(props)
-  const record = props as Record<string, unknown>
-  for (const key of Object.keys(record)) {
-    if (key === 'id') throw derivedInvalid(record[key]) // collides with the auto-id (ensureAutoIds)
-    validateExpr(record[key])
+  if (props !== undefined) {
+    if (typeof props !== 'object' || props === null || Array.isArray(props)) throw derivedInvalid(props)
+    const record = props as Record<string, unknown>
+    for (const key of Object.keys(record)) {
+      if (key === 'id') throw derivedInvalid(record[key]) // collides with the auto-id (ensureAutoIds)
+      validateExpr(record[key])
+    }
+  }
+  // css root (2026-08-20 — css.classes seam): every field is a per-key expr;
+  // no reserved keys (css.id is a read here, not the auto-id)
+  const css = decl.css
+  if (css !== undefined) {
+    if (typeof css !== 'object' || css === null || Array.isArray(css)) throw derivedInvalid(css)
+    for (const key of Object.keys(css)) {
+      validateExpr((css as Record<string, unknown>)[key])
+    }
   }
 }
 
@@ -215,6 +225,12 @@ function pathValue(path: string, ctx: DerivedContext): unknown {
       const key = path.slice('props.'.length)
       return key.length > 0 ? ctx.node.props[key] ?? null : null
     }
+    case 'css': {
+      // node-local css read (2026-08-20 — css.classes seam readback); the
+      // injected seam value itself reads via `bindings.<ref>`
+      const key = path.slice('css.'.length)
+      return key.length > 0 ? ctx.node.css[key] ?? null : null
+    }
     case 'bindings': {
       const key = path.slice('bindings.'.length)
       return key.length > 0 ? ctx.cs.bindings[key] ?? null : null
@@ -270,20 +286,53 @@ export function evaluateDerived(expr: DerivedExpr, ctx: DerivedContext): unknown
  *  (N3, 2026-08-19 — a literal `null` declaration or a present-null
  *  bindings/props `$` read carries as `key: null`).
  */
-export function applyDerived(node: Node, cs: CompiledState): Record<string, unknown> | undefined {
-  const props = node.derived?.props
-  if (!props) return undefined
-  const evaluated: Record<string, unknown> = {}
-  for (const key of Object.keys(props)) {
-    const value = evaluateDerived(props[key]!, { node, cs })
-    if (value === undefined) continue
-    // N3 (2026-08-19) — null passthrough: an AUTHORED-PRESENT null (literal
-    // declaration or a present-null bindings/props `$` read) carries as
-    // `key: null`; a COMPUTED/MISSING null (falsy $if no-else, missing
-    // source, $gt non-match) keeps the historical omit.
-    if (value === null && !nullIsAuthored(props[key]!, { node, cs })) continue
-    evaluated[key] = value
+export interface DerivedBake { props?: Record<string, unknown>; css?: Record<string, unknown> }
+
+/**
+ * Bake a node's merged derived declaration into a compiled state (spec §4).
+ *  Clone-before-merge is mandatory: `cs.props` aliases the pass-1 cache, so
+ *  the returned copy (or undefined when nothing derived) is what the CALLER
+ *  assigns — cs.props / the pass-1 canon are never mutated in place. A result
+ *  of undefined OMITS the key; a null result OMITS unless AUTHORED-PRESENT
+ *  (N3, 2026-08-19 — a literal `null` declaration or a present-null
+ *  bindings/props `$` read carries as `key: null`).
+ *  css.classes (2026-08-20 — the css.classes seam): the resolved value
+ *  APPENDS onto the HOST's class list (host first, injected after; a scalar
+ *  coerces to a one-element list); a missing/null source keeps the authored
+ *  list (omit — never wipes).
+ */
+export function applyDerived(node: Node, cs: CompiledState): DerivedBake | undefined {
+  const decl = node.derived
+  if (!decl) return undefined
+  let evaluatedProps: Record<string, unknown> | undefined
+  const props = decl.props
+  if (props) {
+    const evaluated: Record<string, unknown> = {}
+    for (const key of Object.keys(props)) {
+      const value = evaluateDerived(props[key]!, { node, cs })
+      if (value === undefined) continue
+      // N3 (2026-08-19) — null passthrough: an AUTHORED-PRESENT null (literal
+      // declaration or a present-null bindings/props `$` read) carries as
+      // `key: null`; a COMPUTED/MISSING null (falsy $if no-else, missing
+      // source, $gt non-match) keeps the historical omit.
+      if (value === null && !nullIsAuthored(props[key]!, { node, cs })) continue
+      evaluated[key] = value
+    }
+    if (Object.keys(evaluated).length > 0) evaluatedProps = { ...cs.props, ...evaluated }
   }
-  if (Object.keys(evaluated).length === 0) return undefined
-  return { ...cs.props, ...evaluated }
+  let evaluatedCss: Record<string, unknown> | undefined
+  const css = decl.css
+  if (css?.classes !== undefined) {
+    const value = evaluateDerived(css.classes, { node, cs })
+    if (value !== undefined && value !== null) {
+      const host = Array.isArray(cs.css.classes) ? (cs.css.classes as unknown[]) : []
+      const injected = Array.isArray(value) ? value.slice() : [value]
+      evaluatedCss = { ...cs.css, classes: [...host, ...injected] }
+    }
+  }
+  if (!evaluatedProps && !evaluatedCss) return undefined
+  return {
+    ...(evaluatedProps ? { props: evaluatedProps } : {}),
+    ...(evaluatedCss ? { css: evaluatedCss } : {}),
+  }
 }

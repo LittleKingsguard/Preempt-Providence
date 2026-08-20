@@ -328,6 +328,15 @@ function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [v]
 }
 
+/** Derived bake landing: assign the baked props AND the baked css.classes
+ *  append (2026-08-20) onto the fresh compiled state — clone-only, never the
+ *  pass-1 canon. `baked.css` already carries host + injected classes. */
+function applyDerivedBake(node: Node, cs: CompiledState): void {
+  const baked = applyDerived(node, cs)
+  if (baked?.props !== undefined) cs.props = baked.props
+  if (baked?.css !== undefined) cs.css = baked.css
+}
+
 export class Node {
   readonly isNode = true as const
   readonly id: string
@@ -939,10 +948,19 @@ export class Node {
         }
         handlers = merged
       }
-      if (layer.derived?.props) {
-        derived = derived?.props
-          ? { props: { ...derived.props, ...layer.derived.props } }
-          : { props: { ...layer.derived.props } }
+      if (layer.derived?.props || layer.derived?.css) {
+        derived = {
+          ...(layer.derived.props
+            ? { props: { ...(derived?.props ?? {}), ...layer.derived.props } }
+            : derived?.props
+              ? { props: derived.props }
+              : {}),
+          ...(layer.derived.css
+            ? { css: { ...(derived?.css ?? {}), ...layer.derived.css } }
+            : derived?.css
+              ? { css: derived.css }
+              : {}),
+        }
       }
     }
     this.pass1 = { type, props, css, content, handlers: handlers ?? [], derived }
@@ -1176,11 +1194,10 @@ export class Node {
         publishOwn(node, cs)
         // derived bake (§4): the copy is what lands — the pass-1 canon is
         // never mutated (clone-before-merge)
-        cs.props = applyDerived(node, cs) ?? cs.props
+        applyDerivedBake(node, cs)
         actionable.push(cs)
         continue
       }
-
       const arms = resolveArms(node, targetNames, slice, viable, kinds)
       let warnedUnresolved = false
       for (const arm of arms) {
@@ -1220,7 +1237,7 @@ export class Node {
         }
         // derived bake (§4): per-arm evaluation — each arm's bindings drive
         // its own baked props
-        cs.props = applyDerived(node, cs) ?? cs.props
+        applyDerivedBake(node, cs)
         actionable.push(cs)
       }
     }
@@ -1345,7 +1362,7 @@ export class Node {
     // their node's sources; skip-if-present — a resolved path binding wins)
     seedOwnBindings(this, cs.bindings)
     // derived bake: reads the path-state's own children/pathKey
-    cs.props = applyDerived(this, cs) ?? cs.props
+    applyDerivedBake(this, cs)
     return cs
   }
 

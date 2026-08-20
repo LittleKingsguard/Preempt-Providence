@@ -371,17 +371,102 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
       expect(t.warnings).toEqual([])
     })
 
-    it('K8 gap — flat known-vocabulary targets warn component-target-gap, anchor kept, no synthesis', () => {
-      // the D7 seam set `type`/`content`/`children` is EXCLUDED from the gap
-      // (SPEC-ENCODED — they plan as seam candidates, options.seam = target)
+    it('K8 block — css / css.id / css.style / css.style.<member> are BLOCKED targets (component-target-skipped, anchor kept, no synthesis)', () => {
+      // the ONLY css-family path with a seam is `css.classes` (append below);
+      // every other member refuses the write — batch css rides
+      // `target: 'type'` → prototype, `css.id` must not be set by component,
+      // inline-style writes have no seam.
+      const targets = ['css', 'css.id', 'css.style', 'css.style.color', 'css.style.background-color']
+      for (const target of targets) {
+        const t = translateLegacy({
+          template: { root: { type: 'app', component: { reference: 'a', value: 1, target } } },
+          content: [],
+        })
+        expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
+        expect(t.root.derived).toBeUndefined()
+        expect(t.warnings).toEqual([{ code: 'component-target-skipped', path: 'root' }])
+      }
+    })
+
+    it('K8 css.classes seam — implemented: synthesized derived.css.classes + applyPath, NO warning', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', component: { reference: 'a', value: ['x'], target: 'css.classes' } } },
+        content: [],
+      })
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: ['x'], applyPath: 'css.classes' }])
+      expect(t.root.derived?.css?.classes).toEqual({ $: 'bindings.a' })
+      expect(t.warnings).toEqual([])
+    })
+
+    it('K8 css.classes seam — value-less root consumer form applies synthesis', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app' }, component: { reference: 'p10', target: 'css.classes' } },
+        content: [],
+      })
+      expect(compAnchors(t.root)).toEqual([{ role: 'target', target: 'p10', applyPath: 'css.classes' }])
+      expect(t.root.derived?.css?.classes).toEqual({ $: 'bindings.p10' })
+      expect(t.warnings).toEqual([])
+    })
+
+    it('K8 css.classes carve-out — dotted reference: anchor kept, synthesis skipped (component-target-skipped)', () => {
+      const t = translateLegacy({
+        template: { root: { type: 'app', component: { reference: 'a.b', value: ['x'], target: 'css.classes' } } },
+        content: [],
+      })
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a.b', value: ['x'] }])
+      expect(t.root.derived?.css?.classes).toBeUndefined()
+      expect(t.warnings).toEqual([{ code: 'component-target-skipped', path: 'root' }])
+    })
+
+    it('K8 css.classes carve-out — authored-derived wins: key present, no synthesis, NO warning', () => {
+      const t = translateLegacy({
+        template: {
+          root: {
+            type: 'app',
+            component: { reference: 'a', value: ['x'], target: 'css.classes' },
+            derived: { css: { classes: { $: 'type' } } },
+          },
+        },
+        content: [],
+      })
+      expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: ['x'] }])
+      expect(t.root.derived?.css?.classes).toEqual({ $: 'type' })
+      expect(t.warnings).toEqual([])
+    })
+
+    it('K8 css.classes seam — compiled bake APPENDS the resolved classes onto the host list', () => {
+      const t = translateLegacy({
+        template: {
+          root: {
+            type: 'app',
+            css: { classes: ['host-a', 'host-b'] },
+            component: { reference: 'theme', value: ['injected'], target: 'css.classes' },
+          },
+        },
+        content: [],
+      })
+      const state = t.root.compile(t.nodes).actionable.find((s) => s.nodeId === t.root.id)!
+      expect(state.css.classes).toEqual(['host-a', 'host-b', 'injected'])
+    })
+
+    it('K8 css.classes seam — a scalar string value appends as ONE class onto an empty host', () => {
+      const t = translateLegacy({
+        template: {
+          root: { type: 'app', component: { reference: 'theme', value: 'injected', target: 'css.classes' } },
+        },
+        content: [],
+      })
+      const state = t.root.compile(t.nodes).actionable.find((s) => s.nodeId === t.root.id)!
+      expect(state.css.classes).toEqual(['injected'])
+    })
+
+    it('K8 gap — unknown / typo\'d target strings warn component-target-gap, anchor kept, no synthesis', () => {
+      // `handlers` (whole-dict) and `component` (nested-binding) are NOT legacy
+      // import targets — handlers.<event> and the type-seam prototype cover
+      // their real uses, so the bare forms are not-known paths like any typo.
       const targets = [
-        'css',
-        'css.id',
-        'css.classes',
-        'css.style',
-        'css.style.color',
-        'handlers',
-        'component',
+        'moodpanel', 'propx.foo', 'propx', 'x.prop', 'propsx', 'theme', 'componentname',
+        'handlers', 'component', 'css.foo', 'css.cssDef', 'css.classes.x',
       ]
       for (const target of targets) {
         const t = translateLegacy({
@@ -394,21 +479,11 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
       }
     })
 
-    it('K8 gap — unknown / typo\'d target strings warn component-target-gap, anchor kept, no synthesis', () => {
-      const targets = ['moodpanel', 'propx.foo', 'propx', 'x.prop', 'propsx', 'theme', 'componentname']
-      for (const target of targets) {
-        const t = translateLegacy({
-          template: { root: { type: 'app', component: { reference: 'a', value: 1, target } } },
-          content: [],
-        })
-        expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
-        expect(t.root.derived).toBeUndefined()
-        expect(t.warnings).toEqual([{ code: 'component-target-gap', path: 'root' }])
-      }
-    })
-
-    it('K8 D7 — target-syntax edges (props., props:name, props.name., bare props) warn component-target-skipped, anchor kept', () => {
-      const targets = ['props.', 'props:name', 'props.name.', 'props']
+    it('K8 D7 — target-syntax edges (props., props:name, props.name., bare props, css., css.id., css.classes., css.style.) warn component-target-skipped, anchor kept', () => {
+      // `css.` / `css.<member>.` are not valid labels by themselves — the sub
+      // element must exist (and `css.style.background-color` IS a label; the
+      // trailing-dot forms are the malformed ones).
+      const targets = ['props.', 'props:name', 'props.name.', 'props', 'css.', 'css.id.', 'css.classes.', 'css.style.']
       for (const target of targets) {
         const t = translateLegacy({
           template: { root: { type: 'app', component: { reference: 'a', value: 1, target } } },
@@ -493,10 +568,10 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
         content: [],
       })
       expect(compAnchors(t.root)).toEqual([{ role: 'duplex', target: 'a', value: 1 }])
-      // first binding's target is itself a recognition-only gap → gap warn,
+      // first binding's target is itself a BLOCKED css target → skip warn,
       // THEN the second is blocked as a duplicate
       expect(t.warnings).toEqual([
-        { code: 'component-target-gap', path: 'root' },
+        { code: 'component-target-skipped', path: 'root' },
         { code: 'component-duplicate-target', path: 'root' },
       ])
     })
