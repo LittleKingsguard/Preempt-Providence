@@ -1,5 +1,6 @@
 import type { ForkPathKey, MinimalElement, RenderAdapter, RenderOp } from './render.js'
 import type { Anchor, NodeRef } from './types.js'
+import type { Node } from './node.js'
 import { kebabKey } from './translate.js'
 import { defPrototypesFor, defRootPrototypeFor } from './registry.js'
 import { providerValueFromLink } from './resolve.js'
@@ -347,8 +348,13 @@ export function emitElements(
     forkKey?: ForkPathKey
     anchors?: readonly Anchor[]
   }>,
-  nodeById?: Map<string, EmitNodeSource> | null,
+  // Packaging (2026-08-20): a consumer passes the REAL node map (Map<string,
+  // Node>) — Node is structurally a superset of EmitNodeSource; the union
+  // (rather than a widened EmitNodeSource) sidesteps TS Map invariance. The
+  // runtime objects are the same; normalized once at the boundary.
+  nodeById?: Map<string, EmitNodeSource> | Map<string, Node> | null,
 ): MinimalElement[] {
+  const nb = (nodeById ?? null) as Map<string, EmitNodeSource> | null
   // P3 §4.1 — group by WIRE, not nodeId: a path-state's wire is its pathKey
   // (identity = pathKey alone, §2.2), so every path-state forms its OWN
   // single-state group — it can never be armIdx'd. Only genuine component
@@ -451,7 +457,7 @@ export function emitElements(
       pathNodeOf.size > 0 || pathStateChildren.size > 0 || ownerPlaced.size > 0
         ? { pathNodeOf, pathStateChildren, ownerPlaced }
         : undefined
-    const emitted = emitOne(emitBase, multi ? 0 : undefined, nodeById, pathCtx)
+    const emitted = emitOne(emitBase, multi ? 0 : undefined, nb, pathCtx)
     const covered = states.length === 1 && defCovered.has(wire)
     if (!covered) {
       const el = emitted.el
@@ -459,7 +465,7 @@ export function emitElements(
         el.childOrder = []
         // one element per arm; the first arm carries the full el, the rest are leaf dupes
         els.push(el)
-        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nodeById, pathCtx).el)
+        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nb, pathCtx).el)
       } else {
         // remap any forked child references to their arm wires in arm order
         el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])

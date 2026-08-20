@@ -1,11 +1,42 @@
 {
-  "name": "preempt-providence",
+  "name": "provident-ssr",
   "version": "0.1.0",
-  "description": "Skeleton server for the Preempt-Providence rewrite (per docs/specs/*.md)",
+  "description": "The Preempt-Providence reactive render engine — legacy-envelope translate, anchor-graph Supervisor, handlers, SSR/DOM render adapters.",
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LittleKingsguard/Preempt-Providence.git"
+  },
+  "author": "Ryan Rasey",
   "type": "module",
-  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core/*.js": {
+      "types": "./dist/core/*.d.ts",
+      "import": "./dist/core/*.js"
+    },
+    "./core/*": {
+      "types": "./dist/core/*.d.ts",
+      "import": "./dist/core/*.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=16"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npm run build",
+    "prepublishOnly": "npm test && npm run typecheck",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
@@ -15,12 +46,9 @@
     "demo": "npm run demo:build && node scripts/build-demo.mjs && node scripts/serve-demo.mjs",
     "demo:smoke": "npm run demo:build && node scripts/build-demo.mjs && node scripts/demo-smoke.mjs"
   },
-  "dependencies": {
-    "ws": "^8.18.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.14.0",
-    "@types/ws": "^8.5.10",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
