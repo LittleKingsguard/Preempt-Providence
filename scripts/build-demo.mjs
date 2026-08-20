@@ -237,3 +237,12 @@ async function emitPage(templateName, outName, doc, serverData) {
 {
   await import('./hooks-array-scenarios-page.mjs')
 }
+
+// ---- page 23: session-features (css.classes seam, Group 1) --------
+// Five css.class scenarios (scalar append, array append, missing source keep,
+// blocked targets warn+skip, reverse round-trip) from individual legacy
+// envelopes; the builder writes demo/session-features.html (envelopes +
+// the expected census) at import.
+{
+  await import('./session-features-page.mjs')
+}

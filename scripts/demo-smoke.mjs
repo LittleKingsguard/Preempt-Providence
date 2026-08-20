@@ -549,6 +549,46 @@ function assertLegacyShapeCensus(prof) {
   }
 }
 
+// ---- session-features page: css.classes injection seam (Group 1) ------------
+// Five css.class scenarios (scalar append, array append, missing source keep,
+// blocked targets warn+skip, reverse round-trip) from individual legacy
+// envelopes; the module translates each, compiles, emits, and runs the
+// per-scenario runner checks (the spec's intended outputs). Census guard:
+// the page publishes registered/inTree/unplaced/destroyed/prototypes/cloneOps
+// on the profile; the builder ran the IDENTICAL core pipeline and embedded the
+// expected census in server-data; the smoke pins equality.
+{
+  const pageHtml = await readFile(`${base}demo/session-features.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/session-features.js`).catch((e) => {
+    console.error('session-features failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__sessionFeaturesDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__sessionFeaturesProfile
+  if (!prof) {
+    console.error('session-features profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`session-features profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  const serverData = JSON.parse(byId.get('server-data').textContent)
+  const exp = serverData.expected.census
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'prototypes', 'cloneOps']) {
+    if (typeof prof[f] !== 'number' || prof[f] !== exp[f]) {
+      console.error(`session-features census mismatch on "${f}": page=${prof[f]} expected=${exp[f]}`)
+      process.exit(1)
+    }
+  }
+}
+
 // ---- hooks-scenarios page: the value-provider slot (SPA scenarios) ----------
 // One legacy envelope whose root carries the theme/user/counter providers +
 // the authored `hooks` field; the control buttons (function-STRING bodies)
@@ -733,6 +773,10 @@ if (!banners.some((b) => b.includes('legacy-shape') && /0 failed/.test(b))) {
 }
 if (!banners.some((b) => b.includes('handlers-scenarios') && /0 failed/.test(b))) {
   console.error('handlers-scenarios page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('session-features') && /0 failed/.test(b))) {
+  console.error('session-features page did not complete its checks (banner missing)')
   process.exit(1)
 }
 if (!banners.some((b) => b.includes('hooks-scenarios') && /0 failed/.test(b))) {

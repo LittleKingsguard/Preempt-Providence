@@ -12,8 +12,8 @@ import { CycleError, SingleParentError } from './errors.js'
 import { EventBridge } from './events.js'
 import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
-import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes } from './handlers.js'
-import type { HandlerContext, HandlerPhase } from './handlers.js'
+import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
+import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
 import { unregisterContentNode, resolveNodeRef } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
@@ -157,6 +157,51 @@ export class Supervisor {
     } finally {
       this.dispatchingPhases.delete(key)
     }
+  }
+
+  /** Phase A (2026-08-20 — event-dispatch-wiring-review.md): the EVENT-dispatch
+   *  engine entry — the sibling of `runPhase` for events. Resolves a target
+   *  (a Node instance / a nodeId / a wire string) to a live Node and runs
+   *  `dispatchEvent(node, handlerContext, event, ...args)`, REUSING the
+   *  existing containment (throwing bodies land in the results list) + the
+   *  per-dispatch node/states enrichment (handlers.ts `scopedFor`) + the
+   *  managed mutation channel (bodies mutate only via clientAPI.apply).
+   *  Pins (review + handlers.md §3): dispatch is a TRIGGER, never a journal
+   *  entry; it never drains pass-2 states, never flushes applies (the
+   *  microtask flush owns a body's apply effects) and never emits EventBridge
+   *  events — a host awaits the flush before asserting; NO propagation
+   *  (target handlers only); unknown / destroyed / unplaced targets return []
+   *  (mirror of runPhase's unknown-id no-op, but events RETURN results).
+   *  Wire resolution: full string first (a nodeId), then the first-`#` prefix
+   *  (fork-arm wires are `<nodeId>#<i>`, render-helpers §4.1); a fork-arm
+   *  dispatch fires the NODE's handlers once, all arms visible in ctx.states.
+   *  Reentrancy: a nested dispatch of the SAME (node, event) no-ops via the
+   *  dispatchingEvents guard. The DomAdapter.onEvent seam stays the page-side
+   *  path — the decoupling pin is unchanged. */
+  private dispatchingEvents = new Set<string>()
+
+  dispatchEvent(target: Node | NodeId | string, event: string, ...args: unknown[]): HandlerResult[] {
+    const node = typeof target === 'string' ? this.resolveDispatchTarget(target) : target
+    if (!node || node.destroyed || node.state === 'unplaced') return []
+    const key = `event:${event}:${node.id}`
+    if (this.dispatchingEvents.has(key)) return []
+    this.dispatchingEvents.add(key)
+    try {
+      return dispatchEvent(node, this.handlerContext, event, ...args)
+    } finally {
+      this.dispatchingEvents.delete(key)
+    }
+  }
+
+  /** Resolve a dispatch-target string to a live node: the FULL string as a
+   *  nodeId first (so a `#`-bearing node id wins over the arm grammar), then
+   *  the first-`#` prefix (fork-arm wire `<nodeId>#<i>`). */
+  private resolveDispatchTarget(target: string): Node | undefined {
+    const exact = this.nodes.get(target)
+    if (exact) return exact
+    const hash = target.indexOf('#')
+    if (hash !== -1) return this.nodes.get(target.slice(0, hash))
+    return undefined
   }
 
   /**

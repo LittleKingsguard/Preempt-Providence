@@ -18,6 +18,11 @@ function newSystem() {
   return { supervisor, events, root }
 }
 
+async function flushTicks(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0))
+  await new Promise((r) => setTimeout(r, 0))
+}
+
 describe('Supervisor phase hooks (stub contract)', () => {
   it('exposes clientAPI and a handler context on the supervisor', () => {
     const { supervisor } = newSystem()
@@ -218,5 +223,136 @@ describe('focusedSliceFor — bounded pass-2 slices stay bounded (no all-tree sc
     src.value = 'dark'
     const slice = focusedSliceFor(child, [root, child, provider])
     expect(slice.map((n) => n.id).sort()).toEqual([root.id, child.id].sort())
+  })
+})
+
+describe('Supervisor event dispatch (Phase A — dispatchEvent engine wiring)', () => {
+  it('dispatches the matching event on a Node target and returns the contained results', () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    const hits: string[] = []
+    n.addLayer({
+      id: 'h',
+      handlers: [{ name: 'click', event: 'click', body: () => { hits.push('fired'); return 'ok' } }],
+    })
+    const results = supervisor.dispatchEvent(n, 'click')
+    expect(hits).toEqual(['fired'])
+    expect(results).toEqual(['ok'])
+  })
+
+  it('resolves a nodeId string target', () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let hits = 0
+    n.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => { hits++ } }] })
+    const results = supervisor.dispatchEvent(n.id, 'click')
+    expect(hits).toBe(1)
+    expect(results).toEqual([undefined])
+  })
+
+  it('resolves a fork-arm wire (nodeId#<i>) to the node and fires ONCE with all arms in ctx.states', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode({ type: 'card' }))
+    supervisor.registerNode(n)
+    targetAnchor(n, 'color')
+    const pRed = childOf(n, makeNode({ type: 'pRed' }))
+    const pBlue = childOf(n, makeNode({ type: 'pBlue' }))
+    supervisor.registerNode(pRed)
+    supervisor.registerNode(pBlue)
+    addComponentSource(pRed, 'color', 'red')
+    addComponentSource(pBlue, 'color', 'blue')
+    let fires = 0
+    let seenArms = -1
+    n.addLayer({
+      id: 'h',
+      handlers: [{ name: 'click', event: 'click', body: (c: HandlerContext) => { fires++; seenArms = c.states?.length ?? -1 } }],
+    })
+    supervisor.apply({ kind: 'state-slice', node: n, mutation: [{ targetProp: 'content', mode: 'replace', value: 'x' }] })
+    await flushTicks()
+    expect(supervisor.getResolvedStates(n.id)).toHaveLength(2) // two fork arms
+    supervisor.dispatchEvent(`${n.id}#0`, 'click')
+    expect(fires).toBe(1) // fired ONCE for the node, never once-per-arm
+    expect(seenArms).toBe(2) // all arms exposed via ctx.states
+  })
+
+  it('unknown / unresolvable targets → [] without throwing', () => {
+    const { supervisor } = newSystem()
+    expect(() => supervisor.dispatchEvent('nope', 'click')).not.toThrow()
+    expect(supervisor.dispatchEvent('nope', 'click')).toEqual([])
+  })
+
+  it('destroyed targets → [] (the handler never fires)', () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    n.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => { throw new Error('should not run') } }] })
+    n.markDestroyed()
+    expect(supervisor.dispatchEvent(n.id, 'click')).toEqual([])
+  })
+
+  it('`#`-in-nodeId resolution order: full string first, then first-`#` prefix', () => {
+    const { supervisor, root } = newSystem()
+    const a = childOf(root, makeNode({ type: 'div' }, 'a'))
+    const aHashB = childOf(root, makeNode({ type: 'div' }, 'a#b'))
+    supervisor.registerNode(a)
+    supervisor.registerNode(aHashB)
+    const hits: string[] = []
+    a.addLayer({ id: 'ha', handlers: [{ name: 'click', event: 'click', body: () => hits.push('A') }] })
+    aHashB.addLayer({ id: 'hb', handlers: [{ name: 'click', event: 'click', body: () => hits.push('A#B') }] })
+    supervisor.dispatchEvent('a#0', 'click') // the fork-arm wire of node 'a' → A
+    supervisor.dispatchEvent('a#b', 'click') // the FULL-string node id 'a#b' → A#B
+    expect(hits).toEqual(['A', 'A#B'])
+  })
+
+  it('reentrancy: a body dispatching the SAME node+event no-ops (guard); a DIFFERENT event still fires', () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let entered = 0
+    let focusFired = 0
+    n.addLayer({
+      id: 'h',
+      handlers: [
+        { name: 'click', event: 'click', body: (c: HandlerContext) => { entered++; c.supervisor.dispatchEvent(n.id, 'click'); c.supervisor.dispatchEvent(n.id, 'focus') } },
+        { name: 'focus', event: 'focus', body: () => { focusFired++ } },
+      ],
+    })
+    supervisor.dispatchEvent(n.id, 'click')
+    expect(entered).toBe(1) // the nested same-event dispatch was guarded
+    expect(focusFired).toBe(1) // a DIFFERENT event is not blocked by the guard
+  })
+
+  it('containment: throwing bodies return the error in the results, never propagate', () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    n.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => { throw new Error('boom') } }] })
+    const results = supervisor.dispatchEvent(n.id, 'click')
+    expect(results).toHaveLength(1)
+    expect(results[0]).toBeInstanceOf(Error)
+    expect((results[0] as Error).message).toBe('boom')
+  })
+
+  it('no propagation: only the TARGET node\'s matching handlers fire', () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    const hits: string[] = []
+    root.addLayer({ id: 'hr', handlers: [{ name: 'click', event: 'click', body: () => hits.push('ROOT') }] })
+    n.addLayer({ id: 'hn', handlers: [{ name: 'click', event: 'click', body: () => hits.push('NODE') }] })
+    supervisor.dispatchEvent(n.id, 'click')
+    expect(hits).toEqual(['NODE'])
+  })
+
+  it('dispatch is a trigger, never a drain: with no applies it produces no pass-2 states', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    n.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => 'read-only' }] })
+    supervisor.dispatchEvent(n.id, 'click')
+    await flushTicks()
+    expect(supervisor.takePass2States().size).toBe(0) // nothing drained, nothing scheduled
   })
 })

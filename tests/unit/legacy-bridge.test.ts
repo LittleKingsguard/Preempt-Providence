@@ -915,3 +915,51 @@ describe('AUTH-SEAM — NESTED seam consumer (def-in-def, 2026-08-16)', () => {
     expect(String(btnEl!.props['text'])).toBe('Sign In')
   })
 })
+
+describe('DEFECT #27 — a handlers state-slice CAN clear (empty value = CLEAR, durable vs the seam rebuild)', () => {
+  function seamButton() {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [{ reference: 'cb', value: { name: 'cb', body: '(e, c) => { return "seam" }' } }],
+          children: [{ type: 'button', component: [{ reference: 'cb', target: 'handlers.click' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const btn = t.root.children[0]!
+    t.root.compile(t.nodes)
+    return { sup, btn, root: t.root }
+  }
+
+  it('an empty handlers state-slice value [] CLEARS seam-installed handlers AND survives a re-compile (seam suppressed)', () => {
+    const { sup, btn, root } = seamButton()
+    expect((btn.handlers as unknown[]).length).toBe(1) // the seam handler is installed
+    const res = sup.apply({ kind: 'state-slice', node: btn, mutation: [{ targetProp: 'handlers', mode: 'replace', value: [] }] })
+    expect(res.status).toBe('applied')
+    expect((btn.handlers as unknown[]).length).toBe(0) // cleared
+    root.compile([root, btn]) // a re-compile must NOT re-materialize the seam handler
+    expect((btn.handlers as unknown[]).length).toBe(0) // durable
+  })
+
+  it('dispatching after the clear runs NOTHING (the one-shot self-removal works end-to-end)', () => {
+    const { sup, btn } = seamButton()
+    sup.apply({ kind: 'state-slice', node: btn, mutation: [{ targetProp: 'handlers', mode: 'replace', value: [] }] })
+    const results = dispatchEvent(btn, sup.handlerContext, 'click')
+    expect(results).toEqual([])
+  })
+
+  it('a NON-EMPTY handlers write still appends-with-override to the seam (D16/B4 preserved — no regression)', () => {
+    const { sup, btn } = seamButton()
+    sup.apply({
+      kind: 'state-slice',
+      node: btn,
+      mutation: [{ targetProp: 'handlers', mode: 'replace', value: [{ name: 'h', event: 'click', body: () => 'injected' }] }],
+    })
+    const names = (btn.handlers as Array<{ name: string }>).map((h) => h.name).sort()
+    expect(names).toEqual(['cb', 'h']) // seam + injected both survive (append-with-override)
+  })
+})

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>session-features</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+    .group {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0;
+      background: #fafafa;
+    }
+    .group h4 { margin: 0 0 0.5rem; color: #333; }
+    .badge {
+      display: inline-block;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+    .is-primary { background: #3b82f6; color: #fff; }
+    .is-large { font-size: 1.1em; }
+    .blocked-btn { padding: 0.4em 0.9em; border-radius: 6px; border: 1px solid #bbb; }
+    .expect { font-size: 0.9em; color: #555; margin: 0.4rem 0 0.6rem; }
+    .expect::before { content: "expect: "; font-weight: 600; color: #444; }
+    #results { margin-top: 2rem; }
+  </style>
+</head>
+<body data-page="session-features">
+  <h1>session-features</h1>
+  <p>Landed-features scenarios — css.classes seam, retained-handler-map listener lifecycle, Supervisor.dispatchEvent (Phase A). See docs/specs/landed-features-scenarios.md.</p>
+
+  <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+  <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+  <h2>Group 1 — css.classes injection seam</h2>
+  <div class="group" id="mount-badge">
+    <h4>S1.1 — provider-colored badge (scalar append)</h4>
+    <p class="expect">class attribute = <code>badge is-primary</code> (host class first, injected appended); translate emits no gap warning for the seam target.</p>
+  </div>
+  <div class="group" id="mount-badge-array">
+    <h4>S1.2 — array-form multi-class injection (in order)</h4>
+    <p class="expect">class attribute = <code>badge is-primary is-large</code> (array order preserved, host-first).</p>
+  </div>
+  <div class="group" id="mount-badge-missing">
+    <h4>S1.3 — missing/unresolved source keeps the authored list</h4>
+    <p class="expect">element still renders with class <code>badge</code> ONLY (nothing wiped); unresolved-reference compile fail-state; no throw anywhere.</p>
+  </div>
+  <div class="group" id="mount-blocked">
+    <h4>S1.4 — blocked css targets warn + skip, never throw</h4>
+    <p class="expect">translate emits <code>component-target-skipped</code> for exactly the four blocked targets (css, css.id, css.style, css.style.color); no <code>component-target-gap</code>; the button's own authored css stays intact.</p>
+  </div>
+  <div class="group" id="mount-roundtrip">
+    <h4>S1.5 — reverse round-trip: target css.classes persists warning-free</h4>
+    <p class="expect">re-translated tree is warning-free (no new gap warn, no double-emit); the reversed doc renders the same <code>badge is-primary</code> class plan.</p>
+  </div>
+
+  <h2>Group 2 — retained-handler-map listener lifecycle</h2>
+  <div class="group" id="mount-self-remove">
+    <h4>S2.1 — a handler that removes its own binding really detaches</h4>
+    <p class="expect">first click writes <code>clicked</code> and clears the compiled handlers; the diff emits <code>set('on:click', undefined)</code>; the retained listener is removed; a second click runs nothing and content is preserved.</p>
+  </div>
+  <div class="group" id="mount-remove-el">
+    <h4>S2.2 — element removal purges the retained listener</h4>
+    <p class="expect">dispatching the remove-trigger destroys <code>remove-me</code>: its element is gone, its retained listener is purged, and the page still renders without the control.</p>
+  </div>
+
+  <h2>Group 3 — Supervisor.dispatchEvent engine entry</h2>
+  <div class="group" id="mount-sayhi">
+    <h4>S3.1 — drive a data-authored control through the ENGINE entry (not onEvent)</h4>
+    <p class="expect">dispatchEvent(id, 'click', 'hi') runs the body with event.value === 'hi'; the re-rendered button text is <code>hi!</code>; results [undefined].</p>
+  </div>
+  <div class="group" id="mount-fork">
+    <h4>S3.2 — fork-arm wire target fires the node once with all arms in ctx.states</h4>
+    <p class="expect">2 fork arms resolved; dispatchEvent(display#0, 'click') fires exactly once, results [1], and the recorded ctx.states length is 2 (arms prop = "2").</p>
+  </div>
+  <div class="group" id="mount-unknown">
+    <h4>S3.3 — unknown and destroyed targets are safe no-ops</h4>
+    <p class="expect">dispatchEvent('no-such-id') → []; after destroying the victim, dispatchEvent(destroyedId) → []; the page never throws and stays alive.</p>
+  </div>
+  <div class="group" id="mount-readonly">
+    <h4>S3.4 — dispatch is a trigger: a READ-ONLY dispatch re-renders nothing</h4>
+    <p class="expect">a read-only dispatch produces no pass-2 states and no re-render; a subsequent apply DOES re-render.</p>
+  </div>
+  <div class="group" id="mount-noprop">
+    <h4>S3.5 — no propagation: only the target's handlers fire</h4>
+    <p class="expect">dispatching the child fires ONLY the child handler (results [1]); the panel handler stays silent and its content is unchanged.</p>
+  </div>
+  <div class="group" id="mount-reenter">
+    <h4>S3.6 — same-(node,event) reentrancy no-ops; a different event fires</h4>
+    <p class="expect">a self-re-dispatching click runs exactly once (nestedLen prop = "0"); dispatching 'focus' still runs FocusCapture (focus prop = "1", results ["focus"]).</p>
+  </div>
+
+  <div id="results"></div>
+
+  <script type="module" src="session-features.js"></script>
+</body>
+</html>

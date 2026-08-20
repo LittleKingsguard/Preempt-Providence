@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>session-features</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+    .group {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0;
+      background: #fafafa;
+    }
+    .group h4 { margin: 0 0 0.5rem; color: #333; }
+    .badge {
+      display: inline-block;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+    .is-primary { background: #3b82f6; color: #fff; }
+    .is-large { font-size: 1.1em; }
+    .blocked-btn { padding: 0.4em 0.9em; border-radius: 6px; border: 1px solid #bbb; }
+    .expect { font-size: 0.9em; color: #555; margin: 0.4rem 0 0.6rem; }
+    .expect::before { content: "expect: "; font-weight: 600; color: #444; }
+    #results { margin-top: 2rem; }
+  </style>
+</head>
+<body data-page="session-features">
+  <h1>session-features</h1>
+  <p>Landed-features scenarios — css.classes seam, retained-handler-map listener lifecycle, Supervisor.dispatchEvent (Phase A). See docs/specs/landed-features-scenarios.md.</p>
+
+  <script id="preempt-initial-data" type="application/json">{"badge":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","css":{"classes":["badge"]},"props":{"id":"badge-el"},"component":[{"reference":"tone","target":"css.classes"}],"content":"Badge"}]},"component":[{"reference":"tone","value":"is-primary"}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"badge-array":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","css":{"classes":["badge"]},"props":{"id":"badge-array-el"},"component":[{"reference":"tone","target":"css.classes"}],"content":"Badge"}]},"component":[{"reference":"tone","value":["is-primary","is-large"]}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"badge-missing":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","css":{"classes":["badge"]},"props":{"id":"badge-missing-el"},"component":[{"reference":"missing-tone","target":"css.classes"}],"content":"Badge"}]}},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"blocked":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"button","css":{"classes":["btn","blocked-btn"],"style":"color: green;"},"props":{"id":"blocked-btn-el"},"component":[{"reference":"c","target":"css"},{"reference":"idSrc","target":"css.id"},{"reference":"s","target":"css.style"},{"reference":"sp","target":"css.style.color"}],"content":"Blocked"}]},"component":[{"reference":"c","value":{"classes":["injected"]}},{"reference":"idSrc","value":"injected-id"},{"reference":"s","value":{"background":"red"}},{"reference":"sp","value":"blue"}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"roundtrip":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","css":{"classes":["badge"]},"props":{"id":"badge-roundtrip-el"},"component":[{"reference":"tone","target":"css.classes"}],"content":"Badge"}]},"component":[{"reference":"tone","value":"is-primary"}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"self-remove":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"button","props":{"id":"one-shot-btn"},"component":[{"target":"handlers.click","reference":"OneShot"}],"content":"One-shot"}]},"component":[{"reference":"OneShot","value":{"name":"OneShot","body":"function (event, context) {\n  context.node.receiveNextState({ content: \"clicked\" });\n  context.clientAPI.apply(context.node.id, { kind: \"state-slice\", mutation: [{ targetProp: \"handlers\", mode: \"replace\", value: [] }] });\n  return 1;\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"remove-el":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","props":{"id":"remove-panel"},"children":[{"type":"button","css":{"classes":["remove-me"]},"props":{"id":"remove-me-btn"},"component":[{"target":"handlers.click","reference":"Gone"}],"content":"Remove me"}]},{"type":"button","css":{"classes":["remove-trigger"]},"props":{"id":"remove-trigger-btn"},"component":[{"target":"handlers.click","reference":"DestroyMe"}],"content":"Destroy remove-me"}]},"component":[{"reference":"Gone","value":{"name":"Gone","body":"function (event, context) {\n  return 0;\n}"}},{"reference":"DestroyMe","value":{"name":"DestroyMe","body":"function (event, context) {\n  var view = event.target;\n  var victim = null;\n  while (view && !victim) {\n    victim = view.findNode({ classes: [\"remove-me\"] });\n    view = view.parent;\n  }\n  if (victim) { context.clientAPI.apply(victim.id, { kind: \"destroy\" }); }\n  return 1;\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"sayhi":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"button","props":{"id":"sayhi-btn"},"component":[{"target":"handlers.click","reference":"SayHi"}],"content":"Say hi"}]},"component":[{"reference":"SayHi","value":{"name":"SayHi","body":"function (event, context) {\n  context.node.receiveNextState({ content: String(event.value == null ? \"\" : event.value) + \"!\" });\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"fork":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","css":{"classes":["display"]},"props":{"id":"display-el"},"component":[{"reference":"color","target":"props.color"},{"target":"handlers.click","reference":"ReadArms"}],"content":"arms:","children":[{"type":"div","props":{"id":"src-red"},"component":[{"reference":"color","value":"red"}],"content":"red-src"},{"type":"div","props":{"id":"src-blue"},"component":[{"reference":"color","value":"blue"}],"content":"blue-src"}]}]},"component":[{"reference":"ReadArms","value":{"name":"ReadArms","body":"function (event, context) {\n  context.node.receiveNextState({ props: { arms: String(context.states ? context.states.length : -1) } });\n  return 1;\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"unknown":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"button","props":{"id":"sayhi-btn-33"},"component":[{"target":"handlers.click","reference":"SayHi"}],"content":"hi-33"},{"type":"button","props":{"id":"victim-btn"},"component":[{"target":"handlers.click","reference":"Gone"}],"content":"victim"}]},"component":[{"reference":"SayHi","value":{"name":"SayHi","body":"function (event, context) {\n  context.node.receiveNextState({ content: String(event.value == null ? \"\" : event.value) + \"!\" });\n}"}},{"reference":"Gone","value":{"name":"Gone","body":"function (event, context) {\n  return 0;\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"readonly":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","props":{"id":"readonly-el"},"component":[{"target":"handlers.click","reference":"ReadOnly"}],"content":"read-only"}]},"component":[{"reference":"ReadOnly","value":{"name":"ReadOnly","body":"function (event, context) {\n  var st = context.tree.getState(context.node.id);\n  var resolved = context.node.resolved;\n  return { read: true, states: st ? st.length : -1, resolvedCount: resolved ? resolved.length : -1 };\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"noprop":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","props":{"id":"panel-el"},"content":"0","component":[{"target":"handlers.click","reference":"PanelTouch"}],"children":[{"type":"button","props":{"id":"child-btn"},"content":"0","component":[{"target":"handlers.click","reference":"ButtonTouch"}]}]}]},"component":[{"reference":"PanelTouch","value":{"name":"PanelTouch","body":"function (event, context) {\n  var n = (Number(context.node.content) || 0) + 1;\n  context.node.receiveNextState({ content: String(n) });\n  return n;\n}"}},{"reference":"ButtonTouch","value":{"name":"ButtonTouch","body":"function (event, context) {\n  var n = (Number(context.node.content) || 0) + 1;\n  context.node.receiveNextState({ content: String(n) });\n  return n;\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"reenter":{"template":{"root":{"type":"div","props":{"id":"root-session-features"},"children":[{"type":"div","props":{"id":"reenter-el"},"component":[{"target":"handlers.click","reference":"SelfClick"},{"target":"handlers.focus","reference":"FocusCapture"}],"content":"reenter"}]},"component":[{"reference":"SelfClick","value":{"name":"SelfClick","body":"function (event, context) {\n  var inner = context.supervisor.dispatchEvent(context.node.id, \"click\");\n  context.node.receiveNextState({ props: { nestedLen: String(inner ? inner.length : -1) } });\n  return 1;\n}"}},{"reference":"FocusCapture","value":{"name":"FocusCapture","body":"function (event, context) {\n  context.node.receiveNextState({ props: { focus: \"1\" } });\n  return \"focus\";\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}}}</script>
+  <script id="server-data" type="application/json">{"expected":{"census":{"registered":32,"inTree":32,"unplaced":0,"destroyed":0,"prototypes":0,"cloneOps":0},"mounts":13},"goals":["S1.1 provider-colored badge: scalar append, host class first, injected after","S1.2 array-form multi-class injection: array order preserved, host-first","S1.3 missing/unresolved source: keeps authored list (omit, never wipes)","S1.4 blocked css targets: warn + skip (component-target-skipped), never throw","S1.5 reverse round-trip: target: css.classes persists warning-free","S2.1 self-removing handler: retained listener present + first-click write (self-removal not pipeline-reachable — recorded finding)","S2.2 element removal purges the retained listener (removeEl → DOM-F7)","S3.1 engine dispatch drives a data-authored control (event.value passthrough)","S3.2 fork-arm wire once-fire with all arms in ctx.states","S3.3 unknown/destroyed targets are safe no-ops","S3.4 read-only dispatch re-renders nothing; an apply re-renders","S3.5 no propagation: only the target handler fires","S3.6 same-(node,event) reentrancy no-ops; a different event fires"]}</script>
+
+  <h2>Group 1 — css.classes injection seam</h2>
+  <div class="group" id="mount-badge">
+    <h4>S1.1 — provider-colored badge (scalar append)</h4>
+    <p class="expect">class attribute = <code>badge is-primary</code> (host class first, injected appended); translate emits no gap warning for the seam target.</p>
+  </div>
+  <div class="group" id="mount-badge-array">
+    <h4>S1.2 — array-form multi-class injection (in order)</h4>
+    <p class="expect">class attribute = <code>badge is-primary is-large</code> (array order preserved, host-first).</p>
+  </div>
+  <div class="group" id="mount-badge-missing">
+    <h4>S1.3 — missing/unresolved source keeps the authored list</h4>
+    <p class="expect">element still renders with class <code>badge</code> ONLY (nothing wiped); unresolved-reference compile fail-state; no throw anywhere.</p>
+  </div>
+  <div class="group" id="mount-blocked">
+    <h4>S1.4 — blocked css targets warn + skip, never throw</h4>
+    <p class="expect">translate emits <code>component-target-skipped</code> for exactly the four blocked targets (css, css.id, css.style, css.style.color); no <code>component-target-gap</code>; the button's own authored css stays intact.</p>
+  </div>
+  <div class="group" id="mount-roundtrip">
+    <h4>S1.5 — reverse round-trip: target css.classes persists warning-free</h4>
+    <p class="expect">re-translated tree is warning-free (no new gap warn, no double-emit); the reversed doc renders the same <code>badge is-primary</code> class plan.</p>
+  </div>
+
+  <h2>Group 2 — retained-handler-map listener lifecycle</h2>
+  <div class="group" id="mount-self-remove">
+    <h4>S2.1 — a handler that removes its own binding really detaches</h4>
+    <p class="expect">first click writes <code>clicked</code> and clears the compiled handlers; the diff emits <code>set('on:click', undefined)</code>; the retained listener is removed; a second click runs nothing and content is preserved.</p>
+  </div>
+  <div class="group" id="mount-remove-el">
+    <h4>S2.2 — element removal purges the retained listener</h4>
+    <p class="expect">dispatching the remove-trigger destroys <code>remove-me</code>: its element is gone, its retained listener is purged, and the page still renders without the control.</p>
+  </div>
+
+  <h2>Group 3 — Supervisor.dispatchEvent engine entry</h2>
+  <div class="group" id="mount-sayhi">
+    <h4>S3.1 — drive a data-authored control through the ENGINE entry (not onEvent)</h4>
+    <p class="expect">dispatchEvent(id, 'click', 'hi') runs the body with event.value === 'hi'; the re-rendered button text is <code>hi!</code>; results [undefined].</p>
+  </div>
+  <div class="group" id="mount-fork">
+    <h4>S3.2 — fork-arm wire target fires the node once with all arms in ctx.states</h4>
+    <p class="expect">2 fork arms resolved; dispatchEvent(display#0, 'click') fires exactly once, results [1], and the recorded ctx.states length is 2 (arms prop = "2").</p>
+  </div>
+  <div class="group" id="mount-unknown">
+    <h4>S3.3 — unknown and destroyed targets are safe no-ops</h4>
+    <p class="expect">dispatchEvent('no-such-id') → []; after destroying the victim, dispatchEvent(destroyedId) → []; the page never throws and stays alive.</p>
+  </div>
+  <div class="group" id="mount-readonly">
+    <h4>S3.4 — dispatch is a trigger: a READ-ONLY dispatch re-renders nothing</h4>
+    <p class="expect">a read-only dispatch produces no pass-2 states and no re-render; a subsequent apply DOES re-render.</p>
+  </div>
+  <div class="group" id="mount-noprop">
+    <h4>S3.5 — no propagation: only the target's handlers fire</h4>
+    <p class="expect">dispatching the child fires ONLY the child handler (results [1]); the panel handler stays silent and its content is unchanged.</p>
+  </div>
+  <div class="group" id="mount-reenter">
+    <h4>S3.6 — same-(node,event) reentrancy no-ops; a different event fires</h4>
+    <p class="expect">a self-re-dispatching click runs exactly once (nestedLen prop = "0"); dispatching 'focus' still runs FocusCapture (focus prop = "1", results ["focus"]).</p>
+  </div>
+
+  <div id="results"></div>
+
+  <script type="module" src="session-features.js"></script>
+</body>
+</html>

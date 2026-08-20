@@ -90,8 +90,16 @@ interface ApplyError {
 
 **Wire vs internal shapes:** this file owns the **wire** shape — ops reference
 entities by ID (`NodeRef` / `LinkId` / `string` actor). ops.md §1 owns the
-**internal** shape, which carries live `Node` / `Link` / `Actor` values;
-`supervisor.apply` resolves wire IDs to live objects at the journal boundary.
+**internal** shape, which carries live `Node` / `Link` / `Actor` values.
+**The wire→internal resolution happens in `ClientAPI.apply` (client.ts — it
+resolves `nodeRef` to the live Node and spreads it into `op.node`, plus
+resolves the `to`/`source`/`container` string refs), NOT in
+`Supervisor.apply`:** the supervisor's `apply(op)` is the internal journaling
+sink and REQUIRES `op.node` to be the live `Node` (a string id there is a
+caller bug — `state` reads `undefined` → `no-usable-state`, or a
+non-function `destroy`/`applySlice`). Page/harness code driving the engine
+directly MUST pass the live Node in `op.node` (find it via
+`supervisor.getNode(id)` / `tree.getNode(id)` first).
 
 ### 1.1 `apply` semantics (S2.1, S-R3.11)
 
@@ -261,6 +269,17 @@ Ordered; first matching rule wins:
 ### 4.2 Same-name multiplicity → fork (S-R2.5)
 
 Multiple nodes may share a `referenceName`. The compiler **forks** rather than picks:
+
+> **Fork vs nearest-shadows-far (the reconciliation a data author needs):** the
+> §4.1 walk is own → descendants → ancestors and STOPS at the first DEPTH that
+> yields a provider (R3 "nearest shadows far"). A fork (N arms) happens ONLY
+> when MULTIPLE providers sit at that SAME nearest matching depth (e.g. two
+> provider descendants of the consumer — the phases.test.ts pRed/pBlue
+> pattern). Providers at DIFFERENT depths do NOT fork: the nearer one wins and
+> the farther is shadowed (one arm). To author a 2-arm fork, place the
+> providers at EQUAL depth in the consumer's walk (both descendants, or both
+> same-level ancestors); nesting providers under each other collapses to one
+> arm.
 
 ```ts
 interface ForkRef {

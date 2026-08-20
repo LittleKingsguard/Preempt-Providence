@@ -1364,3 +1364,33 @@ list (specs + skill + summary + migration citations) is recorded there.
   block/seam/edges, derived.test.ts DV-C1, reverse.test.ts N1 css.classes.
   Encoding: `docs/decisions.md` CSS-CLASSES row, `docs/specs/translate.md`
   §2.1 register.
+
+### 10.10.9 Event-dispatch engine entry — `Supervisor.dispatchEvent` (DECIDED, 2026-08-20 — Phase A)
+
+- **DECIDED: `Supervisor.dispatchEvent(target, event, ...args)` — the EVENT
+  sibling of `runPhase` (supervisor.ts).** Target = Node instance / nodeId /
+  wire string; wire resolution = full-string `nodes.get` first, then the
+  first-`#` prefix (fork-arm wire `<nodeId>#<i>`, render-helpers §4.1; a
+  `#`-bearing nodeId wins via the full-string lookup); fork-arm targets
+  dispatch the NODE once, all arms in `ctx.states`. Returns the contained
+  `HandlerResult[]` — `[]` for unknown/destroyed/unplaced targets (mirror of
+  `runPhase`'s unknown-id no-op, but events RETURN results) and for a nested
+  dispatch of the same `(node, event)`. Pins: it is a TRIGGER, never a
+  journal entry (replay re-runs effects, never bodies); it never drains
+  pass-2 states, never flushes applies (the microtask flush owns a body's
+  `clientAPI.apply` effects) and never emits EventBridge events — a host
+  awaits the flush before asserting; NO propagation (target handlers only);
+  same-(node,event) reentrancy no-ops via the `dispatchingEvents` guard (key
+  `event:<event>:<nodeId>`, a different event is not blocked). `ClientAPI`
+  stays the 2-method surface; the `DomAdapter.onEvent` seam stays the
+  page-side path (decoupling pin). Three-agent gate: ADAPT-AND-PROCEED in
+  phases (docs/specs/event-dispatch-wiring-review.md); user go-ahead
+  2026-08-20. Tests: tests/unit/phases.test.ts "Supervisor event dispatch"
+  block (10). Encoding: `docs/decisions.md` EVENT-DISPATCH-WIRING row,
+  `docs/specs/handlers.md` §3, `docs/specs/adapters.md` §3.2 note,
+  `docs/skills/designing-pages.md` §11/§12.
+  - **Phase B** (the formal SSR synthetic-event contract — producing-process-
+    keeps-graph + fragment-as-addressable-metadata, parity harness, no render
+    change) and **Phase C** (the MCP/Electron endpoint — parked spec-only:
+    structured-clone args, idempotent `requestId`, flush-before-response,
+    `{results, dirtied}`) are later user gates (docs/pending.md).

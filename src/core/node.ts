@@ -328,6 +328,21 @@ function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [v]
 }
 
+/** DEFECT #27 (2026-08-20) — is this an EXPLICIT handlers CLEAR layer? A
+ *  `slice-*` handlers layer created by a state-slice write (applySlice's
+ *  `slice-${nodeSeq}-${src}` scheme) whose value is an EMPTY ARRAY means "the
+ *  node has no handlers". This is the only surface that can subtract handlers
+ *  (the D16 merge is append-with-override, so an empty non-slice layer would
+ *  contribute nothing). It drives BOTH the compileLocal merge reset AND the
+ *  seam-handlers suppression (durable across compiles). NOTE: only the empty-
+ *  ARRAY form is a clear — `value: undefined`/absent `handlers` on a `slice-*`
+ *  layer is indistinguishable from a type/content/props write (makeLayer omits
+ *  undefined fields) and stays a no-op. */
+function isHandlerClearLayer(l: NodeLayer): boolean {
+  return typeof l.id === 'string' && l.id.startsWith('slice-')
+    && Array.isArray(l.handlers) && l.handlers.length === 0
+}
+
 /** Derived bake landing: assign the baked props AND the baked css.classes
  *  append (2026-08-20) onto the fresh compiled state — clone-only, never the
  *  pass-1 canon. `baked.css` already carries host + injected classes. */
@@ -934,19 +949,29 @@ export class Node {
       if (layer.content !== undefined) content = layer.content
       if (layer.props) for (const k of Object.keys(layer.props)) props[k] = layer.props[k]
       if (layer.css) for (const k of Object.keys(layer.css)) css[k] = layer.css[k]
-      if (layer.handlers) {
+      if (layer.handlers || isHandlerClearLayer(layer)) {
         // DEFECT #16 fix (round 5): handlers merge APPEND-WITH-OVERRIDE per
         // (name, event) — the old replace-array wiped the base's authored
         // handlers when a seam/handlers layer landed (silent dead handler).
         // Same-key later-wins; different entries accumulate (the handlers.md
         // letter: "layer handlers append, later layers override same-event").
-        const merged = [...(handlers ?? [])] as Array<{ name?: unknown; event?: unknown }>
-        for (const h of layer.handlers as Array<{ name?: unknown; event?: unknown }>) {
-          const idx = merged.findIndex((m) => m.name === h.name && m.event === h.event)
-          if (idx !== -1) merged[idx] = h
-          else merged.push(h)
+        // DEFECT #27 (2026-08-20): an EXPLICIT state-slice handlers write with
+        // an EMPTY list (or undefined) is a CLEAR — the accumulated handlers
+        // reset to [] (base + seam + prior slices). Non-empty slice writes
+        // keep the D16 append-with-override (B4/D16 preserved). The seam
+        // layers themselves are suppressed by rebuildHandlerSeamLayer while a
+        // clear layer exists, so the clear is durable across compiles.
+        if (isHandlerClearLayer(layer)) {
+          handlers = []
+        } else {
+          const merged = [...(handlers ?? [])] as Array<{ name?: unknown; event?: unknown }>
+          for (const h of layer.handlers as Array<{ name?: unknown; event?: unknown }>) {
+            const idx = merged.findIndex((m) => m.name === h.name && m.event === h.event)
+            if (idx !== -1) merged[idx] = h
+            else merged.push(h)
+          }
+          handlers = merged
         }
-        handlers = merged
       }
       if (layer.derived?.props || layer.derived?.css) {
         derived = {
@@ -1686,6 +1711,16 @@ export class Node {
    *  arg order restored via eventStub + legacyContext; modern bodies raw).
    *  Idempotent: the rebuilt layer replaces in place. */
   private rebuildHandlerSeamLayer(): boolean {
+    // DEFECT #27 (2026-08-20) — an explicit handlers CLEAR (a `slice-*`
+    // handlers layer with empty/undefined value) SUPPRESSES the seam: the
+    // seam must not re-materialize, and any existing `seam-handlers` layer is
+    // removed, so the clear is durable across compiles (the merge alone would
+    // be re-wiped by the next materialize).
+    if (this.layers.some(isHandlerClearLayer)) {
+      const before = this.layers.length
+      this.layers = this.layers.filter((l) => l.sourceName !== 'handler-seam')
+      return this.layers.length !== before
+    }
     const entries: Array<{ name: string; event?: string; phase?: string; body: unknown }> = []
     let stale = false
     for (const a of this.anchors) {
@@ -1726,6 +1761,13 @@ export class Node {
    *  keep their `seam-handlers` layer; compileLocal's append-with-override
    *  merge combines both. */
   private copyDefPhaseHandlers(defRoot: Node): void {
+    // DEFECT #27 (2026-08-20) — an explicit handlers CLEAR suppresses the
+    // AUTH-SEAM phase-handler copy too (a clear means no handlers).
+    if (this.layers.some(isHandlerClearLayer)) {
+      const idx = this.layers.findIndex((l) => l.id === 'seam-handlers-def')
+      if (idx !== -1) this.layers.splice(idx, 1)
+      return
+    }
     const src = defRoot.layers.find((l) => l.sourceName === 'handler-seam')
     const entries = src?.handlers ?? []
     const idx = this.layers.findIndex((l) => l.id === 'seam-handlers-def')

@@ -107,7 +107,10 @@ declared by name/event/phase in the data, bodies supplied or JSON-stringed;
 all anchors/sources/forks/derived rules in the envelope; page module uses
 only `translateLegacy` → `Supervisor`/`createClient` →
 `DomAdapter`/`emitElements`/`diffMinimal`/`applyOps` → `dispatchEvent` on
-the adapter's `onEvent` seam. `docs/specs/fork-stress-data.md` is the
+the adapter's `onEvent` seam — and, since 2026-08-20, the ENGINE entry
+`Supervisor.dispatchEvent(target, event, ...args)` (handlers.md §3) as a
+separate host-callable path into the same bodies for programmatic
+interactions. `docs/specs/fork-stress-data.md` is the
 pattern contract; `demo/feature-showcase.*` is the showcase contract; the
 translate-layer kernel has its own data-only showcase —
 `demo/translate-showcase.*` (K1–K8: `props.<key>` apply paths + synthesized

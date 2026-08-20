@@ -95,10 +95,11 @@ re-resolving from anchors.
 | `dispatchEvent(node, ctx, event, ...args)` | runs every handler whose `event === event` or `name === event`; body called with `(ctx, ...args)` |
 | `dispatchPhase(node, ctx, phase)` | runs every handler whose `phase === phase`; body called with `(ctx)` |
 | `dispatchPhaseForNodes(nodes, ctx, phase)` | `dispatchPhase` over a node set (results concatenated in order) |
+| `supervisor.dispatchEvent(target, event, ...args)` | **Phase A engine entry (2026-08-20 — event-dispatch-wiring-review.md):** resolves a target (Node instance / nodeId / wire string) to a live node and runs `dispatchEvent` with `node`/`states` enrichment + containment + the managed channel. Wire resolution: full string first (`nodes.get`), then the first-`#` prefix (fork-arm wire `<nodeId>#<i>`, render-helpers §4.1); a `#`-bearing nodeId wins via the full-string lookup. Fork-arm targets dispatch the NODE once, all arms in `ctx.states`. Returns `HandlerResult[]` — `[]` for unknown/destroyed/unplaced targets (mirror of `runPhase`'s unknown-id no-op) and for a nested dispatch of the same `(node, event)`. **Pins:** it is a TRIGGER, never a journal entry; it never drains pass-2 states, never flushes applies (the microtask flush owns a body's `clientAPI.apply` effects) and never emits EventBridge events — a host awaits the flush before asserting; NO propagation (target handlers only); same-(node,event) reentrancy no-ops via the `dispatchingEvents` guard (key `event:<event>:<nodeId>`), a different event is not blocked. `ClientAPI` stays the 2-method surface; the `DomAdapter.onEvent` seam stays the page-side path (decoupling pin). Tests: `tests/unit/phases.test.ts` "Supervisor event dispatch" block |
 
-`Supervisor` exposes `clientAPI`, `handlerContext`, and
+`Supervisor` exposes `clientAPI`, `handlerContext`,
 `runPhase(phase, nodeId?)` (single node, or all registered nodes when the id
-is omitted; unknown id = safe no-op).
+is omitted; unknown id = safe no-op), and `dispatchEvent(target, event, ...args)`.
 
 ### Containment
 
@@ -130,6 +131,21 @@ scheduled).
 
 `state-slice` mutations may target `handlers` (`targetProp: 'handlers'`) —
 applied as a layer like any other value.
+
+**HANDLERS CLEAR (DEFECT #27 FIXED, 2026-08-20):** a `handlers` state-slice
+write with `value: []` is a CLEAR — the node's compiled handlers become empty
+(`base` + seam + prior slices all reset), and the seam handler layers
+(`seam-handlers` from `handlers.<event>` bindings and `seam-handlers-def`
+from the AUTH-SEAM phase copy) are SUPPRESSED while the clear layer exists, so
+the clear is durable across re-compiles (the seam would otherwise re-materialize
+on the next `compile`). This makes a body able to detach its own binding:
+after the clear, the emit produces no `on:<event>` props, `diffMinimal` emits
+`set('on:<event>', undefined)`, and the retained-map listener detaches
+(DOM-F6). A NON-EMPTY `handlers` write keeps the D16 append-with-override
+per `(name, event)` — it coexists with the seam (B4/D16 preserved). Only the
+empty-ARRAY form clears; `value: undefined` on a `handlers` write is a no-op
+(indistinguishable from a type/content/props slice layer). Tests:
+`tests/unit/legacy-bridge.test.ts` "DEFECT #27" block.
 
 ## 5. Exhaustiveness gate
 
