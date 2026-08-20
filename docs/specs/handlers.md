@@ -187,15 +187,31 @@ the handler-seam (review decision 7, landed 2026-08-15):
   nodes regardless of viability; tests N1-N5, with N4/N5 adding the DEFECT
   #20 destroyed-child prune pins — a retention-destroyed adopted def child's
   element is PRUNED from the emitted set, defects.md FIXED #20 row).
-  - **Def-CHILD bindings are inert (pinned standing surprise, S45 — blind
-    test #5 proofreader):** a `handlers.<event>` binding authored on a def
+  - **Def-CHILD bindings — SPLIT (the S45 "inert" standing surprise is
+    HALF-retired by the DEFECT #24/#25 in-tree realization + DEFECT #26
+    emit-half, 2026-08-19):** a `handlers.<event>` binding authored on a def
     CHILD (a `value.children[i]` entry's `component` array) plans on the
-    OUT-OF-TREE def-child prototype — the prototype never compiles and the
-    harness's dispatch runs on in-tree nodes only, so the binding NEVER
-    materializes and NEVER dispatches (a dispatch returns `[]`). Only the
-    def-ROOT's binding wires (via the copy to the type-target consumer,
-    above); author event bindings on IN-TREE nodes (or re-express the
-    control as authored data). **Def GRANDchildren (blind test #5
+    def-child prototype. Whether it ever fires depends on the prototype's
+    fate:
+    - **Seam-delivered (children-target / SED-1 consumer chains):** the
+      DEFECT #24 seam cascade REALIZES the def subtree in-tree — the def
+      child compiles its handler layer (the `seam-handlers` layer lands on
+      the in-tree node, dispatch runs) AND the DEFECT #26 emit-half makes the
+      def-fill element surface it as `on:<event>` (the plain path-state
+      branch was the only handler→`on:*` synthesis site; `emitDefChildTree` /
+      `emitDefRootElement` / the SED-1 collapsed consumer now merge the real
+      node's compiled handlers — tests path-emit P-EMIT-12/13, defects.md
+      FIXED #26). A bindable control INSIDE a seam-fed def (the live
+      nav-bar's Sign In / Profile + Logout, and a placed wrapper div's Edit
+      Mode via SED-1) therefore WORKS end-to-end.
+    - **Pure out-of-tree (no seam consumer chain, e.g. a def referenced
+      only through a plain empty-host def-fill or never realized):** the
+      prototype stays 'prototype', never compiles, never dispatches — S45's
+      original letter holds for this remainder. Authoring rule: for a def
+      child event binding, deliver the def through a seam (children-target
+      or type-collapse consumer) — a reachable def child now wires.
+    Only the def-ROOT's binding wires via the copy to the type-target
+    consumer (above). **Def GRANDchildren (blind test #5
     proofreader):** the adopted def child's element emits at its OWN wire
     with its own (possibly phase-mutated) data; the def child's OWN family
     children render only while the adopted parent is in-tree + actionable —

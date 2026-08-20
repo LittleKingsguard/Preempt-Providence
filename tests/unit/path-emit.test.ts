@@ -24,6 +24,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { Node } from '../../src/core/node.js'
+import { Supervisor } from '../../src/core/supervisor.js'
 import { Link } from '../../src/core/link.js'
 import { makeRoot, makeNode, childOf, addComponentSource, targetAnchor } from '../helpers/fixtures.js'
 import { translateLegacy } from '../../src/core/translate.js'
@@ -558,5 +559,105 @@ describe('DEFECT #24 — def-internal drop-zone placement (P-EMIT-8, 2026-08-19)
     expect(collapsed!.props['text']).toBe('Admin')
     expect(collapsed!.props['prop:href']).toBe('/content/1')
     expect((collapsed!.props['css:classes'] as string[]).includes('nav-link')).toBe(true)
+  })
+})
+
+/** DEFECT #26 (2026-08-19) — the DEF-FILL emission family must surface a
+ *  node's COMPILED handlers as `on:<event>` props (P-EMIT-12/13). The plain
+ *  path-state branch (render-helpers.ts:1114-1119) was the ONLY handler→on:*
+ *  conversion site; a handler-bearing element materializing through a seam
+ *  (children-target def child / SED-1 type-collapse) rendered DEAD in the DOM
+ *  even though its real node carried the seam-handlers layer. RED: the def
+ *  children of these envelopes compile handlers on in-tree nodes, but the
+ *  def-fill elements carry no `on:*` props. */
+describe('DEFECT #26 — def-fill family surfaces compiled handlers as on:* props (P-EMIT-12/13, 2026-08-19)', () => {
+  const sup = new Supervisor({})
+
+  function translateEnv(env: Record<string, unknown>) {
+    const t = translateLegacy(env as never)
+    expect(t.warnings).toEqual([])
+    for (const n of t.nodes) sup.registerNode(n)
+    t.root.compile(t.nodes)
+    return t
+  }
+
+  it('P-EMIT-12 a children-seam def CHILD carrying a handlers.click binding emits the def-fill element with on:click (RED: on:click absent)', () => {
+    // the live nav-bar shape: the auth controls (Sign In / Profile, Logout)
+    // are def children of a `target:'children'` seam whose def-root carries
+    // component handler bindings on the def-CHILD nodes.
+    const env = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'doLogout', value: { name: 'doLogout', body: '(event) => {}' } },
+            {
+              reference: 'nav',
+              value: {
+                type: 'nav',
+                children: [
+                  { type: 'button', content: 'Logout', component: [{ reference: 'doLogout', target: 'handlers.click' }] },
+                ],
+              },
+            },
+          ],
+          children: [{ type: 'div', component: [{ reference: 'nav', target: 'children' }] }],
+        },
+      },
+      content: [],
+      clientConfig: {},
+    }
+    const t = translateEnv(env)
+    const actionable = t.nodes.flatMap((n) => n.compilePath().actionable)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    // the def child (Logout button) MUST have compiled its handler in-tree
+    const logout = t.nodes.find((n) => n.type === 'button')!
+    expect(logout.handlers?.some((h) => (h as { event?: string }).event === 'click')).toBe(true)
+    const els = emitElements(actionable, byNode)
+    const logoutEl = els.find((e) => e.props['text'] === 'Logout')!
+    expect(logoutEl).toBeDefined()
+    // RED: the def-fill button element carries no on:click → dead in the DOM
+    expect(logoutEl.props['on:click']).toBe(true)
+  })
+
+  it('P-EMIT-13 a SED-1 type-collapse whose consumer carries a handlers.click binding emits the collapsed element with on:click', () => {
+    // the live crafted nav-link shape: a placed wrapper div that carries the
+    // event binding AND collapses into a def `<a>` (target:'type').
+    const env = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            { reference: 'enterEditMode', value: { name: 'enterEditMode', body: '(event) => {}' } },
+            {
+              reference: 'editContentLink',
+              value: { type: 'a', content: 'Edit Mode', props: { href: '#' } },
+            },
+          ],
+          children: [
+            {
+              type: 'div',
+              component: [
+                { reference: 'enterEditMode', target: 'handlers.click' },
+                { target: 'type', reference: 'editContentLink' },
+              ],
+            },
+          ],
+        },
+      },
+      content: [],
+      clientConfig: {},
+    }
+    const t = translateEnv(env)
+    const actionable = t.nodes.flatMap((n) => n.compilePath().actionable)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const collapser = t.nodes.find((n) => n.type === 'div')!
+    expect(collapser.handlers?.some((h) => (h as { event?: string }).event === 'click')).toBe(true)
+    const els = emitElements(actionable, byNode)
+    const collapsed = els.find((e) => e.props['text'] === 'Edit Mode')!
+    expect(collapsed).toBeDefined()
+    expect(collapsed.type).toBe('a')
+    // RED: the collapsed <a> (built by the SED-1 def-fill) carries no on:click
+    expect(collapsed.props['on:click']).toBe(true)
   })
 })

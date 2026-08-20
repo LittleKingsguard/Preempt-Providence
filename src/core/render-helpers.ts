@@ -68,6 +68,17 @@ export function wireKey(wire: NodeRef, forkKey?: ForkPathKey): string {
   return forkKey === undefined ? wire : `${wire}\x00${forkKey}`
 }
 
+/** NP5/NP9 (user DECIDED 2026-08-19 — JSON string encoding) — the
+ *  OBJECT-EMISSION seam: a plain-OBJECT value reaching a string bake
+ *  serializes as `JSON.stringify` (stable, lossless text) instead of
+ *  `String()`'s literal `[object Object]`. Scalars and arrays keep the
+ *  existing coercion (css:classes arrays are joined before this; ruleBody
+ *  handles nested CSS objects recursively — never through this helper). */
+export function bakeValue(v: unknown): string {
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) return JSON.stringify(v)
+  return String(v)
+}
+
 /** DEFECT #22 (2026-08-16) — the bare-wire prefix-scan counter: findEl's
  *  bare fallback iterates the whole store (O(n) per lookup) — composite-keyed
  *  path-states + bare append wires made the initial renders O(n²) (the
@@ -684,7 +695,7 @@ function emitDefRootElement(
 ): { el: MinimalElement; flat: MinimalElement[] } {
   const cprops: Record<string, unknown> = {}
   const styles: string[] = []
-  if (def.content !== undefined) cprops['text'] = String(def.content)
+  if (def.content !== undefined) cprops['text'] = bakeValue(def.content)
   if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
   const css = rootProto?.css ?? def.css ?? {}
   for (const [k, v] of Object.entries(css)) {
@@ -694,6 +705,9 @@ function emitDefRootElement(
     }
     cprops[`css:${k}`] = v
   }
+  // DEFECT #26 (2026-08-19) — the def-root's real node handlers surface on
+  // its element (same contract as emitDefChildTree).
+  mergeHandlerProps(cprops, nodeById, rootProto?.id)
   const flat: MinimalElement[] = []
   const children: MinimalElement[] = []
   const childSpecs = def.children ?? []
@@ -751,10 +765,14 @@ function emitDefChildTree(
   // child (button → sign-in link), and the CONVERTED element must render.
   const authSeamed = proto !== undefined && (proto.layers?.some((l) => l.sourceName === 'handler-seam') ?? false)
   let type = (authSeamed && typeof proto?.type === 'string') ? proto.type : spec.type
-  if ((proto?.content !== undefined && authSeamed) || spec.content !== undefined) cprops['text'] = String(authSeamed ? proto?.content ?? spec.content : spec.content)
+  if ((proto?.content !== undefined && authSeamed) || spec.content !== undefined) cprops['text'] = bakeValue(authSeamed ? proto?.content ?? spec.content : spec.content)
   if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
   for (const [k, v] of Object.entries(proto?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
   for (const [k, v] of Object.entries(proto?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
+  // DEFECT #26 (2026-08-19) — this def child's real node carries the compiled
+  // seam-handlers layer; its `on:<event>` props must surface on the def-fill
+  // element (the plain path-state branch is unreachable here).
+  mergeHandlerProps(cprops, nodeById, proto?.id)
   const flat: MinimalElement[] = []
   const children: MinimalElement[] = []
   const childSpecs = spec.children ?? []
@@ -788,7 +806,7 @@ function emitDefChildTree(
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
         const nested = value as { type?: string; content?: unknown; props?: Record<string, unknown>; children?: unknown; css?: Record<string, unknown> }
         if (seamTarget.options.seam === 'content') {
-          if (nested.content !== undefined) cprops['text'] = String(nested.content)
+          if (nested.content !== undefined) cprops['text'] = bakeValue(nested.content)
         } else if (seamTarget.options.seam === 'type') {
           // SED-1 — the element collapses into the nested def's element
           const nestedRoot = defRootPrototypeFor(seamTarget.link)
@@ -798,7 +816,7 @@ function emitDefChildTree(
             else cprops[`css:${k}`] = v
           }
           if (typeof nested.type === 'string') type = nested.type
-          if (nested.content !== undefined) cprops['text'] = String(nested.content)
+          if (nested.content !== undefined) cprops['text'] = bakeValue(nested.content)
           if (nested.props) {
             for (const [k, v] of Object.entries(nested.props)) cprops[`prop:${k}`] = v
           }
@@ -858,6 +876,26 @@ function hideEmptyContainer(props: Record<string, unknown>): void {
   const style = String(props['css:style'] ?? '')
   if (/display\s*:/.test(style)) return
   props['css:style'] = style ? `${style}; display: none;` : 'display: none;'
+}
+
+/** DEFECT #26 (2026-08-19) — a def-fill element surfaces its REAL node's
+ *  compiled handlers as `on:<event>` props, mirroring the plain path-state
+ *  branch (:1114-1119). The plain branch was the ONLY handler→on:* conversion
+ *  site, so a handler-bearing element materializing through a seam
+ *  (children-target def child, SED-1 collapse, def-root) emitted DEAD in the
+ *  DOM even though its node carried the seam-handlers layer. `nodeId` is the
+ *  real node behind the synthetic element (a def child proto, the def-root
+ *  proto, or the seam consumer itself). */
+function mergeHandlerProps(
+  cprops: Record<string, unknown>,
+  nodeById: Map<string, EmitNodeSource> | null | undefined,
+  nodeId: string | undefined,
+): void {
+  if (nodeId === undefined) return
+  const node = nodeById?.get(nodeId)
+  for (const h of node?.handlers ?? []) {
+    if (h && typeof h === 'object' && typeof h.event === 'string') cprops[`on:${h.event}`] = true
+  }
 }
 
 /** The minimal node surface the def-tree emission reads (the live harness
@@ -929,6 +967,13 @@ function emitOne(
       const offset = def.childOffset ?? 0
       const childWires = s.children ?? []
       const allowed = linkChainAllowed(s, def, defEntry!.name)
+      // DEFECT #26 (2026-08-19) — the CONSUMER element's own compiled handlers
+      // surface here: the def branch turns the consumer's element into the
+      // def-fill (SED-1 collapse), keeps it as a shell (SED-2), or emits it as
+      // the P-EMIT-3 host / blocked-D8 host — in every case the element that
+      // renders in the DOM IS the consumer's element, so its handlers must
+      // attach (the plain path-state branch is unreachable in this branch).
+      mergeHandlerProps(props, nodeById, s.nodeId)
       if (seam === 'children' || (allowed && childWires.length === 0)) {
         const layersSuffix =
           def.childLayersSuffix && parentLayers ? `${parentLayers}|${def.childLayersSuffix}` : undefined
@@ -984,7 +1029,7 @@ const rootWire = `${wire}:0`
           defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain)])
         const bound = scalarBinding(s.bindings)
         if (bound !== undefined) props['text'] = bound
-        else if (def.content !== undefined) props['text'] = String(def.content)
+        else if (def.content !== undefined) props['text'] = bakeValue(def.content)
         const adopted = adoptPlacedChildren(pathCtx, defChain, defRootProto?.id)
         const el: MinimalElement = { wire, type: def.type, props, childOrder: [...trees.map((t) => t.el.wire), ...(adopted ?? [])] }
         if (styles.length > 0) el.styles = styles
@@ -1036,7 +1081,7 @@ const rootWire = `${wire}:0`
       const resolvedWire = cw ?? (allowed ? `${wire}:${spec.bind}` : undefined)
       if (resolvedWire === undefined) continue
       const cprops: Record<string, unknown> = {}
-      if (allowed) cprops['text'] = String(spec.content ?? '')
+      if (allowed) cprops['text'] = bakeValue(spec.content ?? '')
       if (def.childLayersSuffix && parentLayers) cprops['prop:stress:layers'] = `${parentLayers}|${def.childLayersSuffix}`
       // a REAL child (covered by the def, standalone emission skipped) keeps
       // its OWN authored css/props — the def's css/props are a fallback only

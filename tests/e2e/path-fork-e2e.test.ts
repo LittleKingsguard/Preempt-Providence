@@ -574,7 +574,7 @@ describe('E2E-4 — post-render placement addition: dirty = container + added no
 // Consolidated guard pins
 // ============================================================================
 
-describe('consolidated guards — census re-pins, duplicate-source, ratio-baseline TODO', () => {
+describe('consolidated guards — census re-pins, duplicate-source, ratio-baseline pins', () => {
   it('runtime re-pin (F-13 reading, §5.2): the runtime pages expect in-tree = 2^depth − 1 + 22 prototypes = 4117, unplaced = 0, cloneOps = 4094', () => {
     // the runtime page's envelope carries 22 prototypes (2 per layer × 11)
     // and is assembled by clone-instance after translate; the F-13 census

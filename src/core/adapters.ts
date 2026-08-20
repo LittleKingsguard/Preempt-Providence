@@ -1,6 +1,6 @@
 import type { ForkPathKey, RenderAdapter } from './render.js'
 import type { NodeRef } from './types.js'
-import { wireKey } from './render-helpers.js'
+import { wireKey, bakeValue } from './render-helpers.js'
 
 export interface FragmentDescriptor {
   openTag: string
@@ -95,11 +95,11 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
         const formEl = el as HTMLInputElement
         if (val === undefined) {
           formEl.value = ''
-        } else if (formEl.value !== String(val)) {
-          formEl.value = String(val)
+        } else if (formEl.value !== bakeValue(val)) {
+          formEl.value = bakeValue(val)
         }
       } else {
-        el.textContent = val === undefined ? '' : String(val)
+        el.textContent = val === undefined ? '' : bakeValue(val)
       }
     } else if (name.startsWith('css:')) {
       const key = name.slice(4)
@@ -109,15 +109,15 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
         else if (key === 'style') el.style.cssText = ''
         else el.removeAttribute(key)
       } else if (key === 'id') {
-        el.id = String(val)
+        el.id = bakeValue(val)
       } else if (key === 'classes') {
-        el.className = Array.isArray(val) ? val.join(' ') : String(val)
+        el.className = Array.isArray(val) ? val.join(' ') : bakeValue(val)
       } else if (key === 'style') {
-        el.style.cssText = String(val)
+        el.style.cssText = bakeValue(val)
       } else if (key === 'cssDef') {
-        el.setAttribute('cssDef', String(val))
+        el.setAttribute('cssDef', bakeValue(val))
       } else {
-        el.setAttribute(key, String(val))
+        el.setAttribute(key, bakeValue(val))
       }
     } else if (name.startsWith('on:')) {
       if (val === undefined) return
@@ -131,9 +131,9 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
       if (val === undefined) {
         el.removeAttribute(attr)
       } else if (attr === 'value' && VALUE_FORMS.has(el.tagName)) {
-        ;(el as HTMLInputElement).value = String(val)
+        ;(el as HTMLInputElement).value = bakeValue(val)
       } else {
-        el.setAttribute(attr, String(val))
+        el.setAttribute(attr, bakeValue(val))
       }
     }
   }
@@ -224,7 +224,7 @@ function makeStylesBuffer(buffer: string[], seen: Set<string>): StylesBuffer {
 }
 
 function escapeAttr(v: unknown): string {
-  return String(v)
+  return bakeValue(v)
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
@@ -232,7 +232,7 @@ function escapeAttr(v: unknown): string {
 }
 
 function escapeText(v: unknown): string {
-  return String(v)
+  return bakeValue(v)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -273,12 +273,12 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
     if (!fd) return
     const state = this.states.get(fd)!
     if (name === 'text') {
-      state.text = val === undefined ? '' : String(val)
+      state.text = val === undefined ? '' : bakeValue(val)
     } else if (name.startsWith('css:')) {
       const key = name.slice(4)
       if (key === 'cssDef') {
         // D4 — rule strings only, deduped per adapter instance (FRG-H27)
-        const rule = String(val)
+        const rule = bakeValue(val)
         if (!this.stylesSeen.has(rule)) {
           this.stylesSeen.add(rule)
           this.stylesBuffer.push(rule)

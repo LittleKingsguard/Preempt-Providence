@@ -52,7 +52,9 @@ The demo pages are worked migration examples (see §7).
 > content** after migration, with only a console warning. **Fix before you
 > boot:** normalize at the backend send path or the page bootstrap —
 > `const content = Array.isArray(doc.content) ? doc.content : [doc.content]`
-> when `doc.content` is a non-array object.
+> when `doc.content` is a non-array object. The live Logged-inLanding envelope
+> hit this EXACTLY (`Post-migration.json` ships the object form) — the §7
+> `PostFix1` worked example normalizes it and shows the before/after.
 
 > **MIGRATION TRAP — `target: 'content'` delivers TEXT-ONLY (SED-3, the
 > `content`-target content slot, 2026-08-19 live-prod/Logged-inLanding):** a
@@ -70,7 +72,9 @@ The demo pages are worked migration examples (see §7).
 > text-only is actually what you want. Data-shape audit: translate the raw
 > envelope and compare element counts against the `--adapted` (children-
 > target) render before wiring the boot — a shrunk element set means the
-> `content`-target seams are swallowing whole subtrees.
+> `content`-target seams are swallowing whole subtrees. §7's `PostFix1` is the
+> applied fix for the live Logged-inLanding envelope (seam swap + the §1
+> content-array trap, both in the DATA — no engine change).
 
 ## 2. The architectural shift (what "moving engines" really means)
 
@@ -279,8 +283,11 @@ Every demo page uses the same pattern after an op:
    `doc.content` (***the most likely silent regression*** — see the §1 trap
    box: normalize single-object `{ content, metadata }` to
    `[{ content, metadata }]` at the send path), non-array `children`, object
-   `css.style` (harmless — accepted), and obsolete `placement` shapes so the
-   warnings channel is clean before you move.
+   `css.style` (harmless — accepted), obsolete `placement` shapes, **and the
+   full-component `content`-target seams** (see the §1 trap box: swap them to
+   `target: 'children'` — the §7 `PostFix1` generator is the worked pattern)
+   so the warnings channel is clean **and** the element census matches the
+   pre-migration page before you move.
 3. **Swap the boot.** Replace `Template` + `Supervisor.process` with the §4.1
    recipe. Keep the `#preempt-initial-data` script tag. Verify first paint in
    the DOM adapter.
@@ -310,17 +317,38 @@ Every demo page uses the same pattern after an op:
   array `placement`, object `css.style`, `ContentPayload[]`, the three D7 seam
   delivery shapes (`type` / `content` / `children` targets). This is the
   closest readout of what a real migrated page looks like.
-- **The live-prod mock + `--adapted` swap** (UNTRAKED — `render-mock.mjs`
-  lives in gitignored `live-prod/`, run it on the machine holding the private
-  payloads; §1 CONTENT-TARGET trap box): render each real production envelope
-  through the engine exactly as shipped (`<page>.rendered.html`), and again
-  with every root-level name-component seam switched
-  `content → children` (`<page>.adapted.html`) — the migration-preview of what
-  the ORIGINAL SPA's full-component `content`-seams must become. The
-  Logged-inLanding worked difference: raw render = 17 elements with empty
-  nav/header/footer slots; adapted render = 44 elements with the full nav
-  (the crafted links NESTED and text/href-bearing — DEFECT #24+25 FIXED 2026-08-19).
-  Command: `node live-prod/render-mock.mjs Logged-inLanding --adapted`.
+- **The live-prod mock + the PostFix1 migration** (UNTRAKED — the renderer and
+  the fix generator live in gitignored `live-prod/`; run them on the machine
+  holding the private payloads). The real Logged-inLanding envelope
+  (`Post-migration.json`) ships with **BOTH §1 traps at once**: the three
+  shell seams target `content` (text-only delivery → empty slots) **and**
+  `doc.content` is the single-payload OBJECT form (`payload-shape-obsolete` →
+  the article is skipped). Each step of the fix, quantified by the renderer:
+    - `node live-prod/render-mock.mjs Logged-inLanding` — the shipped envelope
+      as-is: `Post-migration.rendered.html` = 10 states/10 elements, empty
+      nav/header/footer, no article, warning `payload-shape-obsolete`.
+    - `… --adapted` — the seam swap ALONE (`content → children` on the three
+      root-level shell seams): `Post-migration.adapted.rendered.html` = 13
+      states/37 elements — **all links render** (nav with logo, Home,
+      Directory, the crafted links nested in their zones, Logout), the article
+      is still gone (the object-form payload is still skipped).
+    - `node live-prod/fix-post-migration.mjs` — writes **`PostFix1.json`**, the
+      MIGRATED envelope with both fixes baked into the DATA (seam targets
+      `content → children` + `doc.content` normalized to
+      `[{ content, metadata, userData }]` — `template.root.component`, the
+      defs/handlers container, is left untouched as-is). `PostFix1.rendered.html`
+      = 20 states/44 elements, **ZERO warnings**, full nav (crafted links
+      nested AND text/href-bearing — DEFECT #24+25 FIXED 2026-08-19) AND the
+      article. This is the data-side migration for the "links don't render"
+      failure, complete.
+    - Browser check (live, not a snapshot): the demo server serves
+      `live-view.html?name=PostFix1` — the browser fetches `PostFix1.json`
+      and executes the real engine (`translateLegacy` → Supervisor →
+      `DomAdapter` apply) client-side. `?name=` also renders the other
+      envelopes (default `Post-migration`; `?adapted=1` applies the swap
+      on the fly).
+  Command reference: `node live-prod/render-mock.mjs Logged-inLanding [--adapted]`,
+  `node live-prod/fix-post-migration.mjs`.
 - `demo/fork-stress-data.*` / `demo/path-fork-data.*` — data-driven +
   static path-fork pages: the fork/placement multiplicity invariants (§5) in
   action.

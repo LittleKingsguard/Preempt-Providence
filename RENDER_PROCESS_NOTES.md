@@ -578,7 +578,7 @@ Round-4 reviewer compared the 7 parallel-written `docs/specs/*.md` against canon
 | S-R4.2 | **Single-parent violation**: attaching a node that already holds a `'child'` anchor **fails explicitly and verbosely** — a dedicated error (e.g. `'single-parent'`) at op validation, cross-link; NOT silently treated as `move`, NOT a per-link `count-exceeded`. Caller must `move`/`detach` first. |
 | S-R4.3 | **Unresolved-reference disposition**: if the compile still produces a **viable state**, **log a warning and render the node's own state anyway** — the node is not dropped and not hidden; the unresolved binding is simply absent and flagged. |
 
-(TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)
+(DOC-DEBT, tracked in `docs/pending.md` — "Pillar A–G doc-debt fold"): fold Pillar A–G (§10.1–§10.8) back into `docs/skills/overview.md` and `docs/rendering_architecture_spec.md` once the design congeals. **Gate:** the fold is NOT priority — §10 here is the live canon and every `docs/specs/*.md` derivative cites §10 directly (not the two target files); the fold only matters if a reader needs a single consolidated architecture doc. Whichever pass does it must sweep the §10 citations across `docs/specs/*.md` + `docs/skills/designing-pages.md` + `docs/framework-feature-summary.md` + the migration guide so nothing still points at a moved section. Repeat of the same marker at §10.9-end (line ~1300) is the same item.
 
 ### §10.9 addendum — adapter-layer review resolutions (S-R5.x)
 
@@ -1297,4 +1297,30 @@ is recorded here and encoded in the specs listed.
   `docs/specs/render.md` SED-1, `docs/decisions.md` AUTH-SEAM row,
   `docs/defects.md` (OPEN standing surprise + #15 row).
 
-(TODO: fold Pillar A–G back into docs/skills/overview.md and rendering_architecture_spec.md once the design congeals.)
+(DOC-DEBT, tracked in `docs/pending.md` — "Pillar A–G doc-debt fold"): same
+marker as §10.9 (line ~581) — fold Pillar A–G (§10.1–§10.8) into
+`docs/skills/overview.md` + `docs/rendering_architecture_spec.md` once the
+design congeals; §10 here stays the live canon until then, and the sweep
+list (specs + skill + summary + migration citations) is recorded there.
+
+### 10.10.7 Object emission seam — NP5/NP9 JSON string encoding (DECIDED, 2026-08-19)
+
+- **DECIDED:** a plain-OBJECT value reaching a string bake at the emission
+  layer serializes as `JSON.stringify` instead of `String()`'s literal
+  `[object Object]`. The seam is a single helper, `bakeValue(v)`
+  (`src/core/render-helpers.ts`): plain objects (`typeof v === 'object'`,
+  non-null, non-array) → `JSON.stringify(v)`; scalars and arrays keep the
+  existing coercion. It applies at every object-prone bake — `adapters.ts`
+  `escapeText`/`escapeAttr`, `DomAdapter.setProp` (text/form, css.* branches,
+  prop/attr), `SSRFragmentAdapter.setProp` (text + cssDef), and the
+  `render-helpers.ts` def-content bakes (def.content / spec.content /
+  seam-resolved nested.content, incl. the seam 'content'/'type' delivery
+  shapes). `ruleBody` (`render-helpers.ts`) is UNCHANGED — nested CSS objects
+  recurse into block rules before any scalar bake; `css:classes` arrays keep
+  their `join(' ')` path. N3 (key-present-null loss on the derived seam,
+  `derived.ts:244`) stays a PARKED accepted gap — revisit when a consumer
+  needs the propagated null shape (user directive 2026-08-19: JSON encoding
+  first, circle back to N3). Tests: `tests/unit/adapters.test.ts` DOM-NP5 ×2
+  + FRG-NP5 ×2. Encoding: `docs/decisions.md` (OTGE row),
+  `docs/specs/translate.md` "Accepted emission-layer gaps",
+  `docs/pending.md` (PARKED — emission-layer known gaps).

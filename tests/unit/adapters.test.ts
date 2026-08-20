@@ -361,6 +361,12 @@ describe('DOM-* DomAdapter', () => {
       adapter.setProp('w', 'text', 'hi')
       expect(elOf(adapter, 'w')!.textContent).toBe('hi')
     })
+    it('DOM-NP5 text OBJECT value → JSON string (never "[object Object]")', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'text', { a: 1, b: 'x' })
+      expect(elOf(adapter, 'w')!.textContent).toBe('{"a":1,"b":"x"}')
+      expect(elOf(adapter, 'w')!.textContent).not.toContain('[object Object]')
+    })
     it('DOM-H3 text on TEXTAREA → value, node identity preserved', () => {
       const el = adapter.createEl('textarea', 'w') as unknown as El
       adapter.setProp('w', 'text', 'hi')
@@ -468,6 +474,12 @@ describe('DOM-* DomAdapter', () => {
       adapter.createEl('div', 'w')
       adapter.setProp('w', 'hidden', true)
       expect(elOf(adapter, 'w')!.getAttribute('hidden')).toBe('true')
+    })
+    it('DOM-NP5 bare-prop OBJECT value → JSON attribute (never "[object Object]")', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'data-payload', { k: 'v', n: 3 })
+      expect(elOf(adapter, 'w')!.getAttribute('data-payload')).toBe('{"k":"v","n":3}')
+      expect(elOf(adapter, 'w')!.getAttribute('data-payload')).not.toContain('[object Object]')
     })
     it('DOM-H18 prop:title → setAttribute title', () => {
       adapter.createEl('div', 'w')
@@ -621,6 +633,16 @@ describe('FRG-* SSRFragmentAdapter', () => {
       adapter.createEl('div', 'w')
       adapter.setProp('w', 'text', 'hi')
       expect(adapter.fragments.get('w')!.contentText).toBe('hi')
+    })
+    it('FRG-NP5 text OBJECT value → JSON contentText (never "[object Object]")', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'text', { done: true, n: 1 })
+      expect(adapter.fragments.get('w')!.contentText).toBe('{"done":true,"n":1}')
+    })
+    it('FRG-NP5 attr OBJECT value → escaped JSON attribute', () => {
+      adapter.createEl('div', 'w')
+      adapter.setProp('w', 'prop:title', { a: '<x>', q: '&"' })
+      expect(adapter.fragments.get('w')!.openTag).toContain('title="{&quot;a&quot;:&quot;&lt;x&gt;&quot;,&quot;q&quot;:&quot;&amp;\\&quot;&quot;}"')
     })
     it('FRG-H4 css:id → openTag contains id="k"', () => {
       adapter.createEl('div', 'w')

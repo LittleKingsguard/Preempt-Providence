@@ -546,7 +546,14 @@ R2.3).
     applies to every path-state carrying a def binding (the gate becomes
     path-based: def + path-state);
   - `on:*` handler attachment (`render-helpers.ts:341-347`) applies to every
-    path-state of a handler-carrying node;
+    path-state of a handler-carrying node. **DEFECT #26 (2026-08-19)** — the
+    handler→`on:*` synthesis also applies to the DEF-FILL family: every
+    def-fill element whose real node is in-tree commits its compiled handlers
+    as `on:<event>` props (`mergeHandlerProps` in `emitDefChildTree` /
+    `emitDefRootElement` / the def-branch consumer element — SED-1 collapse,
+    SED-2 shell, P-EMIT-3 host, blocked-D8 host). Handlers on def children
+    already compiled after the DEFECT #24 in-tree realization; before #26 the
+    def-fill elements dropped them (dead in the DOM);
   - leaves-by-fiat (`render-helpers.ts:236-240`, `:349-350`) is REMOVED for
     path-states — their children come from the path-derived childOrder
     (§2.3), which is exactly what FRK-H2's "all arms, no per-arm children"
@@ -635,7 +642,7 @@ KEPT for the runtime pages, re-pinned per the F-13 reading below):
 | css stress / `stress:kind` / ancestry | unchanged in intent, now read from path-states (per-level property + slot pairs, fork-stress.md §Per-node CSS stress) |
 | derived idempotency | `stress:expanded` (derived `children.length`, §2.3) true for non-leaf path-states, false for leaves |
 | incremental contract | bootstrap = one path-enumeration compile; post-render ops (E2E-2/3/4 cases) = bounded slices only |
-| profile | census fields published to the profile line (fork-stress-data.js:592-618 pattern) + smoke ratio guard (demo-smoke.mjs:284-295 — placement baseline + TODO, §8 Q6/§10.ad) |
+| profile | census fields published to the profile line (fork-stress-data.js:592-618 pattern) + smoke ratio guard (demo-smoke.mjs:284-295 — the placement-derived FAMILY baseline + per-region pins, §8 Q6 RESOLVED 2026-08-16) |
 
 **The derived-family census (derived-fork-variants-review §5.1 — the static
 page is now a THREE-variant family at TWO depths, all IDENTICAL per-method — the
@@ -725,7 +732,7 @@ the PRE-minting runtime record (annotated).
 | Surface | Change |
 | --- | --- |
 | `demo/fork-stress-data.js` | Re-expression to the static model (§5.1): 22 prototypes + placement links, no handler/clone assembly; STATIC checks added per §5.2; the RUNTIME page's existing checks (lines 407-418) and profile census (lines 592-618) are KEPT for the runtime pages. |
-| `scripts/demo-smoke.mjs` | RUNTIME census asserts (lines 192-223) KEPT, re-pinned per the F-13 reading (in-tree = 2^depth − 1 + prototypes, unplaced = 0); a NEW static assert block added for the §5.2 static census; ratio guard (lines 284-295): the static page starts with **placement as the d12 baseline** + a TODO to update the baseline after testing confirms no explosive time issues (§10.ad; AGENTS.md item-4 watch applies to the path-enumeration bootstrap pass). |
+| `scripts/demo-smoke.mjs` | RUNTIME census asserts (lines 192-223) KEPT, re-pinned per the F-13 reading (in-tree = 2^depth − 1 + prototypes, unplaced = 0); a NEW static assert block added for the §5.2 static census; ratio guard (lines 284-295): the static page starts with **placement as the d12 baseline**, RE-BASELINED 2026-08-16 (the DERIVED-TRIO split — per-region pins vs the placement-derived page replace the single-total comparison; AGENTS.md item-4 watch applies to the path-enumeration bootstrap pass). |
 | builder | `scripts/fork-stress-data-page.mjs` embeds the new envelope (placement links + `targetPlacement` arrays + contentNodes-ownership attachment instead of handler-declared prototypes); NEW static `fork-stress-data-*.html` pages. |
 | demo fork-claim drops | `component-fixture.js:82-83`/`components.js:353-406`, `feature-matrix-fixture.js:206-207`/`feature-matrix-tests.js:470-483`, `pane-fixture.js:13-14`: same-name multi-source fixtures rebuilt to single-source (the fork claims are anti-patterned — §10.ab/ad/ae); `build-demo.mjs:76-81` `panelArms` throw re-expressed; role-rename-only updates: `components.js:220-233/251/374-375`, `ssr-render.*`, `feature-showcase.js:251-257/579-582`, `fork-stress-fixture.js:160-176` + `fork-stress.js:144-163/501-508`, `index.html:44/76-96`. |
 
@@ -973,7 +980,7 @@ Spec citations use section numbers (§1.1, §2.4, §3.x, §5.x, §6.x, §9).
 | `src/core/render-helpers.ts:236-243,349-350` | leaves-by-fiat: multi-arm → `childOrder = []`; arms are leaf dupes | §4.2: REMOVED for path-states (path-derived childOrder) | (listed) |
 | `src/core/render-helpers.ts:292-297` | `emitOne` wire = `nodeId#armIdx` | §2.2: pathKey wire | (listed) |
 | `src/core/render-helpers.ts:309` | `if (def && armIdx === undefined)` — def-retyping gate | §4.2: path-based gate (def + path-state) | (listed) |
-| `src/core/render-helpers.ts:341-347` | `if (armIdx === undefined)` — `on:*` handler attachment gate | §4.2: every path-state of a handler-carrying node | (listed) |
+| `src/core/render-helpers.ts:341-347` | `if (armIdx === undefined)` — `on:*` handler attachment gate | §4.2: every path-state of a handler-carrying node; **DEFECT #26: the def-fill family mirrors it via `mergeHandlerProps` (emitDefChildTree / emitDefRootElement / the def-branch consumer element)** | (listed) |
 | `src/core/render-helpers.ts:36-38` | `minimalFromState` forwards `cs.forkKey` (canonical path; emitOne does NOT — DEFECT #1) | §4.3/§6.5: DEFECT #1 fixed first (forkKey in every `emitOne` branch) | (listed) |
 | `src/core/render-helpers.ts:127-138` | `treeSig` forkKey dimension | §4.3: exercised for the first time | (listed) |
 | `src/core/serialize.ts:117` | `roleOrder` includes `placement: 5` | §1.1: + `container`/`content` ordering | roleOrder update — **§6.2 serialize.ts row does not name it** |
@@ -1018,7 +1025,7 @@ Spec citations use section numbers (§1.1, §2.4, §3.x, §5.x, §6.x, §9).
 | `demo/fork-stress-data.js:407-425` | checks: in-tree = 2^depth − 1; prototypes stay unplaced | §5.2: static census (registered=23, unplaced=22, states=2^12−1, cloneOps=0) | Rewrite checks (listed) |
 | `demo/fork-stress-data.js:592-618` | profile census fields (registered/inTree/unplaced/destroyed/cloneOps) | §5.2/§6.4: → states/elements/placementOps | Rewrite (listed) |
 | `scripts/demo-smoke.mjs:192-223` | `assertForkStressCensus`: `inTree = 2^depth − 1`, `cloneOps = inTree − 1`, `unplaced = 2(depth−1)` | §5.2/§6.4: §5.2 expectations replace these | Re-pin (listed) |
-| `scripts/demo-smoke.mjs:284-295` | d12 ratio guard 2.5× (placement baseline) | §9-Q6/§5.2: baseline re-pinned to the static page's placement d12; AGENTS item-4 wording says ~1.5× — reconcile the two numbers | Re-baseline + reconcile |
+| `scripts/demo-smoke.mjs:284-295` | d12 ratio guard 2.5× (placement baseline) | §9-Q6/§5.2: baseline re-pinned to the static page's placement d12; RE-BASELINED 2026-08-16 (DERIVED-TRIO, per-region pins — the diff vs the ±reconcile'd bound is the reported-note; AGENTS item-4 wording says ~1.5× as the human watch, the smoke asserts 2.5×) | Re-baseline + reconcile — DONE 2026-08-16 |
 | `scripts/fork-stress-data-page.mjs` | builder embeds the clone-assembly envelope (handler-declared prototypes) | §5.1/§6.4: embeds placement links + `targetPlacement` arrays | (listed) |
 | `demo/components.js:220-233,251,374-375` | placement resolution label via `a.role === 'placement'` | §1.1: role rename to `'container'` | Update — **§6.4 omits components.js** |
 | `demo/feature-matrix-fixture.js:167-184,217-225` | content roots `placementName 'content'/'comments'`; explicit `attach` step into zones | §1.1/§3.3: container-role rename; attach → placement-attach op semantics | Update — **§6.4 omits feature-matrix-fixture.js** |
@@ -1585,10 +1592,10 @@ surface work remains), **SUPERSEDED** (decision is the fix verbatim),
   loaded document (authoring-time enforcement lives at the two authoring
   surfaces — translate K8 for legacy data, addAnchor for runtime
   imperative); loaded docs are trusted artifacts, documented.
-- **Ratio guard (CONFIRMED — N-5):** the static page's d12 ratio guard
-  starts with **placement as the baseline** (the static page is its own
-  reference); a TODO is recorded to update the baseline after testing
-  confirms the absence of explosive time issues.
+- **Ratio guard (CONFIRMED — N-5, RESOLVED 2026-08-16):** the static page's
+  d12 ratio guard starts with **placement as the family baseline** (later
+  RE-SPLIT to the DERIVED-TRIO per-region pins — §10.ad N-5, §10.af R-5, §8
+  Q6); the baseline-update TODO recorded by N-5 is resolved by the split.
 
 ### 10.ae User review (round 5) — guard tolerance removed
 
@@ -1749,8 +1756,9 @@ Dependency notation: → = requires.
   runtime page + census asserts KEPT (re-pinned per F-13); fork-claim drops
   (theme/panel/feed single-source; round-trips re-asserted; build-demo.mjs
   `panelArms` throw replaced); static census block; profile fields; ratio
-  guard: placement-as-baseline for the static page + TODO (§10.ad), 2.5× vs
-  ~1.5× reconciliation note (N-5); index.html; builder script. Requires 2.
+  guard: placement-as-baseline for the static page (+ later the DERIVED-TRIO
+  per-region pins — §10.ad N-5 / §10.af R-5, the N-5 baseline-update TODO
+  RESOLVED 2026-08-16), 2.5× vs ~1.5× reconciliation note (N-5); index.html; builder script. Requires 2.
   → Unit 8, Unit 12 (smoke).
 - **Unit 12 — tests (E2E-1…4 + guard + census + unit renames):** E2E-1
   (23-node/4095 census); E2E-2 (minting-enabled fixture; compile-scope +
