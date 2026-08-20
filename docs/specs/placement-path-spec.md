@@ -1815,25 +1815,7 @@ component-assembly anchor-layer seam for `target: 'type' | 'content' |
   FAMILY single-parent invariant is affected by the seam, and it is scoped
   away by the role-scoped addAnchor exemption (`options.seam`, ops.md §2.7
   ALS-4 — F15).
-- **Path enumeration of seam-wired def children (F18, pinned):** seam-wired
-  def children enumerate via their PRIMARY (FAMILY) path only — the seam
-  links are EXCLUDED from the path-walk's parent selection (§2.1's
-  enumerate walks family edges + placement edges toward root; the seam's
-  parent anchors (`options.seam = true`, target = self on the consumer) are
-  NEVER treated as the child's parent hop). A seam-wired child's pathKey is
-  therefore built from its family chain (or its own placement route), never
-  from a seam link; the §9-Q8 "≤1 hit per name per path" and the
-  single-parent language in §2.1 stay coherent because the seam introduces
-  no additional path hop and no additional parent SELECTION — the seam's
-  multiple legal parents are a compile/assembly fact, not a path-enumeration
-  multiplicity. **AUTH-SEAM carve-out (2026-08-16 — decisions.md AUTH-SEAM
-  row):** a PHASE-bound def's children are RE-HOMED onto the consumer's
-  FAMILY link (`adoptDefChildren`, ops.md §2.7 D8 note — the def-root's
-  family link dissolves via `Link.destroy`, the adopted child anchor carries
-  the seam flag for G24 admission, the child is `runtimeMinted` +
-  in-tree) — they then enumerate via the ordinary consumer family path
-  exactly like authored children; the "seam-wired child never appears in
-  consumer.children" letter applies to the SEAM edge only.
+- **Path enumeration of seam-wired def children (F18, pinned; DEFECT #24 re-shape 2026-08-19):** seam-wired def children are SEAM CARRIERS — a seam-wired def child's own compile enumerates ZERO actionable path-states (prototype-silent: the authored truth ships via the seam binding's def-fill, `emitDefRootElement`/`emitDefChildTree` — a standalone state would double-emit the element). The seam links are EXCLUDED from the walk's PARENT SELECTION for the child's own path (§2.1's enumerate walks family edges + placement edges toward root; the seam's parent anchors (`options.seam = true`, target = self on the consumer) are never treated as the child's own family edge). **The resolution CASCADE (stateChildAnchor, DEFECT #24):** once a `'children'`-target seam materializes the def subtree under an IN-TREE consumer, the def-root/def-child nodes REALIZE in-tree for RESOLUTION — `state` / `stateFrom` / `enumPathWalks` resolve through the seam child anchor (the primary 'component'-token edge stays dead); a packet targeting a drop-zone INSIDE the def subtree (a def-CHILD container) then enumerates THROUGH it: `enumPathWalks` recurses via the same stateChildAnchor, so the def-internal placement compiles + emits (path-emit P-EMIT-8) instead of dying at `prototype-terminated`. Unresolved defs (no in-tree seam consumer) stay 'prototype'. The §9-Q8 "≤1 hit per name per path" and the single-parent language in §2.1 stay coherent because the seam introduces no additional path hop and no additional parent SELECTION — the seam's multiple legal parents are a compile/assembly fact, not a path-enumeration multiplicity. **AUTH-SEAM carve-out (2026-08-16 — decisions.md AUTH-SEAM row):** a PHASE-bound def's children are RE-HOMED onto the consumer's FAMILY link (`adoptDefChildren`, ops.md §2.7 D8 note — the def-root's family link dissolves via `Link.destroy`, the adopted child anchor carries the seam flag for G24 admission, the child is `runtimeMinted` + in-tree) — they then enumerate via the ordinary consumer family path exactly like authored children; the "seam-wired child never appears in consumer.children" letter applies to the SEAM edge only. **Children-target container anchors stay ON the def child (copy removed, 2026-08-19):** the def-root no longer COPIES the def child's `container`/`content` anchors — the def child (now seam-resolved in-tree) is the real rendered drop-zone; a def-root copy would announce the SAME zone twice on the shared per-name placement Link and fork the packet into a phantom second route.
 - **Reverse**: layer-passed placement anchors reverse like authored ones
   (`'content'` → `targetPlacement: string[]` in anchor order, §6.2/P3 — the
   layer is a compile-time materialization, the anchor's origin does not

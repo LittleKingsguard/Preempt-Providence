@@ -138,8 +138,8 @@ describe('D7 — seam parent anchors are DISTINCT from the family parent (ALS-5,
   })
 })
 
-describe('D7 — path enumeration excludes seam links (G27, F18)', () => {
-  it('[5] a seam-wired def child enumerates via its PRIMARY (family) path only — the seam parent anchor never contributes a path hop', () => {
+describe('D7 — path enumeration of seam-wired def children (G27, F18; DEFECT #24 re-shape 2026-08-19)', () => {
+  it('[5] a seam-wired def child is a SEAM CARRIER, not an emitter — the seam contributes NO path hop and compilePath yields zero actionable (the authored truth ships via the seam binding def-fill; placed packets still walk IN through stateChildAnchor)', () => {
     const root = makeRoot({ type: 'root' })
     const consumer = childOf(root, makeNode({ type: 'consumer' }), 0)
     const defChild = defProto('span')
@@ -147,12 +147,16 @@ describe('D7 — path enumeration excludes seam links (G27, F18)', () => {
     consumer.addAnchor('parent', consumer, seamOpts, seamLink)
     defChild.addAnchor('child', defChild, seamOpts, seamLink)
 
-    // the seam child anchor is the FIRST child anchor — a walk MUST still
-    // ignore it: the def child's only path is its prototype-terminated
-    // primary chain, so compilePath yields ZERO actionable states
+    // the seam child anchor is the FIRST child anchor — the def child is a
+    // seam-delivered CARRIER: its standalone compile yields ZERO actionable
+    // (prototype-silent), so the def-fill (emitDefRootElement /
+    // emitDefChildTree) stays the single emission of its authored truth and
+    // no double-element ever renders. The seam contributes no path hop: a
+    // placed packet that targets a container INSIDE the def subtree walks in
+    // through stateChildAnchor at enum time (path-emit P-EMIT-8).
     const res = defChild.compilePath()
     expect(res.actionable).toEqual([])
-    expect(res.dropped.every((d) => d.reason === 'prototype-terminated' || d.reason === 'owner-terminated')).toBe(true)
+    expect(res.dropped).toEqual([])
   })
 })
 

@@ -131,7 +131,7 @@ function familyParentTokenOf(node: Node): string | null {
  *  the root-down key segments for the loop diagnostic. */
 function enumPathWalks(node: Node, seen: Set<NodeId>, segs: string[]): PathWalk[] {
   const out: PathWalk[] = []
-  const child = node.childAnchor()
+  const child = node.stateChildAnchor()
   const parentAnchor = child ? linkOf(child).anchorsOf('parent')[0] : undefined
   if (!child || !parentAnchor) {
     out.push({ terminal: 'no-edge', hops: [] })
@@ -450,9 +450,36 @@ export class Node {
     return this.anchors.find(a => a.role === 'child') ?? null
   }
 
+  /** DEFECT #24 (2026-08-19) — the RESOLUTION child anchor: the first 'child'
+   *  anchor whose edge actually drives toward root. While a def root/child
+   *  stays out-of-tree its PRIMARY family edge is the 'component'-token
+   *  permanent owner (prototype); once the seam materializes the def subtree
+   *  under an IN-TREE consumer, the seam child anchor becomes the resolution
+   *  edge — the def realizes in-tree and the cascade flows through the def
+   *  children to the placement containers (a def-internal drop-zone's placed
+   *  packets start walking). The base edge still governs the family-children
+   *  census + reverse emit (seam-wired nodes stay out of `consumer.children` —
+   *  node.ts familyChildAnchors) and the seam can still be reverted (DEFECT
+   *  #10) without dissolving the prototype's base attach. Falls back to
+   *  childAnchor() when no seam edge exists (unresolved defs stay
+   *  'prototype'). */
+  stateChildAnchor(): Anchor | null {
+    const first = this.childAnchor()
+    if (!first) return null
+    const pa = linkOf(first).anchorsOf('parent')[0]
+    // token-terminated (component/contentNodes) — an unresolved prototype —
+    // but a seam edge to an in-tree consumer exists: resolve through it
+    if (pa && typeof pa.target === 'string') {
+      for (const a of this.anchors) {
+        if (a.role === 'child' && a.options.seam !== undefined) return a
+      }
+    }
+    return first
+  }
+
   get state(): NodeState {
     if (this.destroyed) return 'destroyed'
-    const child = this.childAnchor()
+    const child = this.stateChildAnchor()
     if (!child) return 'unplaced'
     return this.stateFrom(child, 0, new Set<NodeId>())
   }
@@ -469,7 +496,7 @@ export class Node {
       if (owner.destroyed) return 'unplaced'
       if (seen.has(owner.id)) return 'unplaced'
       seen.add(owner.id)
-      const ownerChild = owner.childAnchor()
+      const ownerChild = owner.stateChildAnchor()
       if (!ownerChild) return 'unplaced'
       return owner.stateFrom(ownerChild, depth + 1, seen)
     }
@@ -1233,6 +1260,19 @@ export class Node {
     // (SED-1/2) worked per-path. Idempotent (content-equality guard,
     // hasSeamParentFor, stale-layer clearing) — safe before every walk.
     this.materializeSeam()
+    // DEFECT #24 (2026-08-19) — SEAM-RESOLVED DEF NODES ARE CARRIERS, NOT
+    // EMITTERS: a def-root/def-child seam-wired under an IN-TREE consumer
+    // (a seam child anchor — the def subtree realizes in-tree for the state
+    // walk + the placement cascade) ships its authored truth via the seam
+    // binding's def-fill (emitDefRootElement/emitDefChildTree), so a
+    // STANDALONE path-state would DOUBLE-emit the element (real wire +
+    // the synthetic `` `${wire}:${bind}` `` wire). Suppressed here (empty
+    // actionable, no drops — silent like a prototype): the packet that walks
+    // INTO its container still enumerates through it (enumPathWalks recurses
+    // via stateChildAnchor), so def-internal placements keep the cascade.
+    if (this.anchors.some((a) => a.role === 'child' && a.options.seam !== undefined)) {
+      return { actionable: [], dropped: [], warnings: [] }
+    }
     const walks = enumPathWalks(this, new Set<NodeId>([this.id]), [])
     // §1.2 first-match: only the CHOSEN name's placement branches are ever
     // consulted — later names are pruned SILENTLY (no drops, no warnings);
@@ -1554,8 +1594,13 @@ export class Node {
       // anchors sit on the pre-minted prototypes (admitted by the role-scoped
       // single-parent exemption — a def referenced twice gives its children
       // MULTIPLE LEGAL PARENTS, G24). The def's PLACEMENT links ride the
-      // layer onto the resolved node (ALS-6 — the shared per-name placement
-      // Link; never re-minted, never re-vetoed).
+      // layer (ALS-6 — the shared per-name placement Link; never re-minted,
+      // never re-vetoed). DEFECT #24 (2026-08-19): the def CHILD's container/
+      // content anchors are NOT copied onto the def-root anymore — the def
+      // child realizes IN-TREE via the seam (stateChildAnchor) and is the
+      // real rendered drop-zone; a def-root copy would announce the same zone
+      // twice on the shared Link and fork a packet into a phantom second
+      // route (placement-path-spec §10.ag).
       if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
       const protos = defPrototypesFor(link)
       const defRoot = defRootPrototypeFor(link)
@@ -1570,20 +1615,18 @@ export class Node {
         // AUTH-SEAM (2026-08-15): the def-root carries the def's own phase
         // bindings (afterAssembly → after-compile, the N5 carve-out); the
         // layer install runs here so the compiled entries exist to COPY onto
-        // the TYPE-target consumer (below — the def-root itself is
-        // token-terminated, never compiles on its own, and the harness's
-        // phase dispatch runs on in-tree nodes only).
+        // the TYPE-target consumer. The def-root itself is a seam CARRIER —
+        // token-terminated pre-resolution, realizing in-tree only through the
+        // seam RESOLUTION edge (DEFECT #24, stateChildAnchor), and never
+        // emitting standalone (compilePath suppresses it — the def-fill ships
+        // its authored truth) — so the harness's phase dispatch still runs on
+        // the IN-TREE consumer only.
         if (defRoot.rebuildHandlerSeamLayer()) defRoot.compileLocal()
         for (const proto of protos) {
           if (defRoot.hasSeamParentFor(proto)) continue
           const seamLink = new Link({ name: 'parent-child' })
           defRoot.addAnchor('parent', defRoot, { seam: true }, seamLink)
           proto.addAnchor('child', proto, { seam: true }, seamLink)
-          for (const pa of proto.anchors) {
-            if ((pa.role !== 'container' && pa.role !== 'content') || typeof pa.target !== 'string') continue
-            if (defRoot.anchors.some((x) => x.role === pa.role && x.target === pa.target && x.link === pa.link)) continue
-            defRoot.addAnchor(pa.role, pa.target, {}, pa.link)
-          }
         }
         continue
       }

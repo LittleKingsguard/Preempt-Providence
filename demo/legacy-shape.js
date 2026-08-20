@@ -683,7 +683,7 @@ if (typeof document !== 'undefined') {
     })
 
     // ---- 4. D8 — prototypes never emitted by the host (probe F16/D8) --------
-    await runner.check('D8: def root + children stay out-of-tree — NO stray span.blind-title element (titleDef never emitted by the host)', () => {
+    await runner.check('D8: seam-resolved def carriers never emit standalone — NO stray span.blind-title element (titleDef, unresolved, never emitted by the host)', () => {
       const stray = [...nodesByKey.values()].filter((el) => Array.isArray(el.props['css:classes']) && el.props['css:classes'].includes('blind-title'))
       if (stray.length !== 0) throw new Error(`stray def-root elements: ${stray.map((s) => treeString(s)).join('\n')}`)
     })
@@ -762,13 +762,13 @@ if (typeof document !== 'undefined') {
     })
 
     // ---- 7. node/state census ----------------------------------------------
-    await runner.check('node census: registered=17, in-tree=11 (6 def prototypes stay OUT-OF-TREE — D8/F16), unplaced=0, destroyed=0, cloneOps=0', () => {
+    await runner.check('node census: registered=17, in-tree=14 (the seam-resolved menu subtree realizes in-tree — DEFECT #24; 3 unresolved def protos stay out-of-tree), unplaced=0, destroyed=0, cloneOps=0', () => {
       const all = supervisor.allNodes()
       if (all.length !== 17) throw new Error(`registered: expected 17, got ${all.length}`)
       const inTree = all.filter((n) => !n.destroyed && n.isInTree)
-      if (inTree.length !== 11) throw new Error(`in-tree: expected 11 (6 'component'-token def prototypes stay out-of-tree), got ${inTree.length}`)
+      if (inTree.length !== 14) throw new Error(`in-tree: expected 14 (3 unresolved 'component'-token def prototypes stay out-of-tree), got ${inTree.length}`)
       const prototypes = all.filter((n) => n.state === 'prototype')
-      if (prototypes.length !== 6) throw new Error(`prototypes: expected 6 (def roots + children), got ${prototypes.length}`)
+      if (prototypes.length !== 3) throw new Error(`prototypes: expected 3 (unresolved def roots/children), got ${prototypes.length}`)
       const unplaced = all.filter((n) => !n.destroyed && n.state === 'unplaced')
       if (unplaced.length !== 0) throw new Error(`unplaced: expected 0, got ${unplaced.length}`)
       const destroyed = all.filter((n) => n.destroyed)

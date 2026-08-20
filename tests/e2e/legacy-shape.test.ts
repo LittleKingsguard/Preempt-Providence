@@ -507,7 +507,10 @@ describe('SED-1/2/3 — seam delivery shapes (delivery-shape ruling; ALS-1/1b/2,
     const t = translateLegacy(sedEnvelope())
     const wA = t.root.children[0]!
     renderPipeline(t)
-    const navRoot = t.nodes.find((n) => n.state === 'prototype' && n.type === 'nav')!
+    // DEFECT #24 (2026-08-19): the children-target def-root REALIZES in-tree
+    // once the seam materializes (stateChildAnchor) — find it by type/role,
+    // not by the old `state === 'prototype'` marker
+    const navRoot = t.nodes.find((n) => n.type === 'nav')!
 
     // the def-root's child links (to the def-children prototypes) carry their
     // parent anchors ON the def-root — target = self, options.seam = true

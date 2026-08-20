@@ -335,3 +335,228 @@ describe('P3 §4 emit — pathKey wires (path-state emit layer)', () => {
     for (const el of pathEls) expect(el.forkKey).toBe(el.wire)
   })
 })
+
+describe('DEFECT #24 — def-internal drop-zone placement (P-EMIT-8, 2026-08-19)', () => {
+  // The def-internal drop-zone shape from the live envelope: a navBar def whose
+  // CHILD div carries placementName 'adminLinks'; a content packet carries
+  // targetPlacement ['adminLinks']. The seam consumer (target:'children')
+  // materializes the def subtree; the packet's content anchor resolves into
+  // the def child's container. RED-first: pre-fix the packet compiles ZERO
+  // path-states (the def child stays an out-of-tree prototype), so nothing of
+  // it emits — this test pins the intended in-tree cascade.
+  function defZoneEnv() {
+    return {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            {
+              reference: 'navBar',
+              target: 'children',
+              value: {
+                type: 'nav',
+                css: { style: { display: 'flex' } },
+                children: [
+                  { type: 'div', placement: [{ placementName: 'adminLinks' }] },
+                ],
+              },
+            },
+          ],
+          children: [
+            {
+              type: 'div',
+              children: [{ type: 'div', component: [{ reference: 'navBar', target: 'children' }] }],
+            },
+          ],
+        },
+      },
+      content: [
+        { content: [{ type: 'a', content: 'Admin', placement: [{ targetPlacement: ['adminLinks'] }] }] },
+      ],
+      clientConfig: {},
+    }
+  }
+
+  it('P-EMIT-8 a placed packet targeting a def-child drop-zone compiles + emits into the container', () => {
+    const t = translateLegacy(defZoneEnv() as never)
+    const states = compileAll(t)
+    const packet = t.nodes.find((n) => n.content === 'Admin')!
+    const packetStates = states.filter((s) => s.nodeId === packet.id)
+    // the packet must reach the def-internal zone: AT LEAST one actionable
+    // path-state routing through the def child's container (RED: this is 0)
+    expect(packetStates.length).toBeGreaterThan(0)
+    expect(packetStates[0]!.pathKey).toContain('adminLinks')
+    expect(packetStates[0]!.activePlacement).toBe('adminLinks')
+
+    const els = emitElements(states)
+    // the Admin anchor must render ONCE, under a wire that routes through the
+    // def child container (RED: not present at all)
+    const adminEls = els.filter((e) => e.props['text'] === 'Admin')
+    expect(adminEls).toHaveLength(1)
+    expect(adminEls[0]!.wire).toContain('adminLinks')
+    expect(adminEls[0]!.type).toBe('a')
+  })
+
+  it('P-EMIT-9 the placed packet NESTS under the def-fill zone element (no orphan at tree root)', () => {
+    const t = translateLegacy(defZoneEnv() as never)
+    const states = compileAll(t)
+    const els = emitElements(states)
+    const ops = diffMinimal(null, els)
+    // after the fix the def-FILL zone element (the ROOT spin's synthetic
+    // `root:0:menu` wire — the packet routes under the root's own inline
+    // navBar seam chain) must ADOPT the placed packet wire into its
+    // childOrder, so the reconstructed tree nests the Admin <a> directly
+    // under the def-filled zone — never as a top-level forest root.
+    const trees = treeFromOpsReal(ops)
+    const forest = trees as Array<{ wire: string; type: string; props?: Record<string, unknown>; children?: Array<{ wire: string; type: string }> }>
+    const admin = els.find((e) => e.props['text'] === 'Admin')
+    // the Admin anchor must NO LONGER be a top-level forest root: the def-fill
+    // zone element of the ROOT's navBar spin (the packet routes under the
+    // root's inline seam chain — `root:0:<zoneIndex>`) adopts its wire and the
+    // reconstructed tree nests the Admin <a> directly under that zone.
+    const adminRooted = forest.some((r) => r.wire === admin!.wire)
+    expect(adminRooted).toBe(false)
+    const zoneEl = els.find((e) => (e.childOrder ?? []).includes(admin!.wire))
+    expect(zoneEl).toBeDefined()
+    expect(zoneEl!.wire).toBe('root:0:0')
+    const deepFind = (nodes: typeof forest): (typeof forest)[number] | undefined => {
+      for (const n of nodes) {
+        if (n.wire === admin!.wire) return n
+        const found = deepFind((n.children ?? []) as typeof forest)
+        if (found) return found
+      }
+      return undefined
+    }
+    const adminInTree = deepFind(forest)
+    // reached through the zone element that hosts it → nested inside the nav
+    expect(adminInTree).toBeDefined()
+    expect(adminInTree!.type).toBe('a')
+  })
+
+  it('P-EMIT-10 a placed packet adopts into a NON-ROOT seam consumer\'s def-fill (full-chain match)', () => {
+    // P-EMIT-8/9's seam consumer is the ROOT (trace [root] — the 
+    // `[s.nodeId, defRoot]` chain coincidentally matched). The live nav
+    // slot is a THIRD-LEVEL element: its path-state trace is
+    // [root, wrapper, slot], so the fill chain must be the CONSUMER'S FULL
+    // root-down chain — not [slot, defRoot]. RED: with the old chain the
+    // packet stays a top-level forest root (adoption never matches).
+    const env = {
+      template: {
+        root: {
+          type: 'app',
+          children: [
+            {
+              type: 'div',
+              children: [
+                {
+                  type: 'div',
+                  component: [
+                    {
+                      reference: 'navBar',
+                      target: 'children',
+                      value: {
+                        type: 'nav',
+                        css: { style: { display: 'flex' } },
+                        children: [{ type: 'div', placement: [{ placementName: 'adminLinks' }] }],
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+      content: [
+        { content: [{ type: 'a', content: 'Admin', placement: [{ targetPlacement: ['adminLinks'] }] }] },
+      ],
+      clientConfig: {},
+    }
+    const t = translateLegacy(env as never)
+    const states = compileAll(t)
+    const els = emitElements(states)
+    const adminEls = els.filter((e) => e.props['text'] === 'Admin')
+    expect(adminEls).toHaveLength(1)
+    const admin = adminEls[0]!
+    const ops = diffMinimal(null, els)
+    const trees = treeFromOpsReal(ops) as Array<{ wire: string; type: string; props?: Record<string, unknown>; children?: Array<{ wire: string; type: string }> }>
+    const deepFind = (nodes: typeof trees): (typeof trees)[number] | undefined => {
+      for (const n of nodes) {
+        if (n.wire === admin.wire) return n
+        const found = deepFind((n.children ?? []) as typeof trees)
+        if (found) return found
+      }
+      return undefined
+    }
+    // RED: the Admin <a> sits unreferenced at forest root (its zone owned no
+    // adoption) — the full-chain fix makes it nested under the def-fill zone.
+    expect(trees.some((r) => r.wire === admin.wire)).toBe(false)
+    const zoneEl = els.find((e) => (e.childOrder ?? []).includes(admin.wire))
+    expect(zoneEl).toBeDefined()
+    expect(zoneEl!.wire).toMatch(/0:0$/)
+    expect(deepFind(trees)).toBeDefined()
+  })
+
+  it('P-EMIT-11 the SED-1 type-collapse carries the def\'s content + props into the collapsed element', () => {
+    // DEFECT #25 — the live crafted nav links are placed WRAPPER divs whose
+    // `target: 'type'` collapses into a def that carries content + props. The
+    // collapse surfaced def type + css but DROPPED def content ('Admin') and
+    // props (href) — the emitted <a> rendered empty and non-navigating.
+    // RED: the collapsed anchor has text=undefined and no prop:href.
+    const env = {
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            {
+              reference: 'navBar',
+              target: 'children',
+              value: {
+                type: 'nav',
+                children: [{ type: 'div', placement: [{ placementName: 'adminLinks' }] }],
+              },
+            },
+            {
+              reference: 'adminDashboardLink',
+              value: {
+                type: 'a',
+                content: 'Admin',
+                props: { href: '/content/1' },
+                css: { style: { display: 'inline-block' }, classes: ['nav-link'] },
+              },
+            },
+          ],
+          children: [
+            {
+              type: 'div',
+              children: [
+                {
+                  type: 'div',
+                  component: [{ reference: 'navBar', target: 'children' }],
+                },
+              ],
+            },
+            {
+              type: 'div',
+              css: { style: { display: 'none' } },
+              component: [{ target: 'type', reference: 'adminDashboardLink' }],
+              placement: [{ targetPlacement: ['adminLinks'] }],
+            },
+          ],
+        },
+      },
+      content: [],
+      clientConfig: {},
+    }
+    const t = translateLegacy(env as never)
+    const states = compileAll(t)
+    const els = emitElements(states)
+    const anchors = els.filter((e) => e.type === 'a' && (e.props['css:classes'] as string[])?.includes('nav-link'))
+    const collapsed = anchors.find((a) => a.props['text'] === 'Admin') ?? anchors[0]
+    expect(collapsed).toBeDefined()
+    // RED: text + href are undefined (the def's authored data was dropped)
+    expect(collapsed!.props['text']).toBe('Admin')
+    expect(collapsed!.props['prop:href']).toBe('/content/1')
+    expect((collapsed!.props['css:classes'] as string[]).includes('nav-link')).toBe(true)
+  })
+})

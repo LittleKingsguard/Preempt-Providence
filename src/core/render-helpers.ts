@@ -383,6 +383,24 @@ export function emitElements(
     const m = pathChildIndex.get(s.trace.join('\u0000'))
     if (m) pathStateChildren.set(s.pathKey, (s.children ?? []).map((c) => m.get(c) ?? c))
   }
+  // DEFECT #25 — the placed-child index for the def-fill adoption: the
+  // path-state trace is the REAL node chain root-down (stateChildAnchor
+  // resolution), so `trace[-2]` is the container/owner the packet landed in.
+  // Only path-states WITH a full chain (trace.length >= 2) can carry an
+  // owner; family-origin states also land here (their owner = family parent)
+  // but their chains never match a seam-delivered def-fill chain, so the
+  // adoption stays exact.
+  const ownerPlaced = new Map<string, Array<{ wire: string; trace: string[] }>>()
+  for (const s of actionable) {
+    if (!isPathState(s) || !s.pathKey || !s.trace || s.trace.length < 2) continue
+    const owner = s.trace[s.trace.length - 2]!
+    let arr = ownerPlaced.get(owner)
+    if (!arr) {
+      arr = []
+      ownerPlaced.set(owner, arr)
+    }
+    arr.push({ wire: s.pathKey, trace: s.trace })
+  }
   const convertedOf = (s: EmitState): string[] | undefined =>
     s.pathKey ? pathStateChildren.get(s.pathKey) : undefined
   // component-link layers: wires the def re-types are emitted ONLY through the
@@ -419,7 +437,9 @@ export function emitElements(
     const converted = convertedOf(base)
     const emitBase = converted ? { ...base, children: converted } : base
     const pathCtx: PathEmitContext | undefined =
-      pathNodeOf.size > 0 || pathStateChildren.size > 0 ? { pathNodeOf, pathStateChildren } : undefined
+      pathNodeOf.size > 0 || pathStateChildren.size > 0 || ownerPlaced.size > 0
+        ? { pathNodeOf, pathStateChildren, ownerPlaced }
+        : undefined
     const emitted = emitOne(emitBase, multi ? 0 : undefined, nodeById, pathCtx)
     const covered = states.length === 1 && defCovered.has(wire)
     if (!covered) {
@@ -592,7 +612,7 @@ type DefChildSpec = LinkDefSpec['children'][number] & { children?: DefChildSpec[
  *  branch for them (SED-3 — text only). */
 function findDefBinding(
   s: EmitState,
-): { name: string; def: LinkDefSpec & { content?: unknown; css?: Record<string, unknown>; children?: Array<DefChildSpec> }; seam: 'type' | 'content' | 'children' | undefined } | undefined {
+): { name: string; def: LinkDefSpec & { content?: unknown; props?: Record<string, unknown>; css?: Record<string, unknown>; children?: Array<DefChildSpec> }; seam: 'type' | 'content' | 'children' | undefined } | undefined {
   for (const [name, v] of Object.entries(s.bindings ?? {})) {
     if (v === null || typeof v !== 'object' || Array.isArray(v)) continue
     const d = v as { type?: unknown; children?: unknown }
@@ -619,6 +639,33 @@ function defChildPruned(proto: unknown): boolean {
   return typeof proto === 'object' && proto !== null && (proto as { destroyed?: boolean }).destroyed === true
 }
 
+/** DEFECT #25 (2026-08-19) — the def-fill placed-child adoption: find the
+ *  placed packet wires that resolved into a def child's container AND whose
+ *  REAL node chain (the packet's trace ancestors) exactly equals the chain of
+ *  this def-fill instance (`chain` — the consumer's node down to `proto`). A
+ *  def subtree realized by several consumers (the root's inline navBar fill +
+ *  a host's children-seam fill both render the same def-root proto) only
+ *  adopts the packet into the fill ON the chain the packet actually routed
+ *  through — the OTHER fill renders the zone empty. The match is the packet's
+ *  ancestors vs the fill chain — never a family-children guess (placed
+ *  packets are placement children, not family children). Returns the adopted
+ *  wires (in emit order) or undefined when nothing matches. */
+function adoptPlacedChildren(
+  ctx: PathEmitContext | undefined,
+  chain: string[],
+  protoId: string | undefined,
+): string[] | undefined {
+  if (!ctx?.ownerPlaced || !protoId) return undefined
+  const entries = ctx.ownerPlaced.get(protoId)
+  if (!entries || entries.length === 0) return undefined
+  const want = chain.join(',')
+  const out: string[] = []
+  for (const e of entries) {
+    if (e.trace.slice(0, -1).join(',') === want) out.push(e.wire)
+  }
+  return out.length > 0 ? out : undefined
+}
+
 /** SED-2 — the DEF-ROOT element: the def's own root element (def type +
  *  css incl. cssDef rules + content) with the def's children nested under it
  *  in order. `rootProto` is the pre-minted def-root prototype when the def
@@ -633,6 +680,7 @@ function emitDefRootElement(
   layersSuffix: string | undefined,
   nodeById: Map<string, EmitNodeSource> | null | undefined,
   pathCtx: PathEmitContext | undefined,
+  chain: string[],
 ): { el: MinimalElement; flat: MinimalElement[] } {
   const cprops: Record<string, unknown> = {}
   const styles: string[] = []
@@ -653,11 +701,15 @@ function emitDefRootElement(
     // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
     // (its subtree never recurses either)
     if (defChildPruned(childProtos[i])) continue
-    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx)
+    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx, chain)
     flat.push(...child.flat)
     children.push(child.el)
   }
-  const el: MinimalElement = { wire: rootWire, type: def.type, props: cprops, childOrder: children.map((c) => c.wire) }
+  // DEFECT #25 — adopted placed packets whose chain routes through the
+  // def-root itself (a def whose ROOT is the placement container) join the
+  // def-root element after its authored spec children.
+  const adopted = adoptPlacedChildren(pathCtx, chain, rootProto?.id)
+  const el: MinimalElement = { wire: rootWire, type: def.type, props: cprops, childOrder: [...children.map((c) => c.wire), ...(adopted ?? [])] }
   if (styles.length > 0) el.styles = styles
   flat.unshift(el)
   return { el, flat }
@@ -682,7 +734,12 @@ function emitDefChildTree(
   layersSuffix: string | undefined,
   nodeById: Map<string, EmitNodeSource> | null | undefined,
   pathCtx: PathEmitContext | undefined,
+  chain: string[],
 ): { el: MinimalElement; flat: MinimalElement[] } {
+  // DEFECT #25 — this def child's REAL node chain (the consumer root-down,
+  // through the def-root, to this proto): the placed-child adoption matches
+  // the packet's own resolved chain against it.
+  const thisChain = proto?.id ? [...chain, proto.id] : chain
   const bind = (spec as { bind?: unknown }).bind
   const wire = typeof bind === 'string' ? `${parentWire}:${bind}` : `${parentWire}:${index}`
   const cprops: Record<string, unknown> = {}
@@ -706,7 +763,7 @@ function emitDefChildTree(
     // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
     // (its subtree never recurses either)
     if (defChildPruned(childProtos[i])) continue
-    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx)
+    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx, thisChain)
     flat.push(...child.flat)
     children.push(child.el)
   }
@@ -729,7 +786,7 @@ function emitDefChildTree(
       // fallback precedence holds for every provider anchor.
       const value = providerValueFromLink(seamTarget.link)
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        const nested = value as { type?: string; content?: unknown; children?: unknown; css?: Record<string, unknown> }
+        const nested = value as { type?: string; content?: unknown; props?: Record<string, unknown>; children?: unknown; css?: Record<string, unknown> }
         if (seamTarget.options.seam === 'content') {
           if (nested.content !== undefined) cprops['text'] = String(nested.content)
         } else if (seamTarget.options.seam === 'type') {
@@ -742,12 +799,18 @@ function emitDefChildTree(
           }
           if (typeof nested.type === 'string') type = nested.type
           if (nested.content !== undefined) cprops['text'] = String(nested.content)
+          if (nested.props) {
+            for (const [k, v] of Object.entries(nested.props)) cprops[`prop:${k}`] = v
+          }
           if (Array.isArray(nested.children) && nested.children.length > 0) {
             const nestedProtos = defPrototypesFor(seamTarget.link)
+            // DEFECT #25 — the nested def's real chain grows by the nested
+            // def-root's node id (the collapse's real subtree root).
+            const nestedChain = [...thisChain, ...(nestedRoot?.id ? [nestedRoot.id] : [])]
             for (let i = 0; i < nested.children.length; i += 1) {
               // DEFECT #20 — the def-fill prune (nested branch)
               if (defChildPruned(nestedProtos[i])) continue
-              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx)
+              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx, nestedChain)
               flat.push(...child.flat)
               children.push(child.el)
             }
@@ -769,6 +832,7 @@ function emitDefChildTree(
             undefined,
             nodeById,
             pathCtx,
+            [...thisChain, ...(nestedRoot?.id ? [nestedRoot.id] : [])],
           )
           flat.push(...rootTree.flat)
           const shellEl = makeSeamShellEl(wire, type, cprops, spec.content, [rootTree.el.wire], styles, undefined)
@@ -778,7 +842,10 @@ function emitDefChildTree(
       }
     }
   }
-  const el: MinimalElement = { wire, type, props: cprops, childOrder: children.map((c) => c.wire) }
+  // DEFECT #25 — adopted placed packets whose real chain routes through this
+  // def child's container join its element after the authored spec children.
+  const adopted = adoptPlacedChildren(pathCtx, thisChain, proto?.id)
+  const el: MinimalElement = { wire, type, props: cprops, childOrder: [...children.map((c) => c.wire), ...(adopted ?? [])] }
   if (styles.length > 0) el.styles = styles
   flat.unshift(el)
   return { el, flat }
@@ -795,7 +862,7 @@ function hideEmptyContainer(props: Record<string, unknown>): void {
 
 /** The minimal node surface the def-tree emission reads (the live harness
  *  passes the real Node objects; unit states may pass nothing). */
-type NodeLike = { css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> }
+type NodeLike = { id?: string; css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }> }
 
 /** Per-path emit context passed down from emitElements (the full actionable
  *  set is the only place the child-state wires are knowable — §4.2). */
@@ -805,6 +872,16 @@ interface PathEmitContext {
   /** pathKey → the path-state's converted child wires (def re-typed children
    *  adopt the child state's own path-derived childOrder). */
   pathStateChildren: Map<string, string[]>
+  /** DEFECT #25 (2026-08-19) — PLACED-child wires per container node id under
+   *  the CURRENT render: for every actionable path-state, `trace[-2]` is the
+   *  owner node the packet resolved into (the placement container), so the
+   *  def-fill can ADOPT those packets into the def-child's synthetic element
+   *  (their real nodes never emit standalone — they are seam-wired carriers).
+   *  The full trace is kept so adoption matches ONLY the packet that routes
+   *  through the SAME real chain as the def-fill instance (a def subtree
+   *  realized by MULTIPLE consumers — the root's inline navBar vs a host's
+   *  children seam — must not double-adopt the packet into both fills). */
+  ownerPlaced?: Map<string, Array<{ wire: string; trace: string[] }>>
 }
 
 function emitOne(
@@ -871,8 +948,13 @@ function emitOne(
           // The shell element goes through the SHARED finalizer
           // (makeSeamShellEl — also used by the nested branch) so the
           // always-performed operations cannot drift (DEFECT #4).
-          const rootWire = `${wire}:0`
-          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx)
+const rootWire = `${wire}:0`
+          // DEFECT #25 — the fill's real node chain: the CONSUMER's full
+          // root-down chain (its path-state trace) down to the def-root
+          // prototype, matching the placed packets' ancestor chains
+          // (placed-child adoption matches the full chain).
+          const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
+          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx, defChain)
           const el = makeSeamShellEl(wire, s.type, props, s.content, [...childWires, rootWire], styles, s.forkKey)
           return { el, defChildren: rootTree.flat }
         }
@@ -887,13 +969,24 @@ function emitOne(
             else props[`css:${k}`] = v
           }
         }
+        // DEFECT #25 (2026-08-19) — the SED-1 collapse is the DEF'S element:
+        // the def's authored props surface as `prop:*` (def wins over any
+        // consumer-authored prop of the same name — the def data is the
+        // element), and the def's content lands as the text when the consumer
+        // carries no scalar binding of its own.
+        if (def.props) {
+          for (const [k, v] of Object.entries(def.props)) props[`prop:${k}`] = v
+        }
         // DEFECT #20 — the SED-1 def-fill prune: a destroyed adopted def
         // child's element never surfaces (flatMap skips the pair)
+        const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
         const trees = (def.children ?? []).flatMap((spec, i) =>
-          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx)])
+          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain)])
         const bound = scalarBinding(s.bindings)
         if (bound !== undefined) props['text'] = bound
-        const el: MinimalElement = { wire, type: def.type, props, childOrder: trees.map((t) => t.el.wire) }
+        else if (def.content !== undefined) props['text'] = String(def.content)
+        const adopted = adoptPlacedChildren(pathCtx, defChain, defRootProto?.id)
+        const el: MinimalElement = { wire, type: def.type, props, childOrder: [...trees.map((t) => t.el.wire), ...(adopted ?? [])] }
         if (styles.length > 0) el.styles = styles
         if (s.forkKey !== undefined) el.forkKey = s.forkKey
         return { el, defChildren: trees.flatMap((t) => t.flat) }
@@ -905,12 +998,14 @@ function emitOne(
       // enrich the elements with the real css/props and resolve NESTED seam
       // consumers. Wires are synthetic — never the prototypes' ids.
       // DEFECT #20 — the P-EMIT-3 def-fill prune (same rule).
+      const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
       const trees = def.children.flatMap((spec, i) =>
-        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx)])
+        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain)])
       const bound = scalarBinding(s.bindings)
       if (bound !== undefined) props['text'] = bound
       const type = bound !== undefined ? s.type : def.type
-      const el: MinimalElement = { wire, type, props, childOrder: trees.map((t) => t.el.wire) }
+      const adopted = adoptPlacedChildren(pathCtx, defChain, defRootProto?.id)
+      const el: MinimalElement = { wire, type, props, childOrder: [...trees.map((t) => t.el.wire), ...(adopted ?? [])] }
       if (styles.length > 0) el.styles = styles
       if (s.forkKey !== undefined) el.forkKey = s.forkKey
       return { el, defChildren: trees.flatMap((t) => t.flat) }

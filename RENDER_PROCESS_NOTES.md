@@ -1172,6 +1172,27 @@ is recorded here and encoded in the specs listed.
   `docs/specs/ops.md` §2.7/§7 G23–G29; `docs/specs/render.md` §3.4.2 SED-1..3
   /§10.7; `docs/specs/placement-path-spec.md`
   §10.ag (placement links in the layer; F18 enumeration rule).
+- **DECIDED (DEFECT #25 — the SED-1 `'type'`-target collapse IS the def's element, 2026-08-19):**
+  the shell-collapse emits the def's authored DATA — type + css + content + props (the def wins over a
+  same-named consumer prop; the consumer's own scalar binding wins over the def content when both
+  exist). Both collapse branches (the top-level `emitOne` `seam === 'type'` and the nested
+  `emitDefChildTree` SED-1) surface `def.content` → `text` and `def.props` → `prop:*`; pre-fix only
+  type + css surfaced and the live crafted nav links rendered EMPTY + href-less (P-EMIT-11
+  red→green; adapted live render confirmed: Admin / Edit Mode / Create Article now emit nested
+  `<a>` with text + href). Spec letter: designing-pages.md §2 seam targets; docs/defects.md
+  DEFECT #25.
+- **DECIDED (DEFECT #24 — seam-resolved def subtrees REALIZE in-tree for RESOLUTION only, 2026-08-19):**
+  a children-target seam under an IN-TREE consumer makes the def-root/def-children realize in-tree
+  via `stateChildAnchor()` (resolution follows the seam child edge when the primary
+  'component'-token edge is dead — the primary edge stays the family-census + reversion edge, so
+  G26 and DEFECT #10 reversion stay intact; unresolved defs stay `'prototype'`). Seam-delivered def
+  nodes are CARRIERS, not emitters: `compilePath` suppresses their standalone actionable (the
+  def-fill `emitDefRootElement`/`emitDefChildTree` ships the authored truth — no double-element),
+  and the children-target seam NO LONGER COPIES the def child's `container`/`content` anchors onto
+  the def-root (a redundant zone host forked a phantom placement route). Placed packets targeting
+  def-internal drop-zones now enumerate + emit (P-EMIT-8). Census re-shape: legacy-shape in-tree
+  11→14, prototypes 6→3 (states 12 / elements 16 unchanged). Encoding: `docs/specs/placement-path-
+  spec.md` §10.ag; archive/defects/2026-08-19/2026-08-19-defect-24-def-internal-dropzone.md.
 - **DECIDED (D8 — def children out-of-tree, pre-minted):** a source anchor's
   def value's children are OUT-OF-TREE `'component'`-token prototypes
   PRE-MINTED at translate (F16): never emitted by

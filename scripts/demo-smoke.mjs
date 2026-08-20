@@ -423,12 +423,12 @@ function assertLegacyShapeCensus(prof) {
     console.error(`legacy-shape census registered mismatch: registered=${prof.registered}, expected 17 (16 envelope nodes + the blind-test fixture root)`)
     process.exit(1)
   }
-  if (prof.inTree !== 11) {
-    console.error(`legacy-shape census in-tree mismatch: inTree=${prof.inTree}, expected 11 (the 6 def prototypes stay OUT-OF-TREE — D8/F16)`)
+  if (prof.inTree !== 14) {
+    console.error(`legacy-shape census in-tree mismatch: inTree=${prof.inTree}, expected 14 (the seam-resolved menu subtree realizes in-tree — DEFECT #24; 3 unresolved def prototypes stay out-of-tree)`)
     process.exit(1)
   }
-  if (prof.prototypes !== 6) {
-    console.error(`legacy-shape census prototypes mismatch: prototypes=${prof.prototypes}, expected 6 (def roots + children, 'component'-token pre-minted)`)
+  if (prof.prototypes !== 3) {
+    console.error(`legacy-shape census prototypes mismatch: prototypes=${prof.prototypes}, expected 3 (unresolved def roots/children, 'component'-token pre-minted)`)
     process.exit(1)
   }
   if (prof.unplaced !== 0) {
