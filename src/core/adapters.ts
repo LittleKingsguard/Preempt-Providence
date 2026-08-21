@@ -176,6 +176,13 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
         this.listeners.set(key, evtMap)
       }
       evtMap.set(evtName, { el, fn: handler })
+    } else if (name.startsWith('data:')) {
+      // DATA-* (ssr-synthetic-event.md §4 — the opt-in `data:` namespace): a
+      // `data:<name>` op prop routes to setAttribute('data-<name>') (the
+      // data-node-id traceability attribute), mirroring the prop:/css: routing.
+      const attr = 'data-' + name.slice(5)
+      if (val === undefined) el.removeAttribute(attr)
+      else el.setAttribute(attr, bakeValue(val))
     } else {
       const attr = name.startsWith('prop:') ? name.slice(5) : name
       if (val === undefined) {
@@ -358,6 +365,13 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
       }
     } else if (name.startsWith('on:')) {
       const attr = 'on' + name.slice(3)
+      if (val === undefined) state.attrs.delete(attr)
+      else state.attrs.set(attr, escapeAttr(val))
+    } else if (name.startsWith('data:')) {
+      // DATA-* (ssr-synthetic-event.md §4 — the opt-in `data:` namespace): a
+      // `data:<name>` op prop routes to the `data-<name>` attribute (the
+      // data-node-id traceability attribute), mirroring the prop:/css: routing.
+      const attr = 'data-' + name.slice(5)
       if (val === undefined) state.attrs.delete(attr)
       else state.attrs.set(attr, escapeAttr(val))
     } else {

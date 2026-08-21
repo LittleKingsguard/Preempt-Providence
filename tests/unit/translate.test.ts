@@ -22,7 +22,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { translateLegacy, reverseTranslate, type LegacyInitialData } from '../../src/core/translate.js'
 import { dispatchPhase } from '../../src/core/handlers.js'
 import { serializeSlice, loadState } from '../../src/core/serialize.js'
-import { Node, reconcileParentTargets } from '../../src/core/node.js'
+import { Node, Supervisor, reconcileParentTargets } from '../../src/core/node.js'
 import { hub } from '../helpers/fixtures.js'
 import type { Node as NodeType } from '../../src/core/node.js'
 
@@ -665,6 +665,38 @@ describe('translateLegacy — original /Preempt schema → anchor graph', () => 
       })
       expect(t.root.handlers).toHaveLength(0)
       expect(t.warnings).toEqual([{ code: 'handler-body-invalid', path: 'root.handlers[0]' }])
+    })
+
+    it('CSP eval-block (REQ-GAP-7b): an EvalError from new Function warns handler-body-eval-blocked (distinct from handler-body-invalid); the node dispatches [] (silent skip); a genuine SYNTAX error still warns handler-body-invalid', () => {
+      const RealFunction = globalThis.Function
+      ;(globalThis as { Function: typeof Function }).Function = function EvalBlocked(): never {
+        throw new EvalError('Refused to evaluate a string as JavaScript because the script CSP policy disallows eval')
+      } as unknown as typeof Function
+      try {
+        const t = translateLegacy({
+          template: {
+            root: {
+              type: 'app',
+              handlers: [{ name: 'click', event: 'click', body: 'function () { return 1 }' }],
+            },
+          },
+          content: [],
+        })
+        expect(t.root.handlers).toHaveLength(0)
+        expect(t.warnings).toEqual([{ code: 'handler-body-eval-blocked', path: 'root.handlers[0]' }])
+        // silent-skip shape: the node compiles with no handlers, dispatch returns []
+        const sup = new Supervisor({})
+        sup.registerNode(t.root)
+        expect(sup.dispatchEvent(t.root.id, 'click')).toEqual([])
+      } finally {
+        globalThis.Function = RealFunction
+      }
+      // the generic code stays reserved for genuine syntax errors (never the new code)
+      const t2 = translateLegacy({
+        template: { root: { type: 'app', handlers: [{ name: 'x', event: 'click', body: 'not-a-function(' }] } },
+        content: [],
+      })
+      expect(t2.warnings).toEqual([{ code: 'handler-body-invalid', path: 'root.handlers[0]' }])
     })
   })
 

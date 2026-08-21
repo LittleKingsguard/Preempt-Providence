@@ -390,7 +390,7 @@ re-derived forks de-dupe by node IDs.
 | PAR-1 | Same pipeline, same `compile(slice)`, same fork/disposition rules on both sides (notes §10.6, S4.2) |
 | PAR-2 | Same serialized formats both directions (SER-R5) |
 | PAR-3 | Only config differences: **which adapter** + **whether persistence runs** (notes §10.6) |
-| PAR-4 | Server-only fragments dropped permanently — no SSR-only render path survives (notes §8.2) |
+| PAR-4 | Server-only fragments dropped permanently — no SSR-only render path survives (notes §8.2). **SCOPED LIFT (2026-08-21 — handoffs-review REQ-GAP-3, user ruling A2):** the OPT-IN `renderOptions.nodeIdAttribute` option (§4, ssr-synthetic-event.md) adds `data-node-id="<nodeId>"` to every emitted element when a host explicitly opts in — DEFAULT OFF, so PAR-4's letter holds for every default render; the flag is the only sanctioned new attribute (no `data-wire`, no `id` re-typing) |
 | PAR-5 | Same input state ⇒ structurally equal output: server HTML ≡ client DOM after hydrate + re-resolution |
 
 ---

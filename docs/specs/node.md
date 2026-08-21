@@ -146,7 +146,7 @@ new Node(data: NodeBaseData, actor: Actor)
 | | |
 | --- | --- |
 | Pre | none (value validation is the validation phase's job, not the constructor's) |
-| Post-1 | `id` minted, unique process-wide (S3.1); auto-IDs (`preempt-node-<hash>`) filled into `props.id`/`css.id` when absent (legacy notes §5.1 retained) |
+| Post-1 | `id` minted, unique process-wide (S3.1); auto-ID fill (`preempt-node-<id>` — the node's OWN minted id, node.ts `ensureAutoIds`) written into `props.id` when ABSENT (authored `props.id` is never overwritten; `css.id` is NEVER auto-filled — it is an authored-only vocabulary). **Rendered-id precedence (handoffs-review REQ-GAP-3):** `css.id` (authored) > authored `props.id` > the mint — css wins the rendered `id` attribute (emit order: props then css). **Reverse (DEFECT #28):** the mint is engine-synthesized state and is EXCLUDED from `nodeToLegacy` (authored `props.id` — even one equal to the mint pattern — always ships; a non-mint slice write ships as a live edit) |
 | Post-2 | `base` frozen; seed `NodeLayer`s (incl. any seed `AnchorLayer`s) appended |
 | Post-3 | `compileLocal` has run once: `anchors` materialized, pass-1 cache valid |
 | Post-4 | `state` derives from seed anchors: chain→`'rootNode'` ⇒ `in-tree` (supervisor root only); chain→`'component'` ⇒ `prototype`; no chain ⇒ `unplaced` |

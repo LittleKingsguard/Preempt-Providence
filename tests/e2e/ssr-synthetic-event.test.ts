@@ -130,9 +130,15 @@ const ENV = {
   clientConfig: { runInstantiation: true, runRendering: true },
 }
 
-async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0))
+/** Deterministic settle (P6 — user ruling D2): the SUPERVISOR's own flush,
+ *  never a hand-rolled magic-tick loop (the harness's old 8× setTimeout(0)
+ *  is gone — flush() is the public surface). */
+async function flush(sup: Supervisor): Promise<void> {
+  await sup.flush()
 }
+
+/** The shared-host report surface (ssr-synthetic-event.md §3 — DispatchReport). */
+interface DispatchReport { results: unknown[]; dirtied: string[] }
 
 interface ProducingProcess {
   sup: Supervisor
@@ -140,7 +146,7 @@ interface ProducingProcess {
   nodeById: Map<string, unknown>
   prevStates: Map<string, Array<Record<string, unknown>>>
   render(): { els: unknown[]; ops: RenderOp[] }
-  dispatch(target: string, event: string, ...args: unknown[]): Promise<unknown[]>
+  dispatch(target: string, event: string, ...args: unknown[]): Promise<DispatchReport>
   cssIdToNode(cssId: string): unknown
 }
 
@@ -179,20 +185,17 @@ function producingProcess(adapter: RenderAdapter<unknown, unknown>): ProducingPr
   }
   render()
 
-  async function dispatch(target: string, event: string, ...args: unknown[]): Promise<unknown[]> {
-    const j0 = sup.journal.length
-    const r = sup.dispatchEvent(target, event, ...args)
-    await flush()
-    const states = sup.takePass2States()
-    const changed = sup.journal.length !== j0 || states.size > 0
-    if (states.size > 0) {
-      for (const [id, arr] of states) prevStates.set(id, arr as never)
+  async function dispatch(target: string, event: string, ...args: unknown[]): Promise<DispatchReport> {
+    const report = await sup.dispatchAndReport(target, event, {}, ...args)
+    // dispatchAndReport consumed the pass-2 drain as the report's caller; the
+    // NON-draining resolved store carries the fresh states for the dirtied
+    // nodes — refresh the render baseline from it (P4: the graph mutated, the
+    // fragment string is untouched until the HOST explicitly re-renders).
+    for (const id of report.dirtied) {
+      const resolved = sup.getResolvedStates(id)
+      if (resolved.length > 0) prevStates.set(id, resolved as never)
     }
-    // P4/P6 — dispatch NEVER renders (Phase A: trigger-not-journal, no flush,
-    // no emit). The graph mutated; the fragment string is untouched until the
-    // HOST explicitly re-renders on demand (graph-canon, fragment-is-a-view).
-    void changed
-    return r
+    return report
   }
 
   function cssIdToNode(cssId: string): unknown {
@@ -299,9 +302,12 @@ describe('Phase B — SSR synthetic-event contract (producing-process-keeps-grap
     const producer = producingProcess(ssrAdapter)
     const before = ssrAdapter.toString()
     const node = producer.cssIdToNode('the-btn') as { id: string }
-    const results = await producer.dispatch(node.id, 'click', 'hi')
-    expect(results).toEqual([undefined]) // the legacy body ran via the engine stub
-    // the graph mutated (Phase A trigger → apply → flush)
+    const report = await producer.dispatch(node.id, 'click', 'hi')
+    expect(report.results).toEqual([undefined]) // the legacy body ran via the engine stub
+    // the deterministic settle left nothing pending (P6 — flush is host-callable)
+    await flush(producer.sup)
+    expect(producer.sup.hasPendingWork()).toBe(false)
+    // the graph mutated (the report's flush applied the body's mutation)
     expect((producer.sup.getNode(node.id) as { content?: unknown }).content).toBe('hi!')
     // the EXISTING fragment string is a static artifact — it did NOT change
     expect(ssrAdapter.toString()).toBe(before)
@@ -313,20 +319,26 @@ describe('Phase B — SSR synthetic-event contract (producing-process-keeps-grap
     expect(flatten(parseFragment(after)).find((e) => e.id === 'the-btn')?.text).toBe('hi!')
   })
 
-  it('P5 — DOM vs SSR parity: the SAME dispatch on each producing graph returns IDENTICAL results, and the post-apply re-emits are structurally equal (PAR-5, treeSig oracle)', async () => {
+  it('P5 + §3.4 — DOM vs SSR parity on the REPORT surface: the SAME dispatch on each producing graph returns IDENTICAL results AND structurally identical dirtied; the post-apply re-emits are structurally equal (PAR-5, treeSig oracle)', async () => {
     const ssrAdapter = new SSRFragmentAdapter()
     const domAdapter = new DomAdapter(document.createElement('div') as unknown as HTMLElement)
     const ssrProducer = producingProcess(ssrAdapter)
     const domProducer = producingProcess(domAdapter)
 
-    // identical HandlerResult[] (the dispatch is on the graph — adapter-independent)
+    // identical report surfaces (the dispatch is on the graph — adapter-independent)
     const ssrNode = ssrProducer.cssIdToNode('the-btn') as { id: string }
     const domNode = domProducer.cssIdToNode('the-btn') as { id: string }
-    const [ssrResults, domResults] = await Promise.all([
+    const [ssrReport, domReport] = await Promise.all([
       ssrProducer.dispatch(ssrNode.id, 'click', 'hello'),
       domProducer.dispatch(domNode.id, 'click', 'hello'),
     ])
-    expect(ssrResults).toEqual(domResults)
+    expect(ssrReport.results).toEqual(domReport.results)
+    // dirtied: each producing process mints its OWN node ids, so the parity
+    // claim is the STRUCTURAL set — the same relative node positions
+    expect(ssrReport.dirtied.map((id) => ssrProducer.nodes.findIndex((n) => n.id === id)))
+      .toEqual(domReport.dirtied.map((id) => domProducer.nodes.findIndex((n) => n.id === id)))
+    expect(ssrReport.dirtied).toContain(ssrNode.id)
+    expect(domReport.dirtied).toContain(domNode.id)
 
     // post-apply re-emit structural parity: the canonical op-stream trees match (PAR-5 oracle)
     const ssrOps = ssrProducer.render().ops

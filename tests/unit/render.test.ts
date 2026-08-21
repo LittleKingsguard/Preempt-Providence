@@ -25,6 +25,9 @@ import {
 } from '../../src/core/serialize.js'
 import { Node, mintNodeId, reconcileParentTargets } from '../../src/core/node.js'
 import type { NodeRef } from '../../src/core/types.js'
+import { translateLegacy } from '../../src/core/translate.js'
+import { Supervisor } from '../../src/core/supervisor.js'
+import { EventBridge } from '../../src/core/events.js'
 import {
   makeRoot,
   makeNode,
@@ -1132,5 +1135,127 @@ describe('DEFECT #1 — emitOne forwards forkKey onto emitted elements and ops',
     treeFromOpsReal(ops)
     const treeScans = findElScanCount() - before2
     expect(treeScans).toBeLessThan(2 * n)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// OPT-IN `data:node-id` render option (docs/specs/ssr-synthetic-event.md §4 —
+// user ruling A2: the ONE scoped lift of the no-render-change pin, DEFAULT OFF)
+// ---------------------------------------------------------------------------
+
+describe('OPT-IN `data:node-id` render option (ssr-synthetic-event.md §4)', () => {
+  it('default-OFF pin — emitElements with NO render options emits NO `data:`-prefixed op key', () => {
+    const root = makeRoot({ type: 'root', content: 'R' })
+    const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L' }), 0)
+    addComponentSource(root, 'slot', 'v')
+    targetAnchor(leaf, 'slot')
+    const res = root.compile([root, leaf])
+    const els = emitElements(res.actionable)
+    // no element carries a `data:`-prefixed prop
+    for (const e of els) {
+      expect(Object.keys(e.props).some((k) => k.startsWith('data:'))).toBe(false)
+    }
+    // the op stream carries no `data:`-prefixed set name
+    for (const op of diffMinimal(null, els)) {
+      if (op.kind === 'set') expect(op.name.startsWith('data:')).toBe(false)
+    }
+  })
+
+  it('ON — every element of a small tree (root, plain child, fork arms) carries data:node-id = its state nodeId; every value is a key of nodeById', () => {
+    const root = makeRoot({ type: 'root', content: 'R' })
+    const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L' }), 0)
+    targetAnchor(leaf, 'refX')
+    const pA = childOf(leaf, makeNode({ type: 'pA' }), 0)
+    const pB = childOf(leaf, makeNode({ type: 'pB' }), 1)
+    addComponentSource(pA, 'refX', { what: 'A' })
+    addComponentSource(pB, 'refX', { what: 'B' })
+    const res = root.compile([root, leaf, pA, pB])
+    // the tree carries a genuine fork (two arms for the leaf)
+    expect(res.actionable.filter((s) => s.nodeId === leaf.id)).toHaveLength(2)
+    const nodeById = new Map([[root.id, root], [leaf.id, leaf], [pA.id, pA], [pB.id, pB]]) as never
+    const els = emitElements(res.actionable, nodeById, { nodeIdAttribute: true })
+    expect(els.length).toBeGreaterThan(0)
+    // fork-arm wires are `<nodeId>#<i>` — the state's nodeId is the `#`-prefix
+    const nodeIdOf = (wire: string): string => {
+      const hash = wire.indexOf('#')
+      return hash === -1 ? wire : wire.slice(0, hash)
+    }
+    for (const e of els) {
+      // plain + fork-arm elements carry the STATE's nodeId (fork arms share it)
+      expect(e.props['data:node-id']).toBe(nodeIdOf(e.wire))
+      // the value MUST be a key of nodeById
+      expect((nodeById as unknown as Map<string, unknown>).has(e.props['data:node-id'] as string)).toBe(true)
+    }
+  })
+
+  it('ON — def-fill synthetic elements carry the REAL node id behind them (def-root proto / def-child proto / consumer nodeId)', () => {
+    // the SED-2 children-seam envelope (the legacy-shape-translate [29]
+    // fixture): the seam def mints real def-root + def-child prototype nodes;
+    // the synthetic def-fill elements must carry THOSE ids, not the wires.
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          component: [
+            {
+              reference: 'menu',
+              value: {
+                type: 'nav',
+                css: { classes: ['menu-def'] },
+                children: [{ type: 'span', content: 'logo' }],
+              },
+              target: 'children',
+            },
+          ],
+          children: [
+            { type: 'div', content: 'wrapper text', component: [{ reference: 'menu', target: 'children' }], children: [{ type: 'p', content: 'authored' }] },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const cr = t.root.compile(t.nodes)
+    const byNode = new Map(sup.allNodes().map((n) => [n.id, n])) as never
+    const allIds = new Set(sup.allNodes().map((n) => n.id))
+    const els = emitElements(cr.actionable, byNode, { nodeIdAttribute: true })
+    expect(els.length).toBeGreaterThan(0)
+    // EVERY element carries the prop, and its value is a key of nodeById
+    for (const e of els) {
+      expect(typeof e.props['data:node-id']).toBe('string')
+      expect(allIds.has(e.props['data:node-id'] as string)).toBe(true)
+    }
+    // the def-root synthetic element (nav) carries the minted def-root PROTO's id
+    const navProtoId = sup.allNodes().find((n) => n.type === 'nav')!.id
+    const nav = els.find((e) => e.type === 'nav')!
+    expect(nav.props['data:node-id']).toBe(navProtoId)
+    // the def-child synthetic element (span logo) carries the def-child PROTO's id
+    const logoProtoId = sup.allNodes().find((n) => n.type === 'span')!.id
+    const logo = els.find((e) => e.props['text'] === 'logo')!
+    expect(logo.props['data:node-id']).toBe(logoProtoId)
+    // the SED-2 shell (wrapper) carries the CONSUMER's own nodeId
+    const wrapper = els.find((e) => e.props['text'] === 'wrapper text')!
+    expect(wrapper.props['data:node-id']).toBe(cr.actionable.find((s) => s.nodeId === wrapper.wire)!.nodeId)
+  })
+
+  it('ON is ADDITIVE — the same tree with/without the option differs ONLY by the data: prop', () => {
+    const root = makeRoot({ type: 'root' })
+    const a = childOf(root, makeNode({ type: 'a', content: 'A' }), 0)
+    const b = childOf(a, makeNode({ type: 'b' }), 0)
+    addComponentSource(root, 'slot', 'v')
+    targetAnchor(b, 'slot')
+    const res = root.compile([root, a, b])
+    const nodeById = new Map([[root.id, root], [a.id, a], [b.id, b]]) as never
+    const off = emitElements(res.actionable, nodeById)
+    const on = emitElements(res.actionable, nodeById, { nodeIdAttribute: true })
+    expect(on.length).toBe(off.length)
+    for (let i = 0; i < off.length; i += 1) {
+      const { ['data:node-id']: _dropped, ...restProps } = on[i]!.props
+      void _dropped
+      expect({ ...on[i]!, props: restProps }).toEqual(off[i])
+    }
+    // and the data: prop is genuinely present on every ON element
+    for (const e of on) expect(typeof e.props['data:node-id']).toBe('string')
   })
 })

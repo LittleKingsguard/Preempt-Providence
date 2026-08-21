@@ -232,6 +232,22 @@ export class Supervisor {
 successful mutation, returns `{ status:'applied'; journalId; dirtied }` (or the matching rejection).
 Empty `journal = []` satisfies `journal.length` checks in tests T1–T5.
 
+**Shared-host surface (2026-08-21 — ssr-synthetic-event.md §3/§2.6, handoffs-
+review REQ-GAP-4/5):** `Supervisor.flush(): Promise<void>` (deterministic
+settle — `while (hasPendingWork()) await oneTaskBoundary`; replaces host
+hand-rolled tick loops), `Supervisor.dispatchAndReport(target, event, options,
+...args): Promise<{ results: HandlerResult[]; dirtied: NodeId[] }>` (additive
+sibling of `dispatchEvent`; awaits `flush()` internally; `dirtied =
+apply().dirtied ∪ keys(takePass2States())` — bounded, non-draining;
+`options.requestId` = opt-in bounded LRU dedup, registered synchronously at
+call entry, duplicate returns the first caller's report, NOT journaled,
+process-local). `renderProducingProcess(actionable, nodeById, adapter,
+prevMap)` — the exported canonical re-emit loop (caller-owned `prevMap`,
+destroy-prune, caller drains `takePass2States`, on-demand only). `emitElements`
+gains an optional `renderOptions` parameter (`{ nodeIdAttribute?: boolean }` —
+DEFAULT OFF; ON adds `data-node-id="<nodeId>"` to every element — the ONE
+scoped lift of PAR-4/NVS-7, ssr-synthetic-event.md §4).
+
 ## `src/core/ops.ts`
 
 ```ts

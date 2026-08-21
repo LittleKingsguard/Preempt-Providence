@@ -356,3 +356,184 @@ describe('Supervisor event dispatch (Phase A — dispatchEvent engine wiring)', 
     expect(supervisor.takePass2States().size).toBe(0) // nothing drained, nothing scheduled
   })
 })
+
+describe('shared dispatch-report (ssr-synthetic-event.md §3 — dispatchAndReport + flush + opt-in requestId dedup)', () => {
+  it('report shape: results mirror dispatchEvent; dirtied contains the applied sibling; the report consumed the pass-2 drain', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    const sibling = childOf(root, makeNode({ content: 'orig' }))
+    supervisor.registerNode(n)
+    supervisor.registerNode(sibling)
+    n.addLayer({
+      id: 'h',
+      handlers: [{
+        name: 'click', event: 'click',
+        body: (c: HandlerContext) => {
+          c.clientAPI.apply(sibling.id, [{ targetProp: 'content', mode: 'replace', value: 'x' }])
+          return 'ok'
+        },
+      }],
+    })
+    const report = await supervisor.dispatchAndReport(n.id, 'click')
+    expect(report.results).toEqual(['ok'])
+    expect(report.dirtied).toContain(sibling.id)
+    // the report took pass-2 states as its caller — the drain is consumed
+    expect(supervisor.takePass2States().size).toBe(0)
+  })
+
+  it('dirtied includes pass-2 state keys: the walk-path root recompiles via takePass2States although the journal dirtied names only the apply target', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode({ content: 'orig' }))
+    supervisor.registerNode(n)
+    n.addLayer({
+      id: 'h',
+      handlers: [{
+        name: 'click', event: 'click',
+        body: (c: HandlerContext) => {
+          c.clientAPI.apply(n.id, [{ targetProp: 'content', mode: 'replace', value: 'y' }])
+        },
+      }],
+    })
+    const report = await supervisor.dispatchAndReport(n.id, 'click')
+    expect(report.dirtied).toContain(n.id)
+    // the root is NOT in the journal's dirtied ([n.id] only) — it appears via
+    // the pass-2 walk-path recompile (keys of takePass2States)
+    expect(report.dirtied).toContain(root.id)
+  })
+
+  it('unknown / destroyed / unplaced targets → { results: [], dirtied: [] }', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    n.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => 'should-not-run' }] })
+    expect(await supervisor.dispatchAndReport('nope', 'click')).toEqual({ results: [], dirtied: [] })
+    const unplaced = makeNode()
+    supervisor.registerNode(unplaced)
+    unplaced.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => 'should-not-run' }] })
+    expect(await supervisor.dispatchAndReport(unplaced.id, 'click')).toEqual({ results: [], dirtied: [] })
+    n.markDestroyed()
+    expect(await supervisor.dispatchAndReport(n.id, 'click')).toEqual({ results: [], dirtied: [] })
+  })
+
+  it('requestId dedup: a duplicate returns the FIRST call\'s report and the dispatch ran once', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let fires = 0
+    n.addLayer({
+      id: 'h',
+      handlers: [{
+        name: 'click', event: 'click',
+        body: (c: HandlerContext) => { fires++; c.clientAPI.apply(n.id, [{ targetProp: 'content', mode: 'replace', value: 'x' }]); return 'r' },
+      }],
+    })
+    const first = await supervisor.dispatchAndReport(n.id, 'click', { requestId: 'req-1' })
+    const jLen = supervisor.journal.length
+    const second = await supervisor.dispatchAndReport(n.id, 'click', { requestId: 'req-1' })
+    expect(fires).toBe(1)
+    expect(second).toEqual(first)
+    expect(second).toBe(first) // idempotent ECHO — the first caller's report object
+    expect(supervisor.journal.length).toBe(jLen) // no second dispatch ran
+  })
+
+  it('concurrent requestId duplicates: both resolve to the same report and the dispatch ran once', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let fires = 0
+    n.addLayer({
+      id: 'h',
+      handlers: [{
+        name: 'click', event: 'click',
+        body: (c: HandlerContext) => { fires++; c.clientAPI.apply(n.id, [{ targetProp: 'content', mode: 'replace', value: 'x' }]); return 'r' },
+      }],
+    })
+    const [a, b] = await Promise.all([
+      supervisor.dispatchAndReport(n.id, 'click', { requestId: 'req-2' }),
+      supervisor.dispatchAndReport(n.id, 'click', { requestId: 'req-2' }),
+    ])
+    expect(fires).toBe(1) // the duplicate awaited the FIRST call's in-flight promise
+    expect(a).toEqual(b)
+    expect(a).toBe(b)
+    expect(a.results).toEqual(['r'])
+    expect(a.dirtied).toContain(n.id)
+  })
+
+  it('requestId reused with a DIFFERENT (target, event) is a miss — the stale report is never echoed', async () => {
+    const { supervisor, root } = newSystem()
+    const n1 = childOf(root, makeNode())
+    const n2 = childOf(root, makeNode())
+    supervisor.registerNode(n1)
+    supervisor.registerNode(n2)
+    let fires1 = 0
+    let fires2 = 0
+    n1.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => { fires1++; return 'one' } }] })
+    n2.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => { fires2++; return 'two' } }] })
+    const first = await supervisor.dispatchAndReport(n1.id, 'click', { requestId: 'req-3' })
+    const second = await supervisor.dispatchAndReport(n2.id, 'click', { requestId: 'req-3' })
+    expect(fires1).toBe(1)
+    expect(fires2).toBe(1) // a FRESH dispatch ran on n2 — not the stale n1 report
+    expect(second.results).toEqual(['two'])
+    expect(second).not.toBe(first)
+  })
+
+  it('without requestId there is no dedup: two calls both dispatch', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let fires = 0
+    n.addLayer({ id: 'h', handlers: [{ name: 'click', event: 'click', body: () => { fires++ } }] })
+    await supervisor.dispatchAndReport(n.id, 'click')
+    await supervisor.dispatchAndReport(n.id, 'click')
+    expect(fires).toBe(2)
+  })
+
+  it('reentrancy: a nested dispatchAndReport of the same (node,event) no-ops (empty report); a different event still fires', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode())
+    supervisor.registerNode(n)
+    let clickFires = 0
+    let focusFires = 0
+    n.addLayer({
+      id: 'h',
+      handlers: [
+        {
+          name: 'click', event: 'click',
+          body: (c: HandlerContext) => {
+            clickFires++
+            void c.supervisor.dispatchAndReport(n.id, 'click')
+            void c.supervisor.dispatchAndReport(n.id, 'focus')
+            return 'c'
+          },
+        },
+        { name: 'focus', event: 'focus', body: () => { focusFires++ } },
+      ],
+    })
+    const report = await supervisor.dispatchAndReport(n.id, 'click')
+    expect(clickFires).toBe(1) // the nested same-event dispatchAndReport was guarded
+    expect(focusFires).toBe(1) // a DIFFERENT event is not blocked by the guard
+    expect(report.results).toEqual(['c'])
+  })
+
+  it('flush(): after a body\'s apply, await flush() leaves hasPendingWork() false and the pass-2 states available', async () => {
+    const { supervisor, root } = newSystem()
+    const n = childOf(root, makeNode({ content: 'orig' }))
+    supervisor.registerNode(n)
+    n.addLayer({
+      id: 'h',
+      handlers: [{
+        name: 'click', event: 'click',
+        body: (c: HandlerContext) => {
+          c.clientAPI.apply(n.id, [{ targetProp: 'content', mode: 'replace', value: 'y' }])
+        },
+      }],
+    })
+    expect(supervisor.hasPendingWork()).toBe(false)
+    supervisor.dispatchEvent(n.id, 'click') // the apply schedules the flush
+    expect(supervisor.hasPendingWork()).toBe(true)
+    await supervisor.flush()
+    expect(supervisor.hasPendingWork()).toBe(false) // the deterministic settle drained everything
+    expect(supervisor.takePass2States().size).toBeGreaterThan(0) // the settle produced states (non-draining probe)
+    expect(n.content).toBe('y')
+  })
+})

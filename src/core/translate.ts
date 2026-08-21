@@ -374,6 +374,21 @@ function baseFrom(
           }
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e)
+          // REQ-GAP-7b (2026-08-21 — handoffs-review) — the CSP/EvalError
+          // signature branches a DISTINCT warn code BEFORE the generic
+          // handler-body-invalid (which stays for genuine syntax errors):
+          // under a strict `script-src 'self'` CSP (no 'unsafe-eval') every
+          // `new Function` throws, and a host must be able to tell
+          // "environment blocked" from "authoring error". Same skip
+          // semantics (TR-F2 containment) — the node compiles with no
+          // handlers and dispatchEvent returns [].
+          if (
+            e instanceof EvalError
+            || /refused to evaluate|unsafe-eval|Content Security Policy/i.test(reason)
+          ) {
+            warn(warnings, 'handler-body-eval-blocked', hp, `body string was blocked from evaluation by the environment (${reason}); handler definition skipped`)
+            return
+          }
           warn(warnings, 'handler-body-invalid', hp, `body string failed to instantiate (${reason}); handler definition skipped`)
         }
         return
@@ -1155,7 +1170,19 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   const data: LegacyNodeData = {}
   data.type = node.type
   if (node.content !== undefined) data.content = node.content
-  if (node.props && Object.keys(node.props).length > 0) data.props = { ...node.props }
+  if (node.props && Object.keys(node.props).length > 0) {
+    const props = { ...node.props }
+    // DEFECT #28 (handoffs-review REQ-GAP-3): the engine auto-mint fill
+    // (node.ts ensureAutoIds — `preempt-node-<id>` when props.id was never
+    // authored) is engine-synthesized state, not authored data: exclude it so
+    // reverse stays json-out = json-in (the DEFECT #14 reverse-exclusion
+    // precedent). An AUTHORED props.id always ships — including one that
+    // happens to equal the mint pattern (base-authored wins; re-translate
+    // keeps it — ensureAutoIds only fills a missing id). A runtime slice
+    // write of a NON-mint props.id ships as a live edit.
+    if (node.base.props?.id === undefined && props.id === `preempt-node-${node.id}`) delete props.id
+    if (Object.keys(props).length > 0) data.props = props
+  }
   // HOOKS §7.2 pin 4 — the authored field round-trips (the derived/handlers
   // precedent): the NAMES ship on reverse; the VALUE ships via the component
   // binding (`binding.value = a.value` below — the mirror makes the anchor

@@ -333,6 +333,53 @@ describe('P3 — reverse emission of placement anchors (content + activePlacemen
     expect(again.warnings).toEqual([])
   })
 
+  it('DEFECT #28 — the auto-mint props.id does NOT leak into reversed legacy (json-out = json-in)', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', children: [{ type: 'header', content: 'Head' }] } },
+      content: [],
+    })
+    // the engine minted a props.id fill on every node without an authored one
+    expect(t.root.props.id).toBe(`preempt-node-${t.root.id}`)
+    expect(t.root.children[0]!.props.id).toBe(`preempt-node-${t.root.children[0]!.id}`)
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(JSON.stringify(out)).not.toContain('preempt-node-')
+    expect(out.template.root.props).toBeUndefined()
+    expect(out.template.root.children?.[0]?.props).toBeUndefined()
+    // round-trip: re-translate re-mints the fill cleanly — no warning, the
+    // fill matches the NEW node's own id (node ids are a global seq, so the
+    // minted value differs per translate pass — only the pattern is stable)
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+    expect(again.root.props.id).toBe(`preempt-node-${again.root.id}`)
+    expect(again.root.children[0]!.props.id).toBe(`preempt-node-${again.root.children[0]!.id}`)
+  })
+
+  it('DEFECT #28 — an AUTHORED props.id survives reverse (authored data is never stripped)', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', props: { id: 'authored-1' } } },
+      content: [],
+    })
+    expect(t.root.props.id).toBe('authored-1')
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.props).toEqual({ id: 'authored-1' })
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+    expect(again.root.props.id).toBe('authored-1')
+  })
+
+  it('DEFECT #28 — an authored props.id EQUAL to the engine mint pattern is kept (base-authored wins)', () => {
+    const t = translateLegacy({
+      template: { root: { type: 'app', props: { id: `preempt-node-node-1` } } },
+      content: [],
+    })
+    expect(t.root.props.id).toBe(`preempt-node-node-1`)
+    const out = reverseTranslate(t.root, { content: t.content })
+    expect(out.template.root.props).toEqual({ id: `preempt-node-node-1` })
+    const again = translateLegacy(out)
+    expect(again.warnings).toEqual([])
+    expect(again.root.props.id).toBe(`preempt-node-node-1`)
+  })
+
   it('reverse emission strips the minted contentNodes anchor (no artifact; re-translate re-mints cleanly)', () => {
     const t = translateLegacy(legacyDoc())
     const out = reverseTranslate(t.root, { content: t.content, metadata: t.metadata, userData: t.userData })

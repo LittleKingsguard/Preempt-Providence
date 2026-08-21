@@ -1,5 +1,6 @@
 import type { ForkPathKey, MinimalElement, RenderAdapter, RenderOp } from './render.js'
-import type { Anchor, NodeRef } from './types.js'
+import { diffMinimal } from './render.js'
+import type { Anchor, CompiledState, NodeRef } from './types.js'
 import type { Node } from './node.js'
 import { kebabKey } from './translate.js'
 import { defPrototypesFor, defRootPrototypeFor } from './registry.js'
@@ -334,6 +335,61 @@ export interface EmitNodeSource {
   handlers?: Array<{ event?: string; name?: string; body?: unknown }>
 }
 
+/** OPT-IN render options (ssr-synthetic-event.md §4, user ruling A2 — the ONE
+ *  scoped lift of the no-render-change pin). `nodeIdAttribute: true` adds the
+ *  `data:node-id` op prop to EVERY emitted element (the DOM data-node-id
+ *  attribute / the SSR attribute — the element→graph traceability seam).
+ *  DEFAULT OFF: a default emitElements output is byte-identical to the
+ *  pre-option render (every existing pin/baseline untouched). */
+export interface RenderOptions {
+  nodeIdAttribute?: boolean
+}
+
+/** ssr-synthetic-event.md §2.4 (handoffs-review REQ-GAP-5, user ruling B) —
+ *  the EXPORTED canonical re-emit loop: filter → emit → diff → apply, in one
+ *  implementation for every host (Electron + future — no copy-paste drift).
+ *  Ownership rules (pinned): the caller OWNS the per-tree `prevMap` (null on
+ *  first render — the loop keeps NO module-level render state, cross-tree
+ *  leaks would corrupt diffMinimal baselines); destroyed / not-in-tree nodes
+ *  are pruned before emit; `takePass2States` is the CALLER's drain (never
+ *  touched here); ON-DEMAND ONLY — calling it never dispatches, never drains
+ *  pass-2 (dispatch never re-renders; the loop is the host's explicit
+ *  re-emit). Returns `{ els, ops, prevMap }` — the new prevMap feeds the next
+ *  call. */
+export function renderProducingProcess<P, E>(
+  actionable: CompiledState[],
+  nodeById: Map<string, Node>,
+  adapter: RenderAdapter<P, E>,
+  prevMap: Map<NodeRef, MinimalElement> | null,
+): { els: MinimalElement[]; ops: RenderOp[]; prevMap: Map<NodeRef, MinimalElement> } {
+  const live = actionable.filter((cs) => {
+    const node = nodeById.get(cs.nodeId)
+    return node === undefined || (!node.destroyed && node.isInTree)
+  })
+  const els = emitElements(live, nodeById)
+  const ops = diffMinimal(prevMap, els)
+  applyOps(adapter, ops)
+  return { els, ops, prevMap: new Map(els.map((e) => [e.wire, e])) }
+}
+
+/** OPT-IN `data:node-id` (ssr-synthetic-event.md §4): stamp the REAL node id
+ *  behind an emitted element onto its `data:node-id` op prop. `realId` is the
+ *  state's nodeId for plain/fork-arm/family elements and the proto/def-root id
+ *  for def-fill synthetic elements (the same id mergeHandlerProps reads); a
+ *  proto-less synthetic def-fill element falls back to the nearest real node
+ *  on its chain (the chain tail — the consumer or an enclosing def proto), so
+ *  the value is always a nodeById key in a producing-process render. */
+function stampNodeId(
+  props: Record<string, unknown>,
+  realId: string | undefined,
+  chain: string[] | undefined,
+  nodeIdAttr: boolean,
+): void {
+  if (!nodeIdAttr) return
+  const id = realId ?? chain?.[chain.length - 1]
+  if (id !== undefined) props['data:node-id'] = id
+}
+
 export function emitElements(
   actionable: Array<{
     nodeId: string
@@ -353,8 +409,10 @@ export function emitElements(
   // (rather than a widened EmitNodeSource) sidesteps TS Map invariance. The
   // runtime objects are the same; normalized once at the boundary.
   nodeById?: Map<string, EmitNodeSource> | Map<string, Node> | null,
+  renderOptions?: RenderOptions,
 ): MinimalElement[] {
   const nb = (nodeById ?? null) as Map<string, EmitNodeSource> | null
+  const nodeIdAttr = renderOptions?.nodeIdAttribute === true
   // P3 §4.1 — group by WIRE, not nodeId: a path-state's wire is its pathKey
   // (identity = pathKey alone, §2.2), so every path-state forms its OWN
   // single-state group — it can never be armIdx'd. Only genuine component
@@ -457,7 +515,7 @@ export function emitElements(
       pathNodeOf.size > 0 || pathStateChildren.size > 0 || ownerPlaced.size > 0
         ? { pathNodeOf, pathStateChildren, ownerPlaced }
         : undefined
-    const emitted = emitOne(emitBase, multi ? 0 : undefined, nb, pathCtx)
+    const emitted = emitOne(emitBase, multi ? 0 : undefined, nb, pathCtx, nodeIdAttr)
     const covered = states.length === 1 && defCovered.has(wire)
     if (!covered) {
       const el = emitted.el
@@ -465,7 +523,7 @@ export function emitElements(
         el.childOrder = []
         // one element per arm; the first arm carries the full el, the rest are leaf dupes
         els.push(el)
-        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nb, pathCtx).el)
+        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nb, pathCtx, nodeIdAttr).el)
       } else {
         // remap any forked child references to their arm wires in arm order
         el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])
@@ -698,6 +756,7 @@ function emitDefRootElement(
   nodeById: Map<string, EmitNodeSource> | null | undefined,
   pathCtx: PathEmitContext | undefined,
   chain: string[],
+  nodeIdAttr = false,
 ): { el: MinimalElement; flat: MinimalElement[] } {
   const cprops: Record<string, unknown> = {}
   const styles: string[] = []
@@ -721,7 +780,7 @@ function emitDefRootElement(
     // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
     // (its subtree never recurses either)
     if (defChildPruned(childProtos[i])) continue
-    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx, chain)
+    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx, chain, nodeIdAttr)
     flat.push(...child.flat)
     children.push(child.el)
   }
@@ -729,6 +788,7 @@ function emitDefRootElement(
   // def-root itself (a def whose ROOT is the placement container) join the
   // def-root element after its authored spec children.
   const adopted = adoptPlacedChildren(pathCtx, chain, rootProto?.id)
+  stampNodeId(cprops, rootProto?.id, chain, nodeIdAttr)
   const el: MinimalElement = { wire: rootWire, type: def.type, props: cprops, childOrder: [...children.map((c) => c.wire), ...(adopted ?? [])] }
   if (styles.length > 0) el.styles = styles
   flat.unshift(el)
@@ -755,6 +815,7 @@ function emitDefChildTree(
   nodeById: Map<string, EmitNodeSource> | null | undefined,
   pathCtx: PathEmitContext | undefined,
   chain: string[],
+  nodeIdAttr = false,
 ): { el: MinimalElement; flat: MinimalElement[] } {
   // DEFECT #25 — this def child's REAL node chain (the consumer root-down,
   // through the def-root, to this proto): the placed-child adoption matches
@@ -787,7 +848,7 @@ function emitDefChildTree(
     // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
     // (its subtree never recurses either)
     if (defChildPruned(childProtos[i])) continue
-    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx, thisChain)
+    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx, thisChain, nodeIdAttr)
     flat.push(...child.flat)
     children.push(child.el)
   }
@@ -834,7 +895,7 @@ function emitDefChildTree(
             for (let i = 0; i < nested.children.length; i += 1) {
               // DEFECT #20 — the def-fill prune (nested branch)
               if (defChildPruned(nestedProtos[i])) continue
-              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx, nestedChain)
+              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx, nestedChain, nodeIdAttr)
               flat.push(...child.flat)
               children.push(child.el)
             }
@@ -857,8 +918,10 @@ function emitDefChildTree(
             nodeById,
             pathCtx,
             [...thisChain, ...(nestedRoot?.id ? [nestedRoot.id] : [])],
+            nodeIdAttr,
           )
           flat.push(...rootTree.flat)
+          stampNodeId(cprops, proto?.id, thisChain, nodeIdAttr)
           const shellEl = makeSeamShellEl(wire, type, cprops, spec.content, [rootTree.el.wire], styles, undefined)
           flat.unshift(shellEl)
           return { el: shellEl, flat }
@@ -869,6 +932,7 @@ function emitDefChildTree(
   // DEFECT #25 — adopted placed packets whose real chain routes through this
   // def child's container join its element after the authored spec children.
   const adopted = adoptPlacedChildren(pathCtx, thisChain, proto?.id)
+  stampNodeId(cprops, proto?.id, thisChain, nodeIdAttr)
   const el: MinimalElement = { wire, type, props: cprops, childOrder: [...children.map((c) => c.wire), ...(adopted ?? [])] }
   if (styles.length > 0) el.styles = styles
   flat.unshift(el)
@@ -933,6 +997,7 @@ function emitOne(
   armIdx: number | undefined,
   nodeById?: Map<string, EmitNodeSource> | null,
   pathCtx?: PathEmitContext,
+  nodeIdAttr = false,
 ): { el: MinimalElement; defChildren?: MinimalElement[] } {
   // P3 §4.1 wire scheme: a path-state emits on its pathKey wire; a component
   // fork arm on `nodeId#<i>`; a family/non-path state on its nodeId.
@@ -1005,7 +1070,8 @@ const rootWire = `${wire}:0`
           // prototype, matching the placed packets' ancestor chains
           // (placed-child adoption matches the full chain).
           const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
-          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx, defChain)
+          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr)
+          stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
           const el = makeSeamShellEl(wire, s.type, props, s.content, [...childWires, rootWire], styles, s.forkKey)
           return { el, defChildren: rootTree.flat }
         }
@@ -1032,11 +1098,12 @@ const rootWire = `${wire}:0`
         // child's element never surfaces (flatMap skips the pair)
         const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
         const trees = (def.children ?? []).flatMap((spec, i) =>
-          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain)])
+          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr)])
         const bound = scalarBinding(s.bindings)
         if (bound !== undefined) props['text'] = bound
         else if (def.content !== undefined) props['text'] = bakeValue(def.content)
         const adopted = adoptPlacedChildren(pathCtx, defChain, defRootProto?.id)
+        stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
         const el: MinimalElement = { wire, type: def.type, props, childOrder: [...trees.map((t) => t.el.wire), ...(adopted ?? [])] }
         if (styles.length > 0) el.styles = styles
         if (s.forkKey !== undefined) el.forkKey = s.forkKey
@@ -1051,11 +1118,12 @@ const rootWire = `${wire}:0`
       // DEFECT #20 — the P-EMIT-3 def-fill prune (same rule).
       const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
       const trees = def.children.flatMap((spec, i) =>
-        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain)])
+        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr)])
       const bound = scalarBinding(s.bindings)
       if (bound !== undefined) props['text'] = bound
       const type = bound !== undefined ? s.type : def.type
       const adopted = adoptPlacedChildren(pathCtx, defChain, defRootProto?.id)
+      stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
       const el: MinimalElement = { wire, type, props, childOrder: [...trees.map((t) => t.el.wire), ...(adopted ?? [])] }
       if (styles.length > 0) el.styles = styles
       if (s.forkKey !== undefined) el.forkKey = s.forkKey
@@ -1109,6 +1177,7 @@ const rootWire = `${wire}:0`
       // D8 — a blocked def never re-types: the covered real child keeps its
       // OWN type (when knowable) — never the def spec's re-type target
       const type = allowed ? spec.type : (childNode?.type as string | undefined) ?? s.type
+      stampNodeId(cprops, childNodeId, undefined, nodeIdAttr)
       reTyped.push({ wire: resolvedWire, type, props: cprops, childOrder })
     }
     if (allowed) {
@@ -1117,6 +1186,7 @@ const rootWire = `${wire}:0`
       const bound = scalarBinding(s.bindings)
       if (bound !== undefined) props['text'] = bound
       const type = bound !== undefined ? s.type : def.type
+      stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
       const el: MinimalElement = { wire, type, props, childOrder: order }
       if (styles.length > 0) el.styles = styles
       if (s.forkKey !== undefined) el.forkKey = s.forkKey
@@ -1136,6 +1206,7 @@ const rootWire = `${wire}:0`
     ) {
       hideEmptyContainer(props)
     }
+    stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
     const el: MinimalElement = { wire, type: s.type, props, childOrder: [...childWires].filter((w) => !destroyedWires.has(w)) }
     if (styles.length > 0) el.styles = styles
     if (s.forkKey !== undefined) el.forkKey = s.forkKey
@@ -1168,12 +1239,14 @@ const rootWire = `${wire}:0`
     for (const h of handlers) {
       if (h && typeof h === 'object' && typeof h.event === 'string') props[`on:${h.event}`] = true
     }
+    stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
     const el: MinimalElement = { wire, type: s.type, props, childOrder: [...(s.children ?? [])] }
     if (styles.length > 0) el.styles = styles
     if (s.forkKey !== undefined) el.forkKey = s.forkKey
     return { el }
   }
   // fork arms are leaves in this page (no children on the themed divs)
+  stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
   const el: MinimalElement = { wire, type: s.type, props, childOrder: [] }
   if (styles.length > 0) el.styles = styles
   if (s.forkKey !== undefined) el.forkKey = s.forkKey

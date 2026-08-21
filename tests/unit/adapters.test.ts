@@ -7,6 +7,7 @@ import {
 } from '../../src/core/adapters.js'
 import {
   minimalFromState,
+  emitElements,
   applyOps,
   treeFromOps,
   treeSig,
@@ -1083,5 +1084,90 @@ describe('DOM-B* — the detached INITIAL-BUILD batch (A, 2026-08-16)', () => {
     expect(mount.children).toEqual([root])
     expect(root.children.map((c) => elOf(adapter, 'c1')! === c || elOf(adapter, 'c2')! === c)).toHaveLength(2)
     expect(root.textContent).toBe('title')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// DATA-* — the opt-in `data:` op-namespace routing (ssr-synthetic-event.md §4,
+// user ruling A2). `data:<name>` op props → setAttribute('data-<name>') on the
+// DomAdapter / the `data-<name>="…"` attribute in the SSR string — mirroring
+// the existing `prop:`/`css:` routing. The default-OFF pin: a DEFAULT
+// emitElements stream never produces a `data:` op (no data-node-id anywhere).
+// ---------------------------------------------------------------------------
+
+describe('DATA-* — the opt-in `data:` op namespace (ssr-synthetic-event.md §4)', () => {
+  let mount: Mount
+  let adapter: DomAdapter
+
+  beforeEach(() => {
+    installDom()
+    mount = makeMount()
+    adapter = new DomAdapter(mountEl(mount))
+  })
+  afterEach(() => {
+    uninstallDom()
+  })
+
+  it('DATA-H1 DomAdapter routes `data:<name>` → setAttribute("data-<name>")', () => {
+    adapter.createEl('div', 'w')
+    adapter.setProp('w', 'data:node-id', 'node-3')
+    expect(elOf(adapter, 'w')!.getAttribute('data-node-id')).toBe('node-3')
+  })
+
+  it('DATA-H2 DomAdapter undefined drops the data- attribute', () => {
+    adapter.createEl('div', 'w')
+    adapter.setProp('w', 'data:node-id', 'node-3')
+    adapter.setProp('w', 'data:node-id', undefined)
+    expect(elOf(adapter, 'w')!.getAttribute('data-node-id')).toBeNull()
+  })
+
+  it('DATA-H3 bare non-colon `data-x` names are untouched — only the `data:` colon namespace routes', () => {
+    adapter.createEl('div', 'w')
+    adapter.setProp('w', 'data-x', 'v')
+    expect(elOf(adapter, 'w')!.getAttribute('data-x')).toBe('v')
+    // a literal `data:x` (the colon form) never lands as an attribute name
+    expect(elOf(adapter, 'w')!.getAttribute('data:x')).toBeNull()
+  })
+
+  it('DATA-H4 SSRFragmentAdapter routes `data:<name>` into the attribute list', () => {
+    const ssr = new SSRFragmentAdapter()
+    ssr.createEl('div', 'w')
+    ssr.setProp('w', 'data:node-id', 'node-3')
+    expect(ssr.fragments.get('w')!.openTag).toBe('<div data-node-id="node-3">')
+  })
+
+  it('DATA-H5 SSRFragmentAdapter undefined drops the data- attribute', () => {
+    const ssr = new SSRFragmentAdapter()
+    ssr.createEl('div', 'w')
+    ssr.setProp('w', 'data:node-id', 'node-3')
+    ssr.setProp('w', 'data:node-id', undefined)
+    expect(ssr.fragments.get('w')!.openTag).toBe('<div>')
+  })
+
+  it('DATA-H6 default-OFF pin: a DEFAULT emitElements stream leaves NO data-node-id in the DOM or the SSR string', () => {
+    const root = makeRoot({ type: 'root' })
+    const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L' }), 0)
+    const res = root.compile([root, leaf])
+    const ops = diffMinimal(null, emitElements(res.actionable))
+    applyOps(adapter, ops)
+    for (const el of adapter.wires.values()) {
+      expect((el as unknown as El).getAttribute('data-node-id')).toBeNull()
+    }
+    const ssr = new SSRFragmentAdapter()
+    applyOps(ssr, ops)
+    expect(ssr.toString()).not.toContain('data-node-id')
+  })
+
+  it('DATA-H7 the ON stream reaches the DOM attribute and the SSR string end-to-end', () => {
+    const root = makeRoot({ type: 'root' })
+    const leaf = childOf(root, makeNode({ type: 'leaf', content: 'L' }), 0)
+    const res = root.compile([root, leaf])
+    const byNode = new Map([[root.id, root], [leaf.id, leaf]]) as never
+    const ops = diffMinimal(null, emitElements(res.actionable, byNode, { nodeIdAttribute: true }))
+    applyOps(adapter, ops)
+    expect((elOf(adapter, leaf.id) as unknown as El).getAttribute('data-node-id')).toBe(leaf.id)
+    const ssr = new SSRFragmentAdapter()
+    applyOps(ssr, ops)
+    expect(ssr.toString()).toContain(`data-node-id="${leaf.id}"`)
   })
 })

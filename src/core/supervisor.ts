@@ -86,6 +86,28 @@ export interface JournalEntry {
   result: { status: string; [key: string]: unknown }
 }
 
+/** Shared-host dispatch report (ssr-synthetic-event.md §3.1). */
+export interface DispatchReport {
+  results: HandlerResult[]
+  dirtied: NodeId[]
+}
+
+/** Options for `dispatchAndReport` — the opt-in bounded `requestId` dedup. */
+export interface DispatchOptions {
+  requestId?: string
+}
+
+/** One bounded-LRU window entry (requestId → (target, event) pair + report). */
+interface DispatchDedupEntry {
+  target: NodeId | string
+  event: string
+  /** the FIRST caller's in-flight promise — pending duplicates await this */
+  inFlight: Promise<DispatchReport> | undefined
+  /** the settled report — duplicates after completion echo this (TTL'd) */
+  settled: DispatchReport | undefined
+  ts: number
+}
+
 export class Supervisor {
   readonly journal: JournalEntry[] = []
   private readonly nodes: Map<NodeId, Node>
@@ -202,6 +224,124 @@ export class Supervisor {
     const hash = target.indexOf('#')
     if (hash !== -1) return this.nodes.get(target.slice(0, hash))
     return undefined
+  }
+
+  /** PUBLIC deterministic settle (2026-08-21 — user ruling D2,
+   *  ssr-synthetic-event.md §2.6): awaits the pass-2 flush cascade to
+   *  completion — `while (hasPendingWork()) await oneTaskBoundary`. The
+   *  microtask flush cascade is bounded, so the settle is deterministic
+   *  without magic tick counts. `hasPendingWork` is a NON-draining probe —
+   *  this never consumes the renderer's takePass2States snapshot. The
+   *  never-flush-on-dispatch pin is about the ENGINE (dispatchEvent never
+   *  flushes internally); a host-called flush is exactly what the pins
+   *  assume exists. */
+  async flush(): Promise<void> {
+    while (this.hasPendingWork()) {
+      await new Promise((r) => setTimeout(r, 0))
+    }
+  }
+
+  /** Shared-host dispatch report surface (2026-08-21 — ssr-synthetic-event.md
+   *  §3, handoffs-review REQ-GAP-4): the ADDITIVE async sibling of
+   *  `dispatchEvent` (which stays UNCHANGED — sync, HandlerResult[]).
+   *  Resolution + guards are identical (wire/nodeId resolution,
+   *  destroyed/unplaced → empty report, same-(node,event) reentrancy no-ops
+   *  through the SAME dispatchingEvents key — a nested dispatchAndReport
+   *  inside a body no-ops like a nested dispatchEvent). Flush-before-response:
+   *  awaits `flush()` internally, then takes pass-2 states as the report's
+   *  caller, then returns. `dirtied` = ∪(result.dirtied of journal entries
+   *  appended DURING this dispatch — the new-entry span j0→length, bounded;
+   *  the whole-journal snapshot derivation is REJECTED) ∪ keys(states).
+   *  `options.requestId` = OPT-IN bounded LRU dedup, registered SYNCHRONOUSLY
+   *  at call entry (before any await): a duplicate within the window (same
+   *  requestId AND same (target, event)) returns the FIRST caller's report —
+   *  awaiting the in-flight promise if pending, else the settled report
+   *  (idempotent ECHO). A requestId reused with a DIFFERENT (target, event)
+   *  is a host error: warn + treat as a miss. NOT journaled, process-local
+   *  (dies on loadState/restart — correct); best-effort under LRU/TTL
+   *  pressure; zero cost when requestId is absent. */
+  dispatchAndReport(
+    target: Node | NodeId | string,
+    event: string,
+    options: DispatchOptions = {},
+    ...args: unknown[]
+  ): Promise<DispatchReport> {
+    const requestId = options.requestId
+    const node = typeof target === 'string' ? this.resolveDispatchTarget(target) : target
+    const targetKey = node ? node.id : (typeof target === 'string' ? target : String(target))
+    if (requestId !== undefined) {
+      const hit = this.dispatchDedup.get(requestId)
+      if (hit && Date.now() - hit.ts <= Supervisor.DEDUP_TTL_MS) {
+        if (hit.target === targetKey && hit.event === event) {
+          return hit.inFlight ?? Promise.resolve(hit.settled!)
+        }
+        console.warn(`[supervisor] requestId "${requestId}" reused with a different (target, event); treating as a fresh dispatch`)
+      }
+    }
+    if (!node || node.destroyed || node.state === 'unplaced') {
+      const empty: DispatchReport = { results: [], dirtied: [] }
+      if (requestId !== undefined) this.recordDedup(requestId, { target: targetKey, event, inFlight: undefined, settled: empty, ts: Date.now() })
+      return Promise.resolve(empty)
+    }
+    const key = `event:${event}:${node.id}`
+    if (this.dispatchingEvents.has(key)) {
+      const empty: DispatchReport = { results: [], dirtied: [] }
+      if (requestId !== undefined) this.recordDedup(requestId, { target: targetKey, event, inFlight: undefined, settled: empty, ts: Date.now() })
+      return Promise.resolve(empty)
+    }
+    const j0 = this.journal.length
+    const run = async (): Promise<DispatchReport> => {
+      this.dispatchingEvents.add(key)
+      let results: HandlerResult[]
+      try {
+        results = dispatchEvent(node, this.handlerContext, event, ...args)
+      } finally {
+        this.dispatchingEvents.delete(key)
+      }
+      await this.flush()
+      const states = this.takePass2States()
+      const dirtied = new Set<NodeId>()
+      for (let i = j0; i < this.journal.length; i++) {
+        const d = this.journal[i]!.result.dirtied
+        if (Array.isArray(d)) for (const id of d) dirtied.add(id as NodeId)
+      }
+      for (const id of states.keys()) dirtied.add(id)
+      return { results, dirtied: [...dirtied] }
+    }
+    if (requestId !== undefined) {
+      const entry: DispatchDedupEntry = { target: targetKey, event, inFlight: undefined, settled: undefined, ts: Date.now() }
+      const promise = run()
+      entry.inFlight = promise
+      promise.then(
+        (report) => {
+          entry.inFlight = undefined
+          entry.settled = report
+          entry.ts = Date.now()
+        },
+        () => {
+          this.dispatchDedup.delete(requestId)
+        },
+      )
+      this.recordDedup(requestId, entry)
+      return promise
+    }
+    return run()
+  }
+
+  /** OPT-IN requestId dedup window (ssr-synthetic-event.md §3.3): bounded LRU
+   *  (cap ~128 entries + ~10s TTL), process-local, NOT journaled. */
+  private static readonly DEDUP_CAP = 128
+  private static readonly DEDUP_TTL_MS = 10_000
+  private readonly dispatchDedup = new Map<string, DispatchDedupEntry>()
+
+  private recordDedup(requestId: string, entry: DispatchDedupEntry): void {
+    // recency move: delete+set keeps the Map's iteration order an LRU order
+    this.dispatchDedup.delete(requestId)
+    this.dispatchDedup.set(requestId, entry)
+    if (this.dispatchDedup.size > Supervisor.DEDUP_CAP) {
+      const oldest = this.dispatchDedup.keys().next().value
+      if (oldest !== undefined) this.dispatchDedup.delete(oldest)
+    }
   }
 
   /**
