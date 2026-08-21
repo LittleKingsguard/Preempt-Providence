@@ -1254,16 +1254,40 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   // must NOT leak into `nodeData.handlers` as a zombie wrapped-function.
   // Emit the AUTHORED (base) handlers plus any non-seam layer additions
   // (runtime user edits via state-slice targetProp 'handlers' — the R-3 leak).
-  const rawHandlers = [
-    ...((node.base.handlers as unknown as LegacyHandlerDef[] | undefined) ?? []),
-    ...node.layers
-      // DEFECT #17 fix (round 5): the seed-<id> mirror layer carries a copy
-      // of base.handlers (sourceName undefined) — excluding it stops the
-      // double-emission that compounded per round-trip (4→8→…)
-      .filter((l) => l.sourceName !== 'handler-seam' && !l.id.startsWith('seed-') && Array.isArray(l.handlers))
-      .flatMap((l) => (l.handlers as unknown as LegacyHandlerDef[])),
-  ]
-  if (rawHandlers.length > 0) {
+  // REVERSE-OF-CLEAR (2026-08-21 — stress-test findings S9-b): an explicit
+  // handlers CLEAR layer (a `slice-*` handlers layer with an EMPTY array —
+  // the isHandlerClearLayer discriminator, node.ts:341) is a NEGATIVE runtime
+  // edit: compileLocal wipes base + prior layer handlers at its position. The
+  // reverse mirrors that merge — while a clear layer exists, the BASE is
+  // suppressed and only the layers AFTER the LAST clear contribute — so a
+  // cleared node reverses as `handlers: []` (or the post-clear additions
+  // alone) and re-translate reproduces the LIVE state (json-out = live; the
+  // self-detach pattern of DEFECT #27 survives a reverse → re-translate
+  // round-trip).
+  let clearedAt = -1
+  for (let i = node.layers.length - 1; i >= 0; i--) {
+    const l = node.layers[i]!
+    if (typeof l.id === 'string' && l.id.startsWith('slice-') && Array.isArray(l.handlers) && l.handlers.length === 0) {
+      clearedAt = i
+      break
+    }
+  }
+  const isClearEmission = clearedAt !== -1
+  const rawHandlers: LegacyHandlerDef[] = isClearEmission
+    ? node.layers
+        .slice(clearedAt + 1)
+        .filter((l) => l.sourceName !== 'handler-seam' && !l.id.startsWith('seed-') && Array.isArray(l.handlers) && l.handlers.length > 0)
+        .flatMap((l) => (l.handlers as unknown as LegacyHandlerDef[]))
+    : [
+        ...((node.base.handlers as unknown as LegacyHandlerDef[] | undefined) ?? []),
+        ...node.layers
+          // DEFECT #17 fix (round 5): the seed-<id> mirror layer carries a copy
+          // of base.handlers (sourceName undefined) — excluding it stops the
+          // double-emission that compounded per round-trip (4→8→…)
+          .filter((l) => l.sourceName !== 'handler-seam' && !l.id.startsWith('seed-') && Array.isArray(l.handlers))
+          .flatMap((l) => (l.handlers as unknown as LegacyHandlerDef[])),
+      ]
+  if (isClearEmission || rawHandlers.length > 0) {
     data.handlers = rawHandlers.map((h) => {
       // live function bodies ship back as their SOURCE (so the doc round-trips
       // through the string-body instantiation); native/bound code has no

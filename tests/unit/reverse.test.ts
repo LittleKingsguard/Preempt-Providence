@@ -9,6 +9,7 @@ import { makeRoot, makeNode, childOf, hub } from '../helpers/fixtures.js'
 import { Supervisor } from '../../src/core/node.js'
 import { EventBridge } from '../../src/core/events.js'
 import { createClient } from '../../src/core/client.js'
+import { dispatchEvent } from '../../src/core/handlers.js'
 import type { Node, Node as NodeType } from '../../src/core/node.js'
 
 function compAnchors(node: NodeType): Array<{ role: string; target: unknown; value?: unknown; applyPath?: string }> {
@@ -394,5 +395,87 @@ describe('P3 — reverse emission of placement anchors (content + activePlacemen
     const card = again.content.find((c) => c.type === 'card')!
     expect(card.anchors.find((a) => a.role === 'container' && a.target === 'slot-alpha')).toBeDefined()
     expect(card.children.map((c) => c.type)).toEqual(['title'])
+  })
+})
+
+describe('REVERSE-OF-CLEAR — a handlers CLEAR layer is json-out durable (the clear suppresses the base in reverse)', () => {
+  function clearedButton(additions?: Array<{ name: string; event: string; body: () => string }>) {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [
+            {
+              type: 'button',
+              content: 'go',
+              handlers: [{ name: 'click', event: 'click', body: 'function(ctx){ return "first" }' }],
+            },
+          ],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const btn = t.root.children[0]!
+    t.root.compile(t.nodes)
+    const clear = sup.apply({ kind: 'state-slice', node: btn, mutation: [{ targetProp: 'handlers', mode: 'replace', value: [] }] })
+    expect(clear.status).toBe('applied')
+    if (additions) {
+      const write = sup.apply({ kind: 'state-slice', node: btn, mutation: [{ targetProp: 'handlers', mode: 'replace', value: additions }] })
+      expect(write.status).toBe('applied')
+    }
+    return { sup, btn, root: t.root }
+  }
+
+  it('a cleared node reverses WITHOUT the base handler (handlers: [] emitted — the clear is representable)', () => {
+    const { root } = clearedButton()
+    const out = reverseTranslate(root)
+    const btn = out.template.root.children![0]!
+    expect(btn.handlers).toEqual([])
+  })
+
+  it('a clear + additions write reverses as the additions ONLY (base suppressed)', () => {
+    const { root } = clearedButton([{ name: 'click', event: 'click', body: () => 'injected' }])
+    const out = reverseTranslate(root)
+    const btn = out.template.root.children![0]!
+    expect(btn.handlers?.map((h) => h.name)).toEqual(['click'])
+    expect(btn.handlers![0]!.body).toContain('injected')
+  })
+
+  it('re-translate of the reversed clear round-trips the LIVE state (no handler fires after the round-trip)', () => {
+    const { root } = clearedButton()
+    const out = reverseTranslate(root)
+    const again = translateLegacy(out)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of again.nodes) sup.registerNode(n)
+    again.root.compile(again.nodes)
+    const btn = again.root.children[0]!
+    const results = dispatchEvent(btn, sup.handlerContext, 'click')
+    expect(results).toEqual([])
+  })
+
+  it('an UNCLEARED node still reverses base + additions (no regression — the D16/R-3 letter is untouched)', () => {
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'app',
+          children: [{ type: 'button', handlers: [{ name: 'click', event: 'click', body: 'function(ctx){ return "base" }' }] }],
+        },
+      },
+      content: [],
+    } as never)
+    const sup = new Supervisor({ events: new EventBridge() })
+    for (const n of t.nodes) sup.registerNode(n)
+    const btn = t.root.children[0]!
+    t.root.compile(t.nodes)
+    sup.apply({
+      kind: 'state-slice',
+      node: btn,
+      mutation: [{ targetProp: 'handlers', mode: 'replace', value: [{ name: 'click', event: 'click', body: () => 'added' }] }],
+    })
+    const out = reverseTranslate(t.root)
+    const revBtn = out.template.root.children![0]!
+    expect(revBtn.handlers?.map((h) => h.name)).toEqual(['click', 'click'])
   })
 })

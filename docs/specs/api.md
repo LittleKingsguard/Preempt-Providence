@@ -37,10 +37,15 @@ type MutationInput = LayerMutationList | StructuralOp   // apply signature owned
 
 // state-slice (S2.1) — the receiveNextState successor
 interface LayerMutation {
-  targetProp: 'type' | 'content' | 'handlers'
+targetProp: 'type' | 'content' | 'handlers'
             | `props.${string}` | `css.${string}`        // 'placement' is NOT legal (§3.3);
-                                                         // 'children' is NEVER legal — graph-derived,
-                                                         // never stored (notes §10.2)
+                                                          // 'children' is NEVER legal — graph-derived,
+                                                          // never stored (notes §10.2)
+                                                          // 'handlers' writes: value = HandlerDef[] with
+                                                          // LIVE FUNCTION bodies (RUNTIME-WRITE BODY
+                                                          // LETTER 2026-08-21 — string bodies are stored
+                                                          // verbatim and skipped at dispatch, H-H3;
+                                                          // `value: []` = the CLEAR, handlers.md §4)
             | `hooks.${string}`                          // HOOKS (hooks-map-review.md §7 — the
                                                          // value-provider slot): `hooks.<name>`
                                                          // targets a SAME-NODE value-provider hook.

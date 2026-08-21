@@ -22,7 +22,7 @@ or `docs/defects.md` (or the specs) and is removed here.
 
 ## PENDING (awaiting the user gate)
 
-— none — (the last row, Translate-stress probe mismatches, closed 2026-08-16 — see next-steps.md RESOLVED)
+— none — (the 2026-08-21 handlers-CLEAR reverse-letter row CLOSED 2026-08-21: the user gate proceeded with the reviewer recommendation — the clear is now reverse-representable (option (b), defects.md REVERSE-OF-CLEAR FIXED row) and the runtime-write body letter is documented (defects.md RUNTIME-WRITE BODY LETTER FIXED row); the decisions.md REVERSE-OF-CLEAR row records both)
 
 ## NOT-YET-IMPLEMENTED features
 

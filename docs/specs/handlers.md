@@ -149,6 +149,18 @@ empty-ARRAY form clears; `value: undefined` on a `handlers` write is a no-op
 (indistinguishable from a type/content/props slice layer). Tests:
 `tests/unit/legacy-bridge.test.ts` "DEFECT #27" block.
 
+**RUNTIME-WRITE BODY LETTER (2026-08-21 — stress-test findings S9-a):**
+string-body instantiation happens at the TRANSLATE boundary ONLY
+(translate.md §2.1 — "the backend stores loadable handler definitions as
+text"). A RUNTIME `handlers` state-slice write (clientAPI.apply / legacy-
+bridge `receiveNextState`) stores the value VERBATIM (`applySlice`,
+node.ts:1405) and dispatch SKIPS non-function bodies SILENTLY
+(`typeof handler.body !== 'function' → continue`, H-H3) — runtime writes
+therefore REQUIRE live FUNCTION bodies. A host round-tripping a string-body
+handler def into a runtime write gets a silently dead handler (no error, no
+warning, no `on:` prop); the reverse re-emits the layers verbatim (functions
+as source strings).
+
 ## 5. Exhaustiveness gate
 
 | ID | State | Expected |
