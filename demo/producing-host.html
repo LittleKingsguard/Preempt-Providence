@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>producing-host</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+    .group {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0;
+      background: #fafafa;
+    }
+    .group h4 { margin: 0 0 0.5rem; color: #333; }
+    .expect { font-size: 0.9em; color: #555; margin: 0.4rem 0 0.6rem; }
+    .expect::before { content: "expect: "; font-weight: 600; color: #444; }
+    #results { margin-top: 2rem; }
+  </style>
+</head>
+<body data-page="producing-host">
+  <h1>producing-host</h1>
+  <p>REQ-GAP-8 scenarios — the exported canonical re-emit loop threading the opt-in renderOptions parameter. See docs/specs/landed-features-scenarios.md Group 4.</p>
+
+  <script id="preempt-initial-data" type="application/json">{"twoNode":{"template":{"root":{"type":"div","props":{"id":"root-producing-host"},"children":[{"type":"div","props":{"id":"host-div"},"content":"host"},{"type":"span","props":{"id":"sibling-span"},"content":"sibling"}]}},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"chain":{"template":{"root":{"type":"div","props":{"id":"root-producing-host"},"children":[{"type":"div","props":{"id":"host-div-chain"},"content":"host"},{"type":"button","props":{"id":"chain-btn"},"component":[{"target":"handlers.click","reference":"ClickContent"}],"content":"press me"}]},"component":[{"reference":"ClickContent","value":{"name":"ClickContent","body":"function (event, context) {\n  context.node.receiveNextState({ content: \"clicked\" });\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}},"prune":{"template":{"root":{"type":"div","props":{"id":"root-producing-host"},"children":[{"type":"div","props":{"id":"host-div-prune"},"content":"host"},{"type":"div","props":{"id":"prune-panel"},"children":[{"type":"span","css":{"classes":["kill-me"]},"props":{"id":"victim-span"},"content":"victim"}]}]},"component":[{"reference":"ClickChildContent","value":{"name":"ClickChildContent","body":"function (event, context) {\n  context.node.receiveNextState({ content: \"clicked-child\" });\n}"}}]},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}}}</script>
+  <script id="server-data" type="application/json">{"expected":{"census":{"registered":16,"inTree":16,"unplaced":0,"destroyed":0,"prototypes":0,"cloneOps":0},"mounts":5},"goals":["S4.1 opt-in threading: data-node-id on every emitted element, real nodeById key","S4.2 default off: no data-node-id, byte-identical render","S4.3 prevMap chain: incremental re-render keeps stamping, zero-op on no change","S4.4 destroy-prune: destroyed wire removed, never re-created; survivors keep stamp","controls: barrel export identity; op stream == adapter call log"]}</script>
+
+  <h2>Group 4 — the canonical re-emit loop + opt-in data-node-id</h2>
+  <div class="group" id="mount-optin">
+    <h4>S4.1 — OPT-IN threading: every emitted element carries data:node-id</h4>
+    <p class="expect">every emitted element has a <code>data:node-id</code> prop whose value is a real nodeById key; the ops stream carries the <code>data:</code> prop; the DOM adapter sets the attribute.</p>
+  </div>
+  <div class="group" id="mount-default">
+    <h4>S4.2 — DEFAULT OFF: no data:node-id anywhere; byte-identical</h4>
+    <p class="expect">no <code>data:node-id</code> on any element; the emitted element set is identical to the opted-in run modulo the <code>data:node-id</code> props alone.</p>
+  </div>
+  <div class="group" id="mount-chain">
+    <h4>S4.3 — prevMap chain: re-render after mutation keeps stamping</h4>
+    <p class="expect">first render with options stamps every element; dispatch click + re-render with caller-held prevMap is incremental (set-only, no re-creates) and stamps persist; third no-change render yields zero ops.</p>
+  </div>
+  <div class="group" id="mount-prune">
+    <h4>S4.4 — destroy-prune under the option: destroyed wire removed, never re-created</h4>
+    <p class="expect">re-render after destroy does NOT re-create the destroyed element (remove only); surviving elements keep <code>data:node-id</code>.</p>
+  </div>
+
+  <h2>Controls</h2>
+  <div class="group" id="mount-controls">
+    <h4>Controls — barrel export identity + op stream == adapter call log</h4>
+    <p class="expect">renderProducingProcess is importable from the barrel; the returned ops equal the adapter call log.</p>
+  </div>
+
+  <div id="results"></div>
+
+  <script type="module" src="producing-host.js"></script>
+</body>
+</html>

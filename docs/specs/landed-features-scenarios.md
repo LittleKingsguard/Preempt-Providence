@@ -319,6 +319,116 @@ the engine entry.
 
 ---
 
+## Group 4 — the canonical re-emit loop threading the opt-in `data-node-id` (REQ-GAP-8, 2026-08-21)
+
+Status: SPEC + EXECUTED — the scenario group for **REQ-GAP-8** (the exported
+`renderProducingProcess` loop absorbing the opt-in A2 option, handoffs-review
+§B "A's loop absorbs it in the same pass — the two openings compose").
+The blind-test loop ran (blind writer → proofreader → page reviewer); the
+page (`demo/producing-host.html`, §12 page 24) is built, wired, and green
+(`producing-host: 15 passed`). All page-reviewer findings were data-only
+(mount-key mismatch, applyOp options passthrough, destroy-check timing) —
+no engine defects. Full record:
+`archive/findings/2026-08-21/2026-08-21-producing-host-blind-test.md`.
+
+### Authoring constraints carried from the two decisions
+
+- **The loop (ssr-synthetic-event.md §2.4):** `renderProducingProcess(
+  actionable, nodeById, adapter, prevMap, renderOptions?)` — the EXPORTED
+  canonical re-emit loop (`emitElements → diffMinimal → applyOps`; the
+  src/index.ts barrel). Ownership pins: (i) the caller OWNS the per-tree
+  `prevMap` (null on the first render — the loop keeps NO module-level
+  render state); (ii) destroyed / not-in-tree nodes are PRUNED before emit;
+  (iii) `takePass2States` is the CALLER's drain — the loop never drains it;
+  (iv) ON-DEMAND ONLY — calling it never dispatches.
+- **The opt-in option (ssr-synthetic-event.md §4 — the ONE scoped lift of
+  the no-render-change pin):** `renderOptions: { nodeIdAttribute: true }`
+  adds `data-node-id` (the producing node's minted id) to EVERY emitted
+  element — DOM `setAttribute` + SSR attribute; DEFAULT OFF (byte-identical
+  renders); the value is ALWAYS a real nodeById key in a producing-process
+  render (element → `data-node-id` → `Supervisor` node → compiled state);
+  presence is NOT guaranteed — readers must know their renderer opted in.
+- **REQ-GAP-8 (2026-08-21):** the loop threads `renderOptions` to
+  `emitElements`; DEFAULT undefined = the byte-identical default render;
+  the ownership pins are unchanged by the option.
+
+### Scenario 4.1 — OPT-IN threading: every emitted element carries `data:node-id`
+
+Framing: a host adopting the loop for element→graph traceability passes the
+§4 option ONCE and every render pays the attribute.
+
+Envelope: a plain two-node page (a `div` with content + a sibling `span`),
+translated through the producing process (translateLegacy → Supervisor +
+EventBridge → register → bootstrap compile → recordResolved).
+
+Intended output: `renderProducingProcess(actionable, nodeById, adapter,
+null, { nodeIdAttribute: true })` → EVERY returned element's props carry
+`data:node-id`; each value is a REAL node id (a key of the producing
+process's `nodeById` — the element→graph trace-back is unambiguous); the op
+stream carries the `data:` prop; applying the stream to the DOM adapter
+sets the attribute on the live element; the SSR adapter renders it as an
+attribute.
+
+Surface: option threading through the loop, stamping correctness (real
+nodeById key per element), both adapters' `data:` routing.
+
+### Scenario 4.2 — DEFAULT OFF: the loop stays byte-identical
+
+Framing: the no-render-change pin — the option must be strictly opt-in.
+
+Envelope: the Scenario 4.1 envelope.
+
+Intended output: `renderProducingProcess(actionable, nodeById, adapter,
+null)` (no options) → NO element carries `data:node-id`; the emitted
+element set (wires, types, text) is identical to the opted-in run modulo
+the `data:node-id` props alone.
+
+Surface: default-render invariance, opt-in discipline.
+
+### Scenario 4.3 — the option survives the prevMap chain (incremental re-renders keep stamping)
+
+Framing: a host renders once with the option, mutates the graph through the
+managed channel, drains pass-2 itself, and re-emits through the SAME loop —
+the stamping must persist and the diff must stay incremental.
+
+Envelope: the Scenario 4.1 envelope + a handler-bearing button (function-
+STRING body) that a later engine dispatch (`Supervisor.dispatchEvent`)
+drives to apply a state-slice (content write).
+
+Intended output: first render with `{ nodeIdAttribute: true }` stamps every
+element; after the dispatch + host-awaited flush + caller `takePass2States`
+drain + merge, the re-render with the caller-held prevMap + the option is
+INCREMENTAL — set-only for the mutated element, NO re-creates, NO removes —
+and every emitted element still carries `data:node-id`; a THIRD render with
+no changes yields zero ops.
+
+Surface: prevMap ownership across option-bearing renders, incremental diff
+unaffected by the option, stamping durability.
+
+### Scenario 4.4 — destroy-prune is unaffected by the option
+
+Framing: the loop's prune pin (destroyed / not-in-tree states are dropped
+before emit) must hold while the option is on.
+
+Envelope: the Scenario 4.1 envelope; one node destroyed via
+`supervisor.apply({kind: 'destroy', ...})` mid-flow.
+
+Intended output: a re-render with `{ nodeIdAttribute: true }` from the
+caller-held prevMap does NOT re-create the destroyed element (its wire gets
+`remove`, never `create`); the surviving elements keep `data:node-id`.
+
+Surface: prune-before-emit under the option, remove-not-recreate.
+
+### Controls
+
+- The loop is importable from the src/index.ts barrel (export identity).
+- The loop returns the op stream verbatim (adapter-neutral: the returned
+  ops equal the adapter call log) — a host can tee it to both adapters and
+  the DOM/SSR renders stay structurally parity-consistent (treeSig/PAR-5)
+  with `data:node-id` on both sides.
+
+---
+
 ## Page shape + execution contract
 
 - ONE demo page `session-features.html` (+ `.js`), three card groups
@@ -328,6 +438,14 @@ the engine entry.
   `scripts/demo-smoke.mjs` (banner + per-scenario runner checks), listed in
   designing-pages.md §12; a `[session-features:profile]` profile line
   mirrors the other pages' `acc()` instrumentation.
+- Group 4 (REQ-GAP-8) rides a SECOND demo page `producing-host.html`
+  (+ `.js`), same core-only rule + envelope-data rule: the page is the
+  PRODUCING PROCESS (translate → register → compile → recordResolved) whose
+  render is driven through the exported `renderProducingProcess` loop (not a
+  hand-rolled emit/diff/apply), once with the opt-in option and once
+  without, so the group's scenarios assert the loop surface directly.
+  Banner: `producing-host`; wired into `scripts/build-demo.mjs` +
+  `scripts/demo-smoke.mjs`; listed in designing-pages.md §12.
 - The harness mirrors the supervisor (translateLegacy → Supervisor +
   EventBridge → register → compile → recordResolved → after-compile phase
   dispatch → recompile → emitElements/diffMinimal/applyOps) and drives

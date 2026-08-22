@@ -246,3 +246,11 @@ async function emitPage(templateName, outName, doc, serverData) {
 {
   await import('./session-features-page.mjs')
 }
+
+// ---- page 24: producing-host (REQ-GAP-8, Group 4) ---------------
+// The exported canonical re-emit loop threading the opt-in renderOptions
+// parameter (nodeIdAttribute); 5 mounts, 15 checks across 4 scenarios +
+// controls. Builder writes demo/producing-host.html at import.
+{
+  await import('./producing-host-page.mjs')
+}

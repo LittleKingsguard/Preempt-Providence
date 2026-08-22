@@ -355,18 +355,23 @@ export interface RenderOptions {
  *  touched here); ON-DEMAND ONLY — calling it never dispatches, never drains
  *  pass-2 (dispatch never re-renders; the loop is the host's explicit
  *  re-emit). Returns `{ els, ops, prevMap }` — the new prevMap feeds the next
- *  call. */
+ *  call. `renderOptions` (REQ-GAP-8, 2026-08-21 — the handoffs-review A2
+ *  "absorb in the same pass" plan) threads the opt-in emit options to
+ *  `emitElements` (e.g. `{ nodeIdAttribute: true }` → every emitted element
+ *  carries `data:node-id`); DEFAULT undefined = the byte-identical default
+ *  render. The ownership rules are unchanged. */
 export function renderProducingProcess<P, E>(
   actionable: CompiledState[],
   nodeById: Map<string, Node>,
   adapter: RenderAdapter<P, E>,
   prevMap: Map<NodeRef, MinimalElement> | null,
+  renderOptions?: RenderOptions,
 ): { els: MinimalElement[]; ops: RenderOp[]; prevMap: Map<NodeRef, MinimalElement> } {
   const live = actionable.filter((cs) => {
     const node = nodeById.get(cs.nodeId)
     return node === undefined || (!node.destroyed && node.isInTree)
   })
-  const els = emitElements(live, nodeById)
+  const els = emitElements(live, nodeById, renderOptions)
   const ops = diffMinimal(prevMap, els)
   applyOps(adapter, ops)
   return { els, ops, prevMap: new Map(els.map((e) => [e.wire, e])) }

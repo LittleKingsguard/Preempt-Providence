@@ -589,6 +589,45 @@ function assertLegacyShapeCensus(prof) {
   }
 }
 
+// ---- producing-host page: REQ-GAP-8 (Group 4 — opt-in data-node-id) --------
+// The exported canonical re-emit loop renderProducingProcess threading the
+// opt-in renderOptions parameter; 5 mounts, 15 checks across 4 scenarios +
+// controls. Census guard: the page publishes registered/inTree/unplaced/
+// destroyed/prototypes/cloneOps on the profile; the builder ran the IDENTICAL
+// core pipeline and embedded the expected census in server-data — the smoke
+// pins equality.
+{
+  const pageHtml = await readFile(`${base}demo/producing-host.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/producing-host.js`).catch((e) => {
+    console.error('producing-host failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__producingHostDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__producingHostProfile
+  if (!prof) {
+    console.error('producing-host profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`producing-host profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  const serverData = JSON.parse(byId.get('server-data').textContent)
+  const exp = serverData.expected.census
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'prototypes', 'cloneOps']) {
+    if (typeof prof[f] !== 'number' || prof[f] !== exp[f]) {
+      console.error(`producing-host census mismatch on "${f}": page=${prof[f]} expected=${exp[f]}`)
+      process.exit(1)
+    }
+  }
+}
+
 // ---- hooks-scenarios page: the value-provider slot (SPA scenarios) ----------
 // One legacy envelope whose root carries the theme/user/counter providers +
 // the authored `hooks` field; the control buttons (function-STRING bodies)

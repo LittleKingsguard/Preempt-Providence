@@ -107,16 +107,21 @@ applied state.
 
 **The canonical re-emit loop is EXPORTED (2026-08-21 — handoffs-review REQ-
 GAP-5, user ruling B):** `renderProducingProcess(actionable, nodeById,
-adapter, prevMap)` (src/index.ts) — the harness loop promoted verbatim
-(`emitElements → diffMinimal → applyOps`; `takePass2States` is the CALLER's
-drain). Ownership rules (pinned): (i) the caller OWNS the per-tree `prevMap`
-(the function never keeps module-level render state — cross-tree state leaks
-corrupt `diffMinimal` baselines); (ii) destroyed / not-in-tree nodes are
-pruned before emit (the harness's `prevStates` delete); (iii)
+adapter, prevMap, renderOptions?)` (src/index.ts) — the harness loop promoted
+verbatim (`emitElements → diffMinimal → applyOps`; `takePass2States` is the
+CALLER's drain). Ownership rules (pinned): (i) the caller OWNS the per-tree
+`prevMap` (the function never keeps module-level render state — cross-tree
+state leaks corrupt `diffMinimal` baselines); (ii) destroyed / not-in-tree
+nodes are pruned before emit (the harness's `prevStates` delete); (iii)
 `takePass2States` is consumed by the caller — the function never drains it;
 (iv) ON-DEMAND ONLY — calling it never implies dispatch (P4: dispatch never
-re-renders; the loop is the host's explicit re-emit). All hosts (Electron +
-future) consume ONE loop implementation — no copy-paste drift.
+re-renders; the loop is the host's explicit re-emit). **`renderOptions`
+(REQ-GAP-8, 2026-08-21 — the handoffs-review §B "A2 absorbs in the same
+pass" plan):** threads the opt-in §4 options to `emitElements` (e.g.
+`{ nodeIdAttribute: true }` → every emitted element carries `data-node-id`);
+DEFAULT undefined = the byte-identical default render; the ownership rules
+are unchanged. All hosts (Electron + future) consume ONE loop
+implementation — no copy-paste drift.
 
 ### 2.5 Parity harness (P5)
 
@@ -244,6 +249,11 @@ pins (P1 producing-process-keeps-graph + inert inline attr, P2 css.id→node
 addressability, P4 dispatch-never-renders + re-emit-on-demand, P5 DOM/SSR
 identical results + treeSig parity). It is the verification that the contract
 holds on the current engine. Trio: green.
+
+**REQ-GAP-8 blind test (2026-08-21):** the exported loop's renderOptions
+threading is exercised by `demo/producing-host.html` (15 checks across 4
+scenarios + controls, `producing-host: 15 passed`). Full record:
+`archive/findings/2026-08-21/2026-08-21-producing-host-blind-test.md`.
 
 Encoding: `docs/decisions.md` EVENT-DISPATCH-WIRING row (Phase B LANDED),
 `docs/pending.md` Phase B row, `docs/next-steps.md`.

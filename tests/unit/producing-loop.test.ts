@@ -173,4 +173,43 @@ describe('renderProducingProcess — the exported canonical re-emit loop (ssr-sy
       prevMap = r.prevMap
     }
   })
+
+  it('REQ-GAP-8 — `renderOptions: { nodeIdAttribute: true }` threads through the loop: every emitted element carries data:node-id', () => {
+    const { actionable, nodeById } = producingSetup()
+    const adapter = new MockAdapter()
+    const r = renderProducingProcess(actionable, nodeById, adapter, null, { nodeIdAttribute: true })
+    expect(r.els.length).toBeGreaterThan(0)
+    for (const el of r.els) {
+      // the pinned contract: every stamped value is a REAL nodeId (a nodeById key)
+      const stamped = el.props?.['data:node-id']
+      expect(typeof stamped).toBe('string')
+      expect(nodeById.has(stamped as string)).toBe(true)
+    }
+  })
+
+  it('REQ-GAP-8 — the option is OPT-IN: the default loop render stays byte-identical (no data:node-id)', () => {
+    const { actionable, nodeById } = producingSetup()
+    const plain = renderProducingProcess(actionable, nodeById, new MockAdapter(), null)
+    const opted = renderProducingProcess(actionable, nodeById, new MockAdapter(), null, { nodeIdAttribute: true })
+    for (const el of plain.els) {
+      expect(el.props?.['data:node-id']).toBeUndefined()
+    }
+    // the same underlying element set, differing ONLY in the data:node-id props
+    expect(opted.els.map((e) => e.wire)).toEqual(plain.els.map((e) => e.wire))
+    expect(plain.els.length).toBeGreaterThan(0)
+  })
+
+  it('REQ-GAP-8 — the option survives the prevMap chain (incremental re-renders keep stamping)', async () => {
+    const { sup, actionable, nodeById, btnId } = producingSetup()
+    const adapter = new MockAdapter()
+    const r1 = renderProducingProcess(actionable, nodeById, adapter, null, { nodeIdAttribute: true })
+    const results = sup.dispatchEvent(btnId, 'click', 'hi')
+    expect(results).toEqual([undefined])
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    const pass2 = sup.takePass2States()
+    const actionable2 = mergePass2(actionable, pass2)
+    const r2 = renderProducingProcess(actionable2, nodeById, adapter, r1.prevMap, { nodeIdAttribute: true })
+    expect(r2.ops.filter((o) => o.kind === 'create')).toHaveLength(0)
+    expect(r2.els.some((e) => e.props?.['data:node-id'] !== undefined)).toBe(true)
+  })
 })
