@@ -460,7 +460,16 @@ export class Node {
           continue
         }
         if (role === 'parent') continue
-        const link = new Link({ name: role === 'container' || role === 'content' ? 'placement' : role === 'source' || role === 'target' || role === 'duplex' ? 'component' : 'parent-child' })
+        const kind = role === 'container' || role === 'content' ? 'placement' : role === 'source' || role === 'target' || role === 'duplex' ? 'component' : 'parent-child'
+        // REQ-GAP-9 (handoffs-review-2 §3) — seed-path hub threading: route
+        // the placement/component ROLE anchors through this.hub when it
+        // exists so same-name anchors across seeds land on ONE shared Link
+        // (the DEFECT #9 sharing semantics). Hub-less graphs keep the status
+        // quo — per-node fresh links. Child anchors stay per-node fresh
+        // links (reconciled later by reconcileParentTargets).
+        const link = this.hub && (kind === 'placement' || kind === 'component')
+          ? this.hub.linkFor(target as string, kind)
+          : new Link({ name: kind })
         try {
           const a = this.addAnchor(role, target as AnchorTarget, sa.options as Anchor['options'], link)
           if (a !== null && sa.value !== undefined) a.value = sa.value

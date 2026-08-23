@@ -178,7 +178,11 @@ export interface TranslatedTree {
   clientConfig: { adapter: string; persistence: boolean }
 }
 
-function defaultHub(): LinkConfigNameHub {
+/** REQ-GAP-9 — the PUBLIC same-name shared-Link factory (handoffs-review-2
+ *  §3): one `LinkConfigNameHub` instance per tree — same-name
+ *  component/placement anchors land on ONE shared Link (DEFECT #9 semantics).
+ *  translateLegacy defaults to it when no `opts.hub` is supplied. */
+export function createLinkHub(): LinkConfigNameHub {
   const m = new Map<string, Link>()
   return {
     linkFor(name: string, kind: 'component' | 'placement'): Link {
@@ -1063,7 +1067,7 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   ) {
     throw new Error('legacy-envelope-mismatch: expected { template: { root }, content?, clientConfig? }')
   }
-  const hub = opts?.hub ?? defaultHub()
+  const hub = opts?.hub ?? createLinkHub()
   const nodes: Node[] = []
   const warnings: TranslatedWarning[] = []
   const template = doc.template

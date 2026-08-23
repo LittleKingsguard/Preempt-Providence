@@ -91,7 +91,10 @@ Intended output:
   the dropdown is `destroyed` but keeps its slot (retention) — the RETENTION
   half is the assertion surface (destroyed flag + walk slot + page alive);
   the destroyed def child's ELEMENT is pruned from the emitted set
-  (DEFECT #20 FIXED 2026-08-16, tests N4/N5).
+  (DEFECT #20 FIXED 2026-08-16, tests N4/N5). REQ-GAP-11 (2026-08-22):
+  destroyed nodes leave `allNodes()` (the self-evicting sweep) — the checks
+  locate the destroyed dropdown via the chip's FAMILY WALK (its `children`)
+  and assert `getNode(id)` resolution via the destroyed-ref tombstone.
 - with userData `{username}`: chip = `Profile ▼` button; dropdown alive.
 - dispatching click on the authored logout button destroys the dropdown menu
   (retention) — page still renders.
@@ -267,11 +270,18 @@ payload entry's NESTED children AND its `anchors` (the dismiss binding
 canNOT ride the injected toast — ops.md §2.8 OO-7; the spec's rule: never
 engine code, re-express in data — the DISMISS binding moves to the
 authored button). `DismissToast` body: find the minted toast in the stack
-and destroy it (`clientAPI.apply(id, {kind: 'destroy'})` — retention, the
-stack keeps its slot).
+and destroy it (`clientAPI.apply(id, {kind: 'destroy'})` — a PLAIN destroy,
+NOT the runtimeMinted retention class: the layer-apply mint marks
+`originLayer`, never `runtimeMinted`, so the destroy dissolves the family
+edge and the toast leaves the stack's children; the STACK keeps its slot in
+its own parent — the check captures the toast node BEFORE the dismiss and
+asserts `destroyed` + `getNode` resolution after (REQ-GAP-11: destroyed
+nodes leave `allNodes()`; the destroyed-ref tombstone keeps stale refs
+resolving).
 
 Intended output: show → one `.toast` in the stack; dismiss → the toast is
-destroyed (retention), the stack keeps its slot.
+destroyed (plain destroy — the minted toast was never runtimeMinted), the
+stack keeps its slot.
 
 Surface: nested component bindings on injected children, destroy via
 parent walk, layer-apply mint semantics.

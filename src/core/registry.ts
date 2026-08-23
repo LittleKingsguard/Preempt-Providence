@@ -63,6 +63,50 @@ export function compileHandlerBody(src: string): (...args: unknown[]) => unknown
 const pendingDestroy: Node[] = []
 let sweepScheduled = false
 
+/** REQ-GAP-12 (handoffs-review-2 §REQ-GAP-12, user ruling 1, 2026-08-21) —
+ *  the explicit-destroy cascade trigger flag: the supervisor destroy op marks
+ *  an EXPLICIT destroy as cascade-capable so `finalizeDestroyed` relaxes the
+ *  content exemption for the destroyed node's EXPLICIT (family parent-child)
+ *  children — teardown-to-root becomes ONE destroy op for payload trees.
+ *  Internal state ONLY: never an op payload, never journaled (replay-safe).
+ *  `prototypeRooted`: the destroyed node's family chain terminated at the
+ *  'component' token at OP time — its whole family subtree is a def/seam
+ *  prototype subtree (never renders). The token edge is dissolved by
+ *  destroyLinks before the sweep runs, so the sweep cannot re-derive this
+ *  from the node's state — the op captures it. */
+const cascadeFlags = new Map<Node, { prototypeRooted: boolean }>()
+
+export function markCascadeExplicit(node: Node): void {
+  // `prototypeRooted` is captured HERE (op time): the token edge is dissolved
+  // by destroyLinks before the sweep runs, so the sweep cannot re-derive it.
+  cascadeFlags.set(node, { prototypeRooted: chainTerminatesAtComponent(node) })
+}
+
+/** REQ-GAP-12 — the placement-owned gate: a node carrying `content` anchors
+ *  participates in the placement system (placed, or placement-returnable) —
+ *  the placement-may-return persistence letter keeps such nodes alive across
+ *  an owner destroy. */
+function isPlacementOwned(node: Node): boolean {
+  return node.anchors.some(a => a.role === 'content')
+}
+
+/** REQ-GAP-12 — does `node`'s family chain terminate at the 'component'
+ *  token (a def/seam prototype — never renders)? Walked at OP time (the
+ *  destroyed node's token edge is still intact then). */
+function chainTerminatesAtComponent(node: Node): boolean {
+  const seen = new Set<string>()
+  for (let cur: Node | null = node; cur && !seen.has(cur.id); cur = cur.parent) {
+    seen.add(cur.id)
+    const child = cur.childAnchor()
+    if (!child) continue
+    const pa = child.link.anchorsOf('parent')[0]
+    if (!pa || typeof pa.target !== 'string') continue
+    if (pa.target === 'component') return true
+    if (pa.target === 'rootNode' || pa.target === 'contentNodes') return false
+  }
+  return false
+}
+
 // Origin tracking: content/component nodes owned by payload arrays are the
 // source of truth for graph accessibility (besides the root + template).
 // They PERSIST in the background while unplaced (placement may return);
@@ -165,10 +209,12 @@ export function scheduleSweep(force = false): void {
 function runSweep(): void {
   const batch = pendingDestroy.splice(0)
   for (const node of batch) {
+    const flag = cascadeFlags.get(node)
+    cascadeFlags.delete(node)
     if (node.destroyed) continue
     if (node.state === 'in-tree' || node.state === 'prototype') continue
     if (isContentNode(node)) continue // payload-owned content persists (placement may return)
-    finalizeDestroyed(node)
+    finalizeDestroyed(node, flag)
   }
   // pass-2: coalesced compileRemote over the union of 'remote'-dirty nodes.
   // Topmost ancestors first, sharing one visited set so recursion covers
@@ -201,16 +247,75 @@ function runSweep(): void {
   }
 }
 
-function finalizeDestroyed(node: Node): void {
+/** REQ-GAP-11 (handoffs-review-2 §REQ-GAP-11 + the 2026-08-21 amendment) —
+ *  the internal eviction primitive (NOT host-facing surface; reset/prune/
+ *  unregisterNode stay REJECTED): drops a destroyed node from the module-level
+ *  `registered`/`byId` sets + the content/minted ownership registries. Destroy
+ *  is terminal — deletion is safe and completes the lifecycle the sweep owns.
+ *  Called from `finalizeDestroyed` AND from the supervisor destroy op on BOTH
+ *  destroy branches (the runtimeMinted/markDestroyed branch never reaches the
+ *  sweep — it never calls markPending — so finalize-only eviction would miss
+ *  the clone-built workload). */
+export function evictDestroyedNode(node: Node): void {
+  registered.delete(node)
+  // INSTANCE-GUARDED byId eviction (the smoke shares one module-level byId
+  // across pages whose loadState-re-seeded graphs carry the SAME node ids —
+  // an unconditional id-keyed delete would remove ANOTHER page's live entry
+  // for the same id when a deferred sweep fires mid-run).
+  if (byId.get(node.id) === node) byId.delete(node.id)
+  unregisterContentNode(node)
+  unregisterMinted(node.id)
+}
+
+/** REQ-GAP-11 — the per-supervisor sweep hook seam (handoffs-review-2 §5
+ *  accepted shape: "a sweep hook (or the destroy path) evicts the finalized
+ *  node from this.nodes"). The sweep is module-level; each Supervisor
+ *  registers its eviction callback so cascade-finalized nodes leave ITS
+ *  this.nodes map too — at FINALIZE time (terminal), never at op time (the
+ *  F17 destroy→re-attach rescue race must keep a rescued node registered). */
+type FinalizeHook = (node: Node) => void
+const finalizeHooks: FinalizeHook[] = []
+
+export function onNodeFinalized(hook: FinalizeHook): void {
+  finalizeHooks.push(hook)
+}
+
+function finalizeDestroyed(node: Node, flag?: { prototypeRooted: boolean }): void {
   if (node.destroyed) return
   node.destroyed = true
   node.dirty.add('sweep-candidate')
+  const cascade = flag !== undefined
   for (const kid of node.children) {
     if (kid.destroyed) continue
+    if (cascade) {
+      // REQ-GAP-12 — the explicit-destroy cascade relaxes the content
+      // exemption for EXPLICIT family children ONLY (user ruling 2026-08-21):
+      // - a prototype-rooted destroy is a def/seam subtree: untouched,
+      // - placement-owned children survive (placement-may-return letter),
+      // - 'component'-token prototype children survive (never render),
+      // - content children the cascade destroys are unregistered first (the
+      //   destroy op unregisters only its direct target),
+      // - the retention split: runtimeMinted children are markDestroyed (walk
+      //   slots stable — the parent still lists them), never dissolved.
+      if (flag!.prototypeRooted) continue
+      if (isPlacementOwned(kid)) continue
+      if (kid.state === 'prototype') continue
+      if (isContentNode(kid)) unregisterContentNode(kid)
+      if (kid.runtimeMinted) {
+        kid.markDestroyed()
+        evictDestroyedNode(kid)
+        for (const hook of finalizeHooks) hook(kid)
+        continue
+      }
+      finalizeDestroyed(kid, flag)
+      continue
+    }
     if (isContentNode(kid)) continue // a payload-owned descendant survives its tree owner
     if (kid.state === 'in-tree' || kid.state === 'prototype') continue
     finalizeDestroyed(kid)
   }
+  evictDestroyedNode(node)
+  for (const hook of finalizeHooks) hook(node)
 }
 
 /** Queue a node for the async cascade-destroy sweep. */

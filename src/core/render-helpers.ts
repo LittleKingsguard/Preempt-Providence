@@ -1171,7 +1171,17 @@ const rootWire = `${wire}:0`
       // the wire is its pathKey — the node id comes from the emit context.
       const childNodeId = pathCtx?.pathNodeOf.get(resolvedWire) ?? resolvedWire
       const childNode = nodeById?.get(childNodeId) as unknown as { type?: string; css?: Record<string, unknown>; props?: Record<string, unknown>; children?: Array<{ id: string }>; destroyed?: boolean } | undefined
-      if (childNode?.destroyed === true) {
+      // DEFECT #20 + REQ-GAP-11 (2026-08-22): a destroyed adopted def child
+      // must not synthesize an element. Pre-eviction its node sat in nodeById
+      // with `destroyed` set (the signal); post-eviction (the self-evicting
+      // sweep — nodeById = allNodes() = the live-tree scan) it is ABSENT. For
+      // a REAL child (the blocked-def path — `allowed` false) absence from a
+      // PRESENT nodeById means destroyed-or-unregistered: prune the wire the
+      // same way. A caller emitting with NO nodeById keeps the type/props
+      // fallback (DFC-F1/F1b emit raw states without a node map). The
+      // `allowed` def-spec path keeps the spec-data fallback (synthetic def
+      // children).
+      if (childNode?.destroyed === true || (!allowed && nodeById != null && childNode === undefined)) {
         destroyedWires.add(resolvedWire)
         continue
       }

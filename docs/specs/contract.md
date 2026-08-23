@@ -27,7 +27,7 @@ Imports in tests take the form `import { Link } from '../src/core/link.js'`. Mod
 | `src/core/client.ts` | `ClientAPI`, `createClient`, `ExposedState`, `CompileStatus` |
 | `src/core/events.ts` | `EventBridge`, `EventEnvelope`, `PreemptEvent`, `coalesceByTick` |
 | `src/core/handlers.ts` | `HandlerContext`, `dispatchEvent`, `dispatchPhase`, `dispatchPhaseForNodes`, `makeHandlerContext` |
-| `src/core/translate.ts` | legacy NodeSchema → graph (`translateLegacy`) and reverse (`reverseTranslate`) |
+| `src/core/translate.ts` | legacy NodeSchema → graph (`translateLegacy`) and reverse (`reverseTranslate`); the same-name shared-Link factory `createLinkHub` (REQ-GAP-9) |
 | `src/core/payload.ts` | payload lifecycle: `dropPayload`, `refreshPayload`, `appendToPayload`, `nextPriority` |
 | `src/core/debug.ts` | dev compile-pass logging (`setCompilePassLogging`) |
 
@@ -248,6 +248,30 @@ gains an optional `renderOptions` parameter (`{ nodeIdAttribute?: boolean }` —
 DEFAULT OFF; ON adds `data-node-id="<nodeId>"` to every element — the ONE
 scoped lift of PAR-4/NVS-7, ssr-synthetic-event.md §4).
 
+**Destroyed-node lifecycle (REQ-GAP-11, handoffs-review-2 §REQ-GAP-11 + the
+2026-08-21 amendment):** destroy → sweep finalize → EVICTION. `finalizeDestroyed`
+(registry.ts) evicts a finalized node from the module-level `registered`/
+`byId` sets (+ content/minted ownership); the destroy op additionally evicts
+on BOTH destroy branches — the `runtimeMinted`/`markDestroyed` retention
+branch never reaches the sweep (no `markPending`), so the op itself drops the
+node from `registered`/`byId`/`this.nodes` while KEEPING the family edge
+(the retention letter protects the walk/anchors — `children[i]` positions
+stay stable — not the maps). Cascade-finalized nodes leave the supervisor's
+`this.nodes` via a module-level finalize hook (registry `onNodeFinalized`),
+fired at FINALIZE time only — the destroy→re-attach rescue race (F17) keeps a
+rescued node registered. Net effect: `allNodes()`/`registered` return to the
+live-tree baseline after teardown; long-lived hosts stop accumulating
+destroyed nodes. **Retention-class caveat:** a destroyed retention node
+(`runtimeMinted`) is still resolvable — `getNode(id)` consults a private
+destroyed-ref tombstone, so stale refs gate `no-usable-state`/dispatch `[]`
+instead of `unknown-node` — but it is NOT in `allNodes()`; locate destroyed
+retention nodes via the family walk (a live parent's `children`), never by
+scanning `allNodes()`. In-tree/prototype nodes are never evicted
+(permanent-owner gate). **requestId-per-scenario note:** `loadState`/
+re-translate preserves ids, and the `dispatchAndReport` dedup window (per-
+supervisor, TTL'd, not cleared by reseeds) can echo a stale report across
+scenarios — hosts must mint FRESH requestIds per scenario.
+
 ## `src/core/ops.ts`
 
 ```ts
@@ -456,6 +480,24 @@ export function serializeSlice(node: Node, kids: Node[]): SerializedRenderDoc   
 export function loadState(doc: SerializedRenderDoc): NodeBaseData[]   // parse → seed data (re-resolve path)
 ```
 `node → JSON → parse → recompile` must round-trip equal render-relevant state (SER-R1; tests SER-H1/F1).
+
+**REQ-GAP-9 — the host reseed flow (pinned 2026-08-22, `docs/specs/serialize.md` §3):**
+`loadState(doc)` → `NodeBaseData[]` is snapshot/restore ONLY. A host reseeding a
+doc into a live graph runs the corrected 4-step recipe with ONE
+`createLinkHub()` instance (exported from `src/core/translate.js` + the
+`src/index.ts` barrel; `translateLegacy(doc, { hub })` uses the same factory
+internally when `opts.hub` is absent):
+1. `loadState(doc)`; 2. `new Node(d, hub)` per seed — template/root FIRST,
+content after (the seed's child-anchor `parent` refs resolve at construction;
+placement/component role anchors route through the hub, so same-name anchors
+share ONE Link); 3. `reconcileParentTargets(nodes)`; 4.
+`supervisor.registerNode(node)` per node — the module registry fires in the
+constructor, the supervisor's `this.nodes` does NOT, and the supervisor-hub +
+node-hub must be the SAME instance (`new Supervisor({ hub, events })`).
+Caveats: link ids do not round-trip (the seed path mints fresh links); a
+component-bearing doc goes through `translateLegacy(doc, { hub })` — reseeded
+graphs are def-less/rows-less by construction (`rows-mint` on a reseeded graph
+throws `rows-prototype-unresolved`, documented behavior).
 
 ## `src/core/client.ts`
 

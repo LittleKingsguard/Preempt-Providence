@@ -14,7 +14,7 @@ import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
 import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
-import { unregisterContentNode, resolveNodeRef } from './registry.js'
+import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
 import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
@@ -111,6 +111,15 @@ interface DispatchDedupEntry {
 export class Supervisor {
   readonly journal: JournalEntry[] = []
   private readonly nodes: Map<NodeId, Node>
+  /** REQ-GAP-11 — the destroyed-ref tombstone (PRIVATE, handoffs-review-2
+   *  §REQ-GAP-11): destroyed nodes leave `this.nodes` (allNodes() = the
+   *  live-tree scan the handoff complains about) but keep resolving here so
+   *  stale ids still gate `no-usable-state` (never `unknown-node`), repeated
+   *  retention lookups keep working, and dispatchEvent on destroyed targets
+   *  stays `[]`. Destroyed is terminal, so entries are never removed; the
+   *  tombstone is never scanned (allNodes / pass-2 / focusedSlice read
+   *  `this.nodes` only). */
+  private readonly destroyedRefs = new Map<NodeId, Node>()
   private readonly hub: LinkConfigNameHub | null
   readonly events: EventBridge | null
   private undoStack: JournalEntry[] = []
@@ -131,10 +140,22 @@ export class Supervisor {
       this.hub = opts.hub ?? null
       this.events = opts.events ?? null
     }
+    // REQ-GAP-11 — the sweep-hook seam: cascade-finalized nodes (the sweep's
+    // own finalization, terminal) leave this supervisor's scan surfaces too.
+    // Guarded by INSTANCE ownership: only a node this supervisor actually
+    // holds is tombstoned here — the id-keyed delete would otherwise remove a
+    // DIFFERENT graph's re-seeded node sharing the same id (the smoke runs
+    // several loadState-re-seeded graphs in one process with shared ids).
+    onNodeFinalized((node) => {
+      if (this.nodes.get(node.id) === node) {
+        this.nodes.delete(node.id)
+        this.destroyedRefs.set(node.id, node)
+      }
+    })
   }
 
   getNode(id: NodeId): Node | undefined {
-    return this.nodes.get(id)
+    return this.nodes.get(id) ?? this.destroyedRefs.get(id)
   }
 
   allNodes(): Node[] {
@@ -669,7 +690,30 @@ export class Supervisor {
           // compile drops the node (destroyed ⇒ no state ⇒ no render).
           target.markDestroyed()
         } else {
+          // REQ-GAP-12 (handoffs-review-2 §REQ-GAP-12, user ruling 1,
+          // 2026-08-21) — mark the EXPLICIT destroy as cascade-capable: the
+          // sweep's finalizeDestroyed then recurses into the destroyed node's
+          // EXPLICIT (family parent-child) children — payload content
+          // included — while SKIPPING placement-owned nodes and
+          // 'component'-token prototype nodes. Internal state only (never an
+          // op payload — the journal shape is unchanged). Teardown-to-root
+          // becomes ONE destroy op for payload trees; the runtimeMinted
+          // branch above stays non-cascading (retention split).
+          markCascadeExplicit(target)
           target.destroy()
+        }
+        // REQ-GAP-11 (handoffs-review-2 §REQ-GAP-11 AMENDMENT, 2026-08-21) —
+        // evict the destroyed node's map entries on BOTH destroy branches:
+        // the markDestroyed branch never calls markPending, so it never
+        // reaches finalizeDestroyed and would never be evicted by the sweep
+        // alone. The retention letter protects the WALK/anchors (slot
+        // stability — the family edge above is kept), not the maps, so
+        // registered/byId/this.nodes drop the node while getNode resolution
+        // survives via the private destroyedRefs tombstone.
+        evictDestroyedNode(target)
+        if (this.nodes.get(target.id) === target) {
+          this.nodes.delete(target.id)
+          this.destroyedRefs.set(target.id, target)
         }
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [node!.id] })
         this.emitStructure('destroy', node!.id); this.markPass2(node!.id)

@@ -7,7 +7,7 @@
  * via the `provident-ssr/core/*` subpath export.
  */
 // ---- translate (legacy envelope in/out) ----------------------------------
-export { translateLegacy, reverseTranslate, kebabKey, serializeStyle, parseStyle } from './core/translate.js'
+export { translateLegacy, reverseTranslate, kebabKey, serializeStyle, parseStyle, createLinkHub } from './core/translate.js'
 export type {
   LegacyInitialData,
   LegacyNodeData,
@@ -83,4 +83,5 @@ export type {
   CompiledState,
   DerivedExpr,
   DerivedDecl,
+  LinkConfigNameHub,
 } from './core/types.js'

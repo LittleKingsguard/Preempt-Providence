@@ -1009,10 +1009,14 @@ if (typeof document !== 'undefined') {
       if (ownText(a) !== 'Sign In') throw new Error(`text=${JSON.stringify(ownText(a))}`)
     })
     await runner.check('S1a: the dropdown is destroyed-but-retained (walk slot kept, destroyed flag set)', () => {
-      const dd = findNodeAny(anon.sup, 's1a-dropdown')
-      if (!dd) throw new Error('dropdown node missing from the graph')
+      // REQ-GAP-11 (self-evicting sweep): allNodes() = the live-tree scan, so
+      // the destroyed retention node is located via the FAMILY WALK (the
+      // retention letter's assertable half — children[i] stays stable).
+      const chip = findNodeInGraph(anon.sup, 's1a-chip')
+      const dd = chip && chip.children.find((c) => c.props && c.props.id === 's1a-dropdown')
+      if (!dd) throw new Error('dropdown walk slot lost (destroyed node must stay in the family walk)')
       if (!dd.destroyed) throw new Error('dropdown node not destroyed')
-      if (!anon.sup.getNode(dd.id)) throw new Error('dropdown walk slot lost (unregistered)')
+      if (!anon.sup.getNode(dd.id)) throw new Error('dropdown unresolvable via getNode')
     })
 
     // ---- Scenario 1 (AUTH-SEAM), alice variant -----------------------------
@@ -1035,9 +1039,10 @@ if (typeof document !== 'undefined') {
     await runner.check('S1b: the authored logout click destroys the dropdown menu (retention) — the page still renders', async () => {
       const out = findNodeInGraph(alice.sup, 's1b-logout')
       await alice.interact(() => dispatchEvent(out, alice.ctx, 'click'))
-      const dd = findNodeAny(alice.sup, 's1b-dropdown')
-      if (!dd || !dd.destroyed) throw new Error('dropdown not destroyed after logout')
-      if (!alice.sup.getNode(dd.id)) throw new Error('dropdown walk slot lost (unregistered)')
+      const chip = findNodeInGraph(alice.sup, 's1b-chip')
+      const dd = chip && chip.children.find((c) => c.props && c.props.id === 's1b-dropdown')
+      if (!dd || !dd.destroyed) throw new Error('dropdown not destroyed after logout (or walk slot lost)')
+      if (!alice.sup.getNode(dd.id)) throw new Error('dropdown unresolvable via getNode')
       if (!findInMount(alice.mountEl, 's1b-btn')) throw new Error('the chip vanished — the page stopped rendering')
     })
 
@@ -1165,13 +1170,21 @@ if (typeof document !== 'undefined') {
       if (!toast) throw new Error('toast element missing')
       if (countEmitted(main, 'toast') !== 1) throw new Error(`toasts=${countEmitted(main, 'toast')}`)
     })
-    await runner.check('S9: the authored dismiss click destroys the toast (retention) — the stack keeps its slot', async () => {
+    await runner.check('S9: the authored dismiss click destroys the toast — the stack keeps its slot', async () => {
+      // REQ-GAP-11 (2026-08-22): the destroyed node is located BEFORE the
+      // dismiss (the minted toast is originLayer'd, NOT runtimeMinted — its
+      // plain destroy dissolves the family edge, so the post-destroy walk no
+      // longer lists it); the destroyed state + tombstone resolution are
+      // asserted after.
+      const stackNode = findNodeInGraph(main.sup, 'toast-stack')
+      const toast = stackNode && stackNode.children.find((c) => c.props && c.props.id === 'toast-1')
+      if (!toast) throw new Error('toast not minted into the stack')
       const dismiss = findNodeInGraph(main.sup, 'toast-dismiss')
       await main.interact(() => dispatchEvent(dismiss, main.ctx, 'click'))
       if (countEmitted(main, 'toast') !== 0) throw new Error('toast still rendered after dismiss')
       if (!findInMount(main.mountEl, 'toast-stack')) throw new Error('the stack lost its slot')
-      const toast = findNodeAny(main.sup, 'toast-1')
-      if (!toast || !toast.destroyed) throw new Error('toast node not destroyed')
+      if (!toast.destroyed) throw new Error('toast node not destroyed')
+      if (!main.sup.getNode(toast.id)) throw new Error('toast unresolvable via getNode')
     })
 
     // ---- Scenario 10 — multi-handler node ------------------------------------

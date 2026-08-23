@@ -161,6 +161,46 @@ handler def into a runtime write gets a silently dead handler (no error, no
 warning, no `on:` prop); the reverse re-emits the layers verbatim (functions
 as source strings).
 
+**THE NAME→BODY SEAM (REQ-GAP-10, 2026-08-21 — handoffs-review-2 §3, user
+go-ahead):** data-only envelopes declare `{name, phase}` handlers (bodies
+cannot be JSON); a host supplies the BODIES in code. The sanctioned seam is
+`Node.addLayer({ id, handlers: [{ name, phase, body }] })` — the fork-stress
+page pattern (demo/fork-stress-data.js — bodies installed on OUT-OF-TREE
+prototypes before clones inherit them; clone layer inheritance copies every
+non-seed layer). SCOPE AND DELIMITERS (pinned):
+
+- **PRE-MOUNT ONLY.** addLayer is sanctioned for pre-mount
+  prototype/out-of-tree setup. It is UN-JOURNALED and does NOT enter the
+  supervisor pass-2 pipeline (compileLocal + markRemote + scheduleSweep —
+  no `markPass2`, no structure event, `takePass2States` never reflects it,
+  node.ts:626-643): on an IN-TREE LIVE node a body installed this way
+  recompiles but the resolved states never refresh — a SILENT NON-RENDER
+  footgun. In-tree LIVE injection uses the journaled paths instead:
+  `state-slice` with `targetProp: 'handlers'` (the R-3 letter) or
+  `layer-apply` with `data.handlers` (origin-owned, teardown via
+  removeLayer) — both REQUIRE live FUNCTION bodies (RUNTIME-WRITE BODY
+  LETTER above).
+- **Layer-id prefix rules.** `slice-*` layers with an EMPTY handlers array
+  trip the REVERSE-OF-CLEAR detector (translate.md §REVERSE-OF-CLEAR —
+  `nodeToLegacy` suppresses the base while such a layer exists);
+  `sourceName: 'handler-seam'` layers are excluded from reverse entirely;
+  the `hook-` prefix is the hooks namespace. Host-injected body layers MUST
+  use a prefix outside all three (e.g. `host-`/`battery-`/`stress-expand-`).
+- **The hooks delimiter.** §7.2 pin 1 (hooks-map-review) rejects direct
+  `addLayer`/`a.value` writes for HOOK VALUE slots — the managed channel is
+  the only hook-write surface. Handler BODY layers are a DISJOINT surface:
+  value-provider slots → managed channel only; handler bodies → the layer
+  surface. The two never mix.
+- **Precedence + inheritance.** Layers merge append-with-override per
+  `(name, event)` (D16 — a later layer's same-name body wins). Clones
+  inherit injected layers (node.ts:773) WITHOUT any teardown cascade —
+  `removeLayer` on the prototype does not touch clones; teardown = per-node
+  removeLayer or destroy.
+- **No `registerHandlerBody` helper** (REJECTED — handoffs-review-2 §3): a
+  string-body registry would drag the `new Function` eval gate into the
+  runtime write surface, contradicting the RUNTIME-WRITE BODY LETTER and the
+  trusted-backend gate.
+
 ## 5. Exhaustiveness gate
 
 | ID | State | Expected |
