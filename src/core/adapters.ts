@@ -393,7 +393,29 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
   }
 
   removeEl(wire: NodeRef, forkKey?: ForkPathKey): void {
-    this.fragments.delete(wireKey(wire, forkKey))
+    // DEFECT-SSR-REMOVE (handoffs-review-3.md, 2026-08-23) — detach semantics
+    // mirroring DomAdapter.removeEl (PAR-5/SSR-F4 parity): a removed element
+    // must leave the parent subtree in the serialized fragment, not just the
+    // fragments map. Pins: silent no-op on unknown keys; splice by descriptor
+    // identity (fork arms of one wire never collide); created purge (a
+    // D3-legal remove→re-create must never resurrect the dead descriptor as a
+    // floating top-level fragment); fragments.delete kept (additive shape);
+    // no rootKey reset (FRG-H24 preserved).
+    const key = wireKey(wire, forkKey)
+    const fd = this.fragments.get(key)
+    if (!fd) return
+    const state = this.states.get(fd)!
+    const parent = state.parent
+    if (parent) {
+      const parentState = this.states.get(parent)!
+      const i = parentState.children.indexOf(fd)
+      if (i !== -1) parentState.children.splice(i, 1)
+    }
+    state.parent = null
+    const ci = this.created.indexOf(fd)
+    if (ci !== -1) this.created.splice(ci, 1)
+    this.fragments.delete(key)
+    if (parent) this.rematerialize(parent)
   }
 
   hydrate(_rootWire: NodeRef, _vdom: unknown): void {}

@@ -421,7 +421,7 @@ The DOM side mirrors the same inner join: `ensureStyles` accumulates
 
 | Method | Behavior | Ref |
 | --- | --- | --- |
-| `removeEl(wire, forkKey?)` | `this.fragments.delete(wireKey(wire, forkKey))` — the fragment no longer contributes to output ("omission from the string pass", render.md §2) | de facto |
+| `removeEl(wire, forkKey?)` | **DETACH semantics (DEFECT-SSR-REMOVE, 2026-08-23 — handoffs-review-3.md):** resolve → silent no-op on an unknown key (`fragments.get` miss returns without state work); **splice the descriptor out of its parent state's `children` by identity** (two fork arms of one wire in the same parent never collide — the `wireKey(wire, forkKey)` resolution selects the arm); set the removed fragment's `parent = null`; **purge the descriptor from the append-only `this.created` list by identity** (a D3-legal remove→re-create must never resurrect the dead descriptor as a floating top-level fragment); keep `this.fragments.delete(wireKey(wire, forkKey))` (additive — dropping it would turn every removed element into a floating fragment); then `rematerialize(parent)` with a null-guard (safe when the removed fragment had no parent). **No rootKey reset** (FRG-H24 preserved). Mirrors the `DomAdapter.removeEl` detach shape — the SSR fragment collapses like the DOM (PAR-5/SSR-F4 parity) | handoffs-review-3.md; FRG-H18-remove, DEFECT-SSR-REMOVE pins |
 | `hydrate(rootWire, vdom)` | **no-op** — the server never hydrates (render.md §2 "n/a") | de facto |
 | `toString()` | `stylesPrefix + htmlOf(root)`; `root` = the wire of the **first `createEl`** — deterministic because R-ORD-8 guarantees the actionable array is root-first (every node's `create` precedes its descendants'), so the root is always the first created wire *(derived: no demo SSR reference; root detection must be deterministic; R10)*. If `removeEl` removed the root wire (or no `create` ever ran), `toString()` returns **just the styles prefix** — the `<style id="preempt-dynamic-styles">` block alone, no root html (FRG-H24) | render.md §2 + R10 |
 
@@ -436,7 +436,12 @@ must reflect the same surface for the same op stream (PAR-5, SSR-F4 class). The
 guard: fully-connected streams (every non-root fragment appended) emit **exactly**
 `stylesPrefix + htmlOf(root)` — no output change (FRG-H26). A `removeEl`d root
 still yields just the styles prefix (FRG-H24); the floating set is computed from
-creation order + parent linkage, never reordered by wire.
+creation order + parent linkage, never reordered by wire. **Removed descriptors
+never float** (DEFECT-SSR-REMOVE, 2026-08-23): `removeEl` purges the descriptor
+from `this.created`, so even a same-wire re-create after a remove serializes the
+live descriptor only — the dead one stays gone. The dup-create-without-remove
+clobber surface is untouched (FRG-F3/DOM-F4 parity: the clobbered old descriptor
+stays in the root subtree AND the new one floats top-level, mirroring the DOM).
 
 ---
 
@@ -608,12 +613,18 @@ and `render-helpers.ts` need no DOM.
 | FRG-H22 | `setProp(w, 'css:id', 'k')` then `setProp(w, 'text', 'hi')` then read `openTag` | `openTag` regenerated from type + attr map, **unchanged** by the text set; `contentText === 'hi'` (R8) |
 | FRG-H23 | `createEl('div','w')` with `forkKey:'fk1'`, then `forkKey:'fk2'` (two creates, same wire) | two **distinct** descriptors in `fragments` (`wireKey`-keyed); independent; no clobber (R2) |
 | FRG-H24 | `removeEl(rootWire)` then `toString()` | returns **just the styles prefix** — the `<style id="preempt-dynamic-styles">` block alone, no root html (R10) |
+| FRG-H18-remove | `removeEl(w)` for a **live appended** wire (DEFECT-SSR-REMOVE widened row) | **DETACH**: the descriptor is spliced out of its parent's `children` by identity, `parent = null`, purged from `this.created`, dropped from `fragments` — the removed element **leaves the serialized subtree** (`toString()` = the parent without it; plain-remove pin) |
 | FRG-H25 | root + appended child, PLUS one created-but-never-appended fragment | `toString()` = root html then the floating fragment (creation order, §4.6 DECIDED) — both well-formed |
 | FRG-H26 | fully-connected stream (every non-root fragment appended) | `toString()` = `stylesPrefix + htmlOf(root)` exactly — no floating fragments leak (guard, §4.6) |
 | FRG-F1 | `appendChild(voidOwner, child)` | child serialization ignored in output (void html = openTag only) |
 | FRG-F2 | `setProp(unknownWire, 'text', 'x')` (also unknown composite key) | silent no-op |
 | FRG-F3 | duplicate `createEl` for the **same `(wire, forkKey)`** | mapping overwritten (last-write-wins); different forkKeys keep distinct entries (FRG-H23) |
 | FRG-F4 | `on:<event>` with a non-string value (function) | rendered via `String(val)` (deterministic); SSR handler values are required to be strings by the emit side — callable-handler serialization is a handlers.md concern (PARKED) |
+| FRG-REM1 | `removeEl(w)` then re-`createEl('div','w')` + `appendChild` (D3-legal remove→re-create; DEFECT-SSR-REMOVE fail-state) | **non-resurrection**: `toString()` = the live re-created element serialized **exactly once** — the dead descriptor never floats top-level after the root subtree (the created-purge pin) |
+| FRG-REM2 | `removeEl('w', 'fk1')` where wire `w` has arms `fk1`/`fk2` under one parent (fork-arm remove) | the `fk1` arm leaves the subtree; the `fk2` arm + the parent survive (`toString()` = parent with the fk2 arm only) |
+| FRG-REM3 | remove in both cascade orders — parent-first and child-first (root ← p ← c) | `toString()` collapses to root-only in BOTH orders; no throw (cascade order independence) |
+| FRG-REM4 | `removeEl(unknownWire)` (also unknown composite key) | silent no-op — no throw, output intact (FRG-F2-class pin) |
+| FRG-REM5 | repeated remove→re-create of one wire (3×) | `created` stays bounded — final `toString()` = the root without the wire; no descriptor accumulation |
 
 ### 10.3 render helpers (HLP-*)
 
