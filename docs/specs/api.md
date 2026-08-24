@@ -63,7 +63,9 @@ targetProp: 'type' | 'content' | 'handlers'
 }
 type LayerMutationList = LayerMutation[]
 
-// notes §10.2 — journaled, named, replayable (undo/redo for free)
+// notes §10.2 — journaled, named, replayable; undo/redo per the per-kind
+// support table (ops.md §6, 2026-08-24 amendment — exact inverses for
+// state-slice/attach/rows-mint; documented no-ops for the rest)
 type MutationOp =
   | StructuralOp
   | { kind: 'state-slice'; node: NodeRef; mutation: LayerMutationList; actor: string }

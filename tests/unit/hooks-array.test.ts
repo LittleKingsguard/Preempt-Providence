@@ -384,13 +384,14 @@ describe('pin 4/5 — per-batch journaling, replay idempotency, node-scoped laye
     expect(mintedByOrigin(layerId).sort()).toEqual([...minted!].sort())
 
     // replay re-applies the journal: the batch is REPLACED (same layerId =
-    // replace pin), never accumulated
+    // replace pin), never accumulated; the no-journal mode (handoffs-review-4
+    // §3c — DEFECT-JOURNAL-REPLAY-APPEND fix) keeps ONE entry per op.
     const before = creator.children.length
     sup.replay()
     const mintEntries = sup.journal.filter((e) => e.op.kind === 'rows-mint')
     expect(creator.children.length).toBe(before)
     expect(mintedByOrigin(layerId).length).toBe(2)
-    expect(mintEntries.length).toBe(2)
+    expect(mintEntries.length).toBe(1)
   })
 
   it('the IDENTICAL row set re-applied on the SAME hookName REPLACES the batch (no accumulation, same layerId)', async () => {

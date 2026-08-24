@@ -560,22 +560,36 @@ export class Supervisor {
     if (result.status !== 'applied') return null
     const { kind, ...rest } = op
     const entry: JournalEntry = { id: `journal-${journalSeq++}`, op: { kind, ...rest }, result }
+    // INTERNAL no-journal mode (redo/replay — handoffs-review-4.md §3c): the
+    // caller refreshes the ORIGINAL entry's result in place; a suppressed
+    // apply must not grow the journal.
+    if (this.suppressJournal) return entry
     this.journal.push(entry)
     this.undoStack.push(entry)
     this.redoStack = []
     return entry
   }
 
-  apply(op: { kind: string; node?: Node; [key: string]: unknown }): {
+  /** INTERNAL (handoffs-review-4.md §3c — redo/replay use it): re-apply an op
+   *  WITHOUT journaling a new entry (the caller refreshes the original
+   *  entry's `result` in place instead). The public `apply` signature is
+   *  unchanged; `opts` is underscored-internal. */
+  private suppressJournal = false
+  apply(op: { kind: string; node?: Node; [key: string]: unknown }, opts?: { journal?: boolean }): {
     status: 'applied' | 'no-usable-state' | 'rejected'
     journalId?: string
     dirtied?: NodeId[]
     nodeState?: string
     error?: { code: string; detail?: unknown }
     minted?: NodeId[]
+    sliceLayers?: string[]
+    hookUndo?: { name: string; preValue: unknown; created: boolean; cleared: boolean }[]
   } {
     const node = op.node as Node | undefined
+    const prevSuppress = this.suppressJournal
+    if (opts?.journal === false) this.suppressJournal = true
     if (!node && op.kind !== 'clone-instance' && op.kind !== 'layer-apply' && op.kind !== 'rows-mint' && op.kind !== 'rows-clear') {
+      this.suppressJournal = prevSuppress
       return { status: 'rejected', error: { code: 'unknown-node' } }
     }
 
@@ -652,7 +666,7 @@ export class Supervisor {
         if (nodeState !== 'in-tree' && !(nodeState === 'prototype' && (node as Node).runtimeMinted)) {
           return { status: 'no-usable-state', nodeState }
         }
-        ;(node as Node).applySlice(mutation as never)
+        const sliceFacts = (node as Node).applySlice(mutation as never)
         const dirtied = [node!.id]
         // P3 §3.2 (E2E-3) — component-source change: the affected set is the
         // per-name component Link's TARGET owners (the consumers that resolve
@@ -672,9 +686,22 @@ export class Supervisor {
             this.markPass2(consumer.id)
           }
         }
-        const entry = this.journalIfApplied(op, { status: 'applied', dirtied })
+        const entry = this.journalIfApplied(op, {
+          status: 'applied',
+          dirtied,
+          // DEFECT-JOURNAL-UNDO (handoffs-review-4.md §3) — the undo handle
+          // and the replay gate: the layer ids applySlice created + the per-
+          // hook-mutation pre-op facts. Never serialized (the journal is
+          // process-local). sliceLayers is the exact inverse for every non-
+          // hook mode (removeLayer per id); hookUndo carries the pre-op
+          // anchor.value + created/replaced/cleared disposition (the
+          // deterministic `hook-<name>` id + replace-in-place semantics make
+          // id-only undo inexact on a second write).
+          sliceLayers: sliceFacts.createdLayers,
+          hookUndo: sliceFacts.hookUndo,
+        })
         this.markPass2(node!.id)
-        return { status: 'applied', journalId: entry!.id, dirtied }
+        return { status: 'applied', journalId: entry!.id, dirtied, sliceLayers: sliceFacts.createdLayers, hookUndo: sliceFacts.hookUndo }
       }
       if (op.kind === 'destroy') {
         // explicit destroy: the node leaves the content source of truth too,
@@ -801,9 +828,17 @@ export class Supervisor {
           const link = slot.familyLinkFor()
           copy.addAnchor('child', copy, options, link)
         }
-        const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [copy.id] })
+        const entry = this.journalIfApplied(op, {
+          status: 'applied',
+          dirtied: [copy.id],
+          // DEFECT-CLONE-REPLAY-NONIDEMPOTENT (handoffs-review-4.md §4) — the
+          // A3-minted precedent: persist the copy id so replay can gate on
+          // its liveness (a live copy in this.nodes → skip) instead of
+          // re-minting a fresh copy per replay.
+          minted: [copy.id],
+        })
         this.emitStructure('clone-instance', copy.id); this.markPass2(copy.id)
-        return { status: 'applied', journalId: entry!.id, dirtied: [copy.id] }
+        return { status: 'applied', journalId: entry!.id, dirtied: [copy.id], minted: [copy.id] }
       }
       if (op.kind === 'layer-apply') {
         // ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4) — the atomic
@@ -911,26 +946,70 @@ export class Supervisor {
         return { status: 'rejected', error: { code: err.code } }
       }
       throw e
+    } finally {
+      this.suppressJournal = prevSuppress
     }
   }
 
   replay(): void {
-    // Snapshot the stream: `apply` journals re-applied ops, so iterating the
-    // LIVE array would keep visiting the appended entries — an infinite
-    // journal-growth loop for any op that applies successfully on replay
-    // (e.g. the idempotent placement-attach). The replayed ops are the ORIGINAL
-    // entries only.
+    // Snapshot the stream: re-applies journaled ops, so iterating the LIVE
+    // array would keep visiting appended entries — an infinite journal-growth
+    // loop for any op that applies successfully on replay. The replayed ops
+    // are the ORIGINAL entries only.
     for (const entry of [...this.journal]) {
+      // DEFECT-JOURNAL-REPLAY-APPEND + DEFECT-CLONE-REPLAY-NONIDEMPOTENT
+      // (handoffs-review-4.md §3b/§4) — the idempotency gate: a state-slice
+      // whose recorded sliceLayers all exist is already applied (skip);
+      // hooks gate on layer existence AND value-equality (the deterministic
+      // `hook-<name>` id is not entry-distinguishing); clone-instance gates
+      // on the recorded minted copy resolving LIVE in this.nodes. The
+      // all-or-nothing semantics are pinned: no stream path removes
+      // `slice-*` layers except an undo (which removes ALL of an entry's
+      // layers atomically), so partial existence is unreachable — do not
+      // branch on it.
+      const kind = entry.op.kind
+      const result = entry.result as { sliceLayers?: string[]; hookUndo?: { name: string; preValue: unknown; created: boolean; cleared: boolean }[]; minted?: NodeId[] }
+      if (kind === 'state-slice' && entry.op.mutation && this.gateBlocksReplay(entry, result)) continue
+      if (kind === 'clone-instance' && result.minted && result.minted.every((id) => !this.nodes.get(id)?.destroyed)) continue
       const op = { ...entry.op } as { kind: string; node?: Node; [key: string]: unknown }
-      if (op.node) {
+      // resolve from the entry's own live reference first; id-resolution is
+      // only a fallback (shared-id loadState-re-seeded graphs).
+      const liveNode = entry.op.node as Node | undefined
+      if (op.node && liveNode && !liveNode.destroyed) {
+        op.node = liveNode
+      } else if (op.node) {
         op.node = this.nodes.get((op.node as Node).id) ?? op.node
       }
       try {
-        this.apply(op)
+        // no-journal re-apply + in-place result refresh (the re-apply mints
+        // fresh slice layer ids — the recorded ones would go stale).
+        const res = this.apply(op, { journal: false })
+        if (res.status === 'applied') {
+          entry.result = res as unknown as { status: string; [key: string]: unknown }
+        }
       } catch {
         // replay reproduces same rejections silently
       }
     }
+  }
+
+  private gateBlocksReplay(entry: JournalEntry, result: { sliceLayers?: string[]; hookUndo?: { name: string; preValue: unknown; created: boolean; cleared: boolean }[] }): boolean {
+    const node = (entry.op.node ?? entry.op.target) as Node | undefined
+    if (!node) return false
+    if (result.sliceLayers && result.sliceLayers.length > 0) {
+      if (!result.sliceLayers.every((id) => node.layers.some((l) => l.id === id))) return false
+    }
+    if (result.hookUndo && result.hookUndo.length > 0) {
+      const mutation = entry.op.mutation as { targetProp: string; mode: string; value: unknown }[] | undefined
+      for (const fact of result.hookUndo) {
+        const layer = node.layers.find((l) => l.id === `hook-${fact.name}`)
+        const opValue = mutation?.find((m) => m.targetProp === `hooks.${fact.name}`)?.value
+        if (!layer || !opValue || layer.value !== opValue) return false
+      }
+    }
+    // an entry with no recorded layers (e.g. a seam-exempt hooks no-op) is
+    // not gated — re-applying reproduces the same no-op
+    return (result.sliceLayers?.length ?? 0) > 0 || (result.hookUndo?.length ?? 0) > 0
   }
 
   undo(): void {
@@ -941,26 +1020,97 @@ export class Supervisor {
     const rawNode = entry.op.node ?? entry.op.target
     const node = rawNode as Node
     if (!node) return
-    const resolved = this.nodes.get(node.id) ?? node
-    if (kind === 'attach') {
-      // DEFECT #12 — attach-undo uses the safe per-node detach too
-      detachNodeSafe(resolved)
-    } else if (kind === 'destroy') {
-      // destroy is terminal; undo is a no-op for destroyed nodes
-    } else if (kind === 'rows-mint') {
-      // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
-      // CONTROLLED teardown: clear the batch record + rowsTeardown via the
-      // record's layerId (the record is the undo handle; the operation is
-      // redoable by re-applying the journaled mint op).
-      const hookName = (entry.op as { hookName?: string }).hookName
-      if (hookName !== undefined) {
-        const batches = (resolved as unknown as { batches?: Record<string, { layerId: string }> }).batches ?? {}
-        const record = batches[hookName]
-        if (record) {
-          delete batches[hookName]
-          resolved.rowsTeardown(record.layerId)
-          resolved.removeLayer(record.layerId)
+    // resolve from the entry's own live reference first; id-resolution is
+    // only a fallback. Undo on a destroyed node is a silent no-op — never
+    // throws (`destroyed node writes are rejected`).
+    const resolved = !node.destroyed ? node : null
+    if (!resolved) return
+    try {
+      if (kind === 'attach') {
+        // DEFECT #12 — attach-undo uses the safe per-node detach too
+        detachNodeSafe(resolved)
+      } else if (kind === 'destroy') {
+        // destroy is terminal; undo is a no-op for destroyed nodes
+      } else if (kind === 'rows-mint') {
+        // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
+        // CONTROLLED teardown: clear the batch record + rowsTeardown via the
+        // record's layerId (the record is the undo handle; the operation is
+        // redoable by re-applying the journaled mint op).
+        const hookName = (entry.op as { hookName?: string }).hookName
+        if (hookName !== undefined) {
+          const batches = (resolved as unknown as { batches?: Record<string, { layerId: string }> }).batches ?? {}
+          const record = batches[hookName]
+          if (record) {
+            delete batches[hookName]
+            resolved.rowsTeardown(record.layerId)
+            resolved.removeLayer(record.layerId)
+          }
         }
+      } else if (kind === 'state-slice') {
+        // DEFECT-JOURNAL-UNDO (handoffs-review-4.md §3a) — the sliceLayers
+        // inverse: removeLayer per recorded id; per hook mutation restore the
+        // pre-op anchor.value (and the layer value when the op replaced a
+        // pre-existing hook layer; remove the layer iff the op created it;
+        // re-add it with the authored fallback iff the op cleared it).
+        // No phases/handlers run (RUNTIME-WRITE BODY letter); no emitStructure
+        // (state-slice has none in apply either); markPass2 the node + the
+        // E2E-3 source/duplex consumer walk (the flush is scheduled by
+        // markPass2). Per-inverse try/catch — missing layers are silent no-ops.
+        this.undoStateSlice(entry, resolved)
+      }
+    } catch {
+      // a failed inverse degrades to a no-op — undo never throws
+    }
+  }
+
+  private undoStateSlice(entry: JournalEntry, node: Node): void {
+    const result = entry.result as { sliceLayers?: string[]; hookUndo?: { name: string; preValue: unknown; created: boolean; cleared: boolean }[] } | undefined
+    const slices = result?.sliceLayers ?? []
+    for (const id of slices) {
+      try {
+        node.removeLayer(id)
+      } catch {
+        // missing layer → silent no-op
+      }
+    }
+    const hooks = result?.hookUndo ?? []
+    for (const fact of hooks) {
+      const layerId = `hook-${fact.name}`
+      const anchor = node.anchors.find((a) => (a.role === 'source' || a.role === 'duplex') && a.target === fact.name)
+      try {
+        if (fact.cleared) {
+          // the op removed the layer (hook clear): re-add it with the pre-op
+          // value; the authored fallback is the anchor's current value
+          if (anchor) {
+            node.addLayer({ id: layerId, value: fact.preValue, hookFallback: anchor.value } as never)
+            anchor.value = fact.preValue
+          }
+        } else if (fact.created) {
+          node.removeLayer(layerId)
+          if (anchor) anchor.value = fact.preValue
+        } else {
+          // replaced a pre-existing layer: keep it, restore the prior value
+          const layer = node.layers.find((l) => l.id === layerId)
+          if (layer) {
+            ;(layer as unknown as { value: unknown }).value = fact.preValue
+          }
+          if (anchor) anchor.value = fact.preValue
+        }
+      } catch {
+        // per-fact failure degrades to a no-op
+      }
+    }
+    // the render-honesty half: dirty the node + its source/duplex consumers
+    // (the E2E-3 walk mirror — the flush is scheduled by markPass2)
+    node.markDirty('remote')
+    this.markPass2(node.id)
+    for (const a of node.anchors) {
+      if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+      for (const ta of a.link.anchorsOf('target')) {
+        const consumer = ta.owner
+        if (!consumer || consumer === node || consumer.destroyed) continue
+        consumer.markDirty('remote')
+        this.markPass2(consumer.id)
       }
     }
   }
@@ -968,13 +1118,22 @@ export class Supervisor {
   redo(): void {
     if (this.redoStack.length === 0) return
     const entry = this.redoStack.pop()!
-    this.undoStack.push(entry)
     const op = { ...entry.op } as { kind: string; node?: Node; [key: string]: unknown }
-    if (op.node) {
+    const liveNode = entry.op.node as Node | undefined
+    if (op.node && liveNode && !liveNode.destroyed) {
+      op.node = liveNode
+    } else if (op.node) {
       op.node = this.nodes.get((op.node as Node).id!) ?? op.node
     }
     try {
-      this.apply(op)
+      // no-journal re-apply + in-place result refresh; push the SAME entry to
+      // undoStack (one journal entry per op — no double-undo) and never clear
+      // the redoStack beyond the pop (redo-chains stay possible).
+      const res = this.apply(op, { journal: false })
+      if (res.status === 'applied') {
+        entry.result = res as unknown as { status: string; [key: string]: unknown }
+      }
+      this.undoStack.push(entry)
     } catch {
       // redo reproduces same behavior
     }

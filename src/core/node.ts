@@ -1400,24 +1400,31 @@ export class Node {
     return cs
   }
 
-  applySlice(mutation: LayerMutationList, sourceName?: string): void {
+  applySlice(mutation: LayerMutationList, sourceName?: string): { createdLayers: string[]; hookUndo: { name: string; preValue: unknown; created: boolean; cleared: boolean }[] } {
     this.ensureWritable()
     this.markDirty('remote')
+    const createdLayers: string[] = []
+    const hookUndo: { name: string; preValue: unknown; created: boolean; cleared: boolean }[] = []
     for (const m of mutation) {
       const src = m.sourceName ?? sourceName
       const id = `slice-${nodeSeq++}-${src ?? 'op'}`
       if (m.targetProp === 'type') {
         this.addLayer(makeLayer(id, src, { type: m.value as string }))
+        createdLayers.push(id)
       } else if (m.targetProp === 'content') {
         this.addLayer(makeLayer(id, src, { content: m.value }))
+        createdLayers.push(id)
       } else if (m.targetProp === 'handlers') {
         this.addLayer(makeLayer(id, src, { handlers: m.value as unknown[] }))
+        createdLayers.push(id)
       } else if (m.targetProp.startsWith('props.')) {
         const key = m.targetProp.slice('props.'.length)
         this.applyPropSlice(id, key, m.mode, m.value, src)
+        createdLayers.push(id)
       } else if (m.targetProp.startsWith('css.')) {
         const key = m.targetProp.slice('css.'.length)
         this.addLayer(makeLayer(id, src, { css: { [key]: m.value } }))
+        createdLayers.push(id)
       } else if (m.targetProp.startsWith('hooks.')) {
         // HOOKS (hooks-map-review.md §7 — the value-provider slot): a
         // `hooks.<name>` write lands ONE deterministic `hook-<name>`
@@ -1428,10 +1435,12 @@ export class Node {
         // supervisor's state-slice pre-check already rejected the op-level
         // failures (`hook-name-unresolved` / `hook-mode-blocked`) and
         // warned the seam-exempt no-op before this ever runs.
-        this.applyHookSlice(m.targetProp.slice('hooks.'.length), m.mode, m.value, src)
+        const fact = this.applyHookSlice(m.targetProp.slice('hooks.'.length), m.mode, m.value, src)
+        if (fact) hookUndo.push(fact)
       }
     }
     scheduleSweep(true)
+    return { createdLayers, hookUndo }
   }
 
   /** HOOKS §7.3 — the hook write: resolve the name against the node's own
@@ -1447,19 +1456,19 @@ export class Node {
    *  (`hook-mode-blocked`). `value: undefined` CLEARS the hook: the layer is
    *  removed and the authored value (preserved as `hookFallback` at the
    *  first write) restores to the anchor. */
-  private applyHookSlice(name: string, mode: LayerMutationList[number]['mode'], value: unknown, src: string | undefined): void {
+  private applyHookSlice(name: string, mode: LayerMutationList[number]['mode'], value: unknown, src: string | undefined): { name: string; preValue: unknown; created: boolean; cleared: boolean } | null {
     if (name.length === 0) {
       console.warn(`hook-name-unresolved at ${this.id}: hooks.<name> needs a name; mutation skipped`)
-      return
+      return null
     }
     if (mode !== 'replace') {
       console.warn(`hook-mode-blocked at ${this.id}: hooks.${name} accepts 'replace' only; mutation skipped`)
-      return
+      return null
     }
     const kind = (this.base.hooksKind ?? {})[name]
     if (kind !== undefined && kind !== 'value') {
       console.warn(`hook-kind-mismatch at ${this.id}: hooks.${name} declared kind "${kind}" mints nodes; scalar value write skipped`)
-      return
+      return null
     }
     const guard = hookWriteGuard(this, name)
     if (!guard.ok) {
@@ -1468,26 +1477,29 @@ export class Node {
       } else {
         console.warn(`hook-seam-exempt at ${this.id}: "${name}" is a seam/def-shaped provider; hook write skipped (a hook write would tear down the seam)`)
       }
-      return
+      return null
     }
     const anchor = guard.anchor
     const layerId = `hook-${name}`
     const existing = this.layers.find((l) => l.id === layerId)
+    const preValue = anchor.value
     if (value === undefined) {
       // clear: remove the hook layer, restore the authored value
       if (existing !== undefined) {
         anchor.value = (existing as { hookFallback?: unknown }).hookFallback
         this.removeLayer(layerId)
+        return { name, preValue, created: false, cleared: true }
       }
-      return
+      return null
     }
-    if (existing !== undefined && existing.value === value) return
+    if (existing !== undefined && existing.value === value) return null
     if (existing !== undefined) {
       this.addLayer(makeLayer(layerId, src, { value, hookFallback: (existing as { hookFallback?: unknown }).hookFallback }))
     } else {
       this.addLayer(makeLayer(layerId, src, { value, hookFallback: anchor.value }))
     }
     anchor.value = value
+    return { name, preValue, created: existing === undefined, cleared: false }
   }
 
   private applyPropSlice(id: string, key: string, mode: LayerMutationList[number]['mode'], value: unknown, src: string | undefined): void {
