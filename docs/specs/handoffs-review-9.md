@@ -176,6 +176,28 @@ forwards `preserveByReversal` (mirroring the plain path at 346 + layer-apply at
 190) — a keyed preserved mint lands the flag on the first mint AND on a keyed
 update. Tests: preserve-reversal ADV-S5/ADV-S24.
 
+**X-CROSS-FEATURE (2026-08-25 0.2 cross-feature adversarial pass — DEFECT 1,
+DOC GAP, no code change):** two condense-interaction residuals are now
+DOCUMENTED explicitly (the engine is D4-consistent — the restore re-mint drops
+the flag exactly like a full re-mint):
+- **X2/X11 — live-vs-restore keyed asymmetry.** A LIVE keyed update on a
+  preserved keyed layer re-forwards the flag (ADV-P-S5/S24), but a
+  condense → `replay()` graph-REPLACE restore re-mints via
+  `_restoreBase` (`sourceName:'condense-restore'`) WITHOUT the flag (it is not
+  recoverable — absent from the BatchRecord, and D4 forbids carrying it). After
+  a replay-from-base a preserved keyed layer is flag-less (rows reverse-excluded)
+  until the host re-declares `preserveByReversal:true` in a fresh mint.
+- **X12 — non-rows preserved subtree is LOST across the base.** A preserved
+  LAYER-APPLY subtree (origin-owned, non-rows) is excluded from the base by the
+  pin-4 `isDerived` filter (serialize.ts:181-182) and has NO batch re-mint
+  carrier (rows re-mint only) → a condense+replay drops it ENTIRELY. This is the
+  ADV-C-S20 / handoffs-review-8 residual 3b "minted, no carrier" class applied
+  to the preserve feature. A host that needs a preserved non-rows subtree to
+  survive a condense round-trip must re-apply the layer after the replay (the
+  flag + the nodes are re-declared together).
+Both are documented D4 residuals, not ship-blockers. Tests: preserve-reversal
+P8 + X8/X16 (the D8 undo flag forward) green.
+
 **D5 — serialize asymmetry is reverse-only and STRUCTURAL (accepted,
 documented).** serializeNode emits children as IDs (serialize.ts:119) with no
 schema slot for a preserved subtree's full data; honoring the flag there requires

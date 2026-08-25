@@ -25,11 +25,11 @@ blind-test loop COMPLETE 2026-08-25 — FULLY LANDED**); **Journal condensing**
 (SPECULATIVE → PLANNED as Feature 3 — rulings recorded, **gate ✅
 PROCEED-AS-RESHAPED 2026-08-25 (handoffs-review-8.md, D1-D10) → TDD ✅
 LANDED 2026-08-25 (journal-condensing.test.ts, 16 tests; trio green 1169);
-D14 demo arm + blind-test loop PENDING**);
+D14 demo arm + blind-test loop COMPLETE 2026-08-25**);
 **Layer preservation-by-reversal** (NOT-YET → PLANNED as Feature 4 — rulings
 recorded, **gate ✅ PROCEED-AS-RESHAPED 2026-08-25 (handoffs-review-9.md,
 D1-D8) → TDD ✅ LANDED 2026-08-25 (preserve-reversal.test.ts, 11 tests; trio
-green 1185); D14 demo arm + blind-test loop PENDING**); **Hooks-array demo gate** (Feature 1 — LANDED:
+green 1185); D14 demo arm + blind-test loop COMPLETE 2026-08-25**); **Hooks-array demo gate** (Feature 1 — LANDED:
 census pin + tripwire + rows-scenarios demo page; **blind-test loop COMPLETE
 2026-08-24**). The rows in this file carry the LANDED marks + the
 blind-test-pending notes.

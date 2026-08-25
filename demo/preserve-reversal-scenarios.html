@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — preserve-reversal-scenarios: the preserve-by-reversal demo (Feature 4)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .output-box { border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="preserve-reversal-scenarios">
+  <!--
+    ============================================================================
+    PRESERVE-REVERSAL-SCENARIOS — the Feature 4 preserve-by-reversal demo
+    (docs/specs/handoffs-review-9.md D1-D8, decisions.md PRESERVE-BY-REVERSAL
+    row, 2026-08-25).
+
+    Demonstrates the preserve-by-reversal flag: a layerApply mint with
+    preserveByReversal:true makes the minted node's reverse output ship as
+    authored (not excluded). The demo covers: D1 flag read (preserved node
+    ships as authored), D2 whole-subtree cascade (descendants ship too),
+    D3 not-promotion (node stays minted), D4 flag loss on re-mint (a
+    same-hookName rows-mint REPLACES the layer flag-less, so the re-minted
+    rows are excluded on reverse).
+
+    The page module is CORE ONLY (dist/core/*) + the harness. It builds a
+    graph programmatically, mints nodes via layerApply with
+    preserveByReversal:true, calls reverseTranslate, and asserts the reverse
+    output ships the preserved subtree as authored.
+
+    Banner: `preserve-reversal-scenarios`; profile line
+    `[preserve-reversal:profile]`; globals `__preserveReversalScenariosDone` +
+    `__preserveReversalScenariosProfile`.
+    ============================================================================
+  -->
+
+  <main>
+    <h1>preserve-reversal-scenarios — the preserve-by-reversal demo (Feature 4)</h1>
+    <p class="goals">
+      The preserve-by-reversal flag (Feature 4,
+      <code>docs/specs/handoffs-review-9.md</code> D1-D8): a
+      <code>layerApply</code> mint with <code>preserveByReversal:true</code>
+      makes origin-owned nodes reverse as authored edits (not excluded). The
+      whole-subtree cascade (D2) threads the preserved context through
+      <code>nodeToLegacy</code> so descendants ship too. The flag is a
+      reverse-time projection (D3) — the node stays minted, distinct from
+      promotion. A layer replacement drops the flag (D4) — a same-hookName
+      rows-mint replaces the layer flag-less, so the re-minted rows are then
+      excluded. The banner is
+      <code>preserve-reversal-scenarios</code>; the profile line is
+      <code>[preserve-reversal:profile]</code>.
+    </p>
+
+    <h2>Reverse output (live)</h2>
+    <div id="output-box" class="output-box"></div>
+
+    <!-- the smoke shim seeds these; the page builds its graph programmatically -->
+    <script id="preempt-initial-data" type="application/json">{"main":{"template":{"root":{"type":"app","props":{"id":"root"}}},"content":[]}}</script>
+    <script id="server-data" type="application/json">{"goals":["D1 — preserved node ships as authored in the reverse output","D2 — descendant cascade: origin-built descendants ship too","D3 — not-promotion: node stays minted after flag is set","D4 — re-mint drops flag: a same-hookName rows-mint replaces the layer flag-less"]}</script>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="preserve-reversal-scenarios.js"></script>
+</body>
+</html>

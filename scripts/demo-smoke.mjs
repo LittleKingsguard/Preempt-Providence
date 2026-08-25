@@ -841,6 +841,52 @@ await new Promise((r) => setTimeout(r, 250))
   }
 }
 
+// ---- preserve-reversal-scenarios page: the Feature 4 preserve-by-reversal demo
+// A layerApply mint with preserveByReversal:true; reverseTranslate ships the
+// preserved subtree as authored. The demo covers: D1 flag read (preserved node
+// ships as authored), D2 whole-subtree cascade (descendants ship too), D3
+// not-promotion (node stays minted), D4 re-mint drops the flag. Profile guard:
+// timed sections cover ~all of the total.
+{
+  const pageHtml = await readFile(`${base}demo/preserve-reversal-scenarios.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/preserve-reversal-scenarios.js`).catch((e) => {
+    console.error('preserve-reversal-scenarios failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__preserveReversalScenariosDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__preserveReversalScenariosProfile
+  if (!prof) {
+    console.error('preserve-reversal-scenarios profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`preserve-reversal-scenarios profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  if (prof.preservedShipped !== 1) {
+    console.error(`preserve-reversal-scenarios preservedShipped=${prof.preservedShipped} (expected 1)`)
+    process.exit(1)
+  }
+  if (prof.descendantsShipped < 1) {
+    console.error(`preserve-reversal-scenarios descendantsShipped=${prof.descendantsShipped} (expected >= 1)`)
+    process.exit(1)
+  }
+  if (!prof.flagStillSet) {
+    console.error('preserve-reversal-scenarios flagStillSet=false (expected true)')
+    process.exit(1)
+  }
+  if (!prof.reMintDroppedFlag) {
+    console.error('preserve-reversal-scenarios reMintDroppedFlag=false (expected true)')
+    process.exit(1)
+  }
+}
+
 // ---- markdown-adapter-scenarios page: MarkdownAdapter demo (Feature 2) --------
 // One legacy envelope (headings, bold/italic, link with title, blockquote,
 // nested-list-in-list, fenced pre, hr, img); the module translates it,
@@ -969,6 +1015,10 @@ if (!banners.some((b) => b.includes('markdown-adapter-scenarios') && /0 failed/.
 }
 if (!banners.some((b) => b.includes('journal-condensing-scenarios') && /0 failed/.test(b))) {
   console.error('journal-condensing-scenarios page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('preserve-reversal-scenarios') && /0 failed/.test(b))) {
+  console.error('preserve-reversal-scenarios page did not complete its checks (banner missing)')
   process.exit(1)
 }
 

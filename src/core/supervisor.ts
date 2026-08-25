@@ -1360,6 +1360,9 @@ export class Supervisor {
             ...(preRecord.keyField !== undefined ? { keyField: preRecord.keyField } : {}),
             rows: preRecord.rows,
             sourceName: 'rows-undo',
+            ...((entry.op as { preserveByReversal?: boolean }).preserveByReversal !== undefined
+              ? { preserveByReversal: (entry.op as { preserveByReversal?: boolean }).preserveByReversal }
+              : {}),
           }, { journal: false, skipKindGate: true })
         } else {
           // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
