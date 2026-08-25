@@ -199,11 +199,16 @@ Context management guidelines for agents working in this repository:
        `docs/defects.md`/`docs/decisions.md` and the full reports are
        appended to `archive/<topic>/<date>-<name>.md` (§"Stress-test review loop").
     Each agent verifies the validation trio (item 4) after its work.
-    **MODEL (2026-08-16):** the scenario-driven sub-agents (scenario /
-    probe / review) run on the **Mimo-2.5 model**. If the model cannot be
-    changed for a specific sub-agent (the delegation mechanism exposes no
-    model override), PAUSE and wait for the user to manually switch the
-    model before running the loop — never run it with a different model.
+    **MODEL (2026-08-16; CLARIFIED 2026-08-25):** the scenario-driven
+    sub-agents (scenario / probe / review) run on the **HEAVIER model** — NOT
+    MiMo-2.5 (which is the LIGHTER model). The adversarial/stress-test loop is
+    NOT intended for lighter models: a lighter model cannot reason about the
+    compile/render failure stages, real-vs-expected classification, or the
+    security isolation seams, so running it on a lighter model produces
+    unreliable scenarios/probes and must not be attempted. If the model cannot
+    be changed for a specific sub-agent (the delegation mechanism exposes no
+    model override), PAUSE and wait for the user to manually switch the model
+    before running the loop — never run it with a different (lighter) model.
 
 12. **CI / pre-release publish constraints (learned 2026-08-25 — the publish
     workflow `.github/workflows/publish-prerelease.yml`)**: the publish runs in

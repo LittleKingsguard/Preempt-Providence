@@ -132,10 +132,21 @@ in the spec, not silently.
 
 **Full validation trio on landing (item 4):** `npm test`, `npm run typecheck`,
 `npm run demo:smoke`; watch the d12 pass2/compile multiples — the hub-tagged
-coalescer must not blow up the pass-2 pipeline. The subsequent blind-test
-(AGENTS.md item 10) + stress-test (item 11) sub-agent loops run on the Mimo-2.5
-model; if the delegation mechanism cannot switch the model for those sub-agents,
-PAUSE and wait for the user to switch — never run them on another model.
+coalescer must not blow up the pass-2 pipeline. **Model requirements
+(CLARIFIED 2026-08-25):** the two post-landing loops differ. The **blind-test**
+(AGENTS.md item 10 — writer / proofreader / page-reviewer) runs on the
+**MiMo-2.5 model** (the LIGHTER model — appropriate for doc-fidelity checks).
+The **stress-test / adversarial loop** (AGENTS.md item 11 — scenario / probe /
+review) runs on the **HEAVIER model — NOT MiMo-2.5**: it is NOT intended for
+lighter models (a lighter model cannot reason about the isolation seams /
+compile/render failure stages / real-vs-expected classification, producing
+unreliable scenarios). If the delegation mechanism cannot switch the model for
+a given loop's sub-agents, PAUSE and wait for the user to switch — never run
+the stress-test loop on a lighter model. **These loops are DEFERRED to a
+MiMo (blind-test) / heavier-model (stress-test) pass; the isolation blind-test
+scenarios are drafted at
+`archive/test-data/2026-08-25/2026-08-25-isolation-blind-test-scenarios.md` and
+executed only when the model is MiMo.**
 
 ## Gate record
 
