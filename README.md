@@ -10,6 +10,33 @@ render adapters. ESM-only, zero runtime dependencies.
 npm install provident-ssr
 ```
 
+## Private pre-release (GitHub Packages)
+
+Before a public release, the engine is published to **GitHub Packages** under
+the scoped name `@littlekingsguard/provident-ssr` so it can be tested in the
+Electron project without exposing it publicly. A push of a pre-release tag
+(`v*-rc.*`, `v*-beta.*`, `v*-alpha.*`) triggers the publish workflow
+(`.github/workflows/publish-prerelease.yml`).
+
+To consume the private pre-release in the Electron project, add a `.npmrc`
+pointing the scope at GitHub Packages with a read token:
+
+```ini
+@littlekingsguard:registry=https://npm.pkg.github.com/
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+then install the scoped package:
+
+```sh
+npm install @littlekingsguard/provident-ssr@0.2.0-rc.1
+```
+
+The `GITHUB_TOKEN` must be a personal access token (classic, `read:packages`
+scope) or a fine-grained token with read access to the `Preempt-Providence`
+repository's packages. The public `provident-ssr` name is reserved for the
+actual public release.
+
 ## Import
 
 The package is ESM-only (no CommonJS build) and dependency-free: it runs on
