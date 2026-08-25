@@ -31,7 +31,46 @@ Mimo-2.5 for both demo arms: journal-condensing-scenarios 4/4 PASS, no engine
 defects; preserve-reversal-scenarios 4/4 PASS after the page reviewer fixed the
 D4 data to a genuine same-hookName rows-mint re-mint — the initial D4 wrongly
 used removeLayer/the D3 promotion case). Features 1/1a/1b/2/3/4 are all LANDED
-(trio green 1187, 2026-08-25); the remaining work is the 0.2.0 publish.
+(trio green 1187, 2026-08-25). **The 0.2.0 cross-feature adversarial pass is
+COMPLETE (2026-08-25 — 23 scenarios X1-X23, 18 PASS, 2 root causes: X8/X16 D8
+keyed-undo flag asymmetry FIXED, X2/X11/X12 condense-replay preserve loss
+DOCUMENTED; trio green 1189).** **A private pre-release path is set up
+(2026-08-25 — `@littlekingsguard/provident-ssr` on GitHub Packages, tag-triggered
+workflow) so the engine can be tested in the Electron project before the public
+release.** The remaining work is the public 0.2.0 release (see the checklist
+below).
+
+## PUBLIC RELEASE CHECKLIST — 0.2.0 (the private pre-release → public flip)
+
+The private pre-release (`@littlekingsguard/provident-ssr@0.2.0-rc.1` on GitHub
+Packages) is for Electron-project testing only. Before the PUBLIC release, the
+following must be done (in order):
+
+1. **Electron-project validation** — the Electron consumer installs
+   `@littlekingsguard/provident-ssr@0.2.0-rc.1` and runs its battery against the
+   pre-release dist; any new defects filed go through the normal
+   handoff → gate → TDD loop before the public flip.
+2. **Flip the package name back to public** — `package.json` `name`:
+   `@littlekingsguard/provident-ssr` → `provident-ssr`; bump `version` to
+   `0.2.0` (drop the `-rc.1` prerelease suffix).
+3. **Remove the GitHub-Packages publish config** — delete the
+   `publishConfig.registry` block from `package.json`, the `.npmrc`, and the
+   `.github/workflows/publish-prerelease.yml` workflow (or gate it to a
+   non-public tag). The public publish uses the default npm registry.
+4. **Restore the public README install/import** — the README's
+   "Private pre-release" section is removed; the `npm install provident-ssr`
+   + `provident-ssr/core/*` import examples are the canonical public surface.
+5. **Public publish** — `npm publish` (as `rarasey`) to the public npm registry;
+   `prepublishOnly` runs `npm test && npm run typecheck`; `prepack` rebuilds
+   `dist`. Tag `v0.2.0`.
+6. **Post-publish verification** — the Electron project re-installs the public
+   `provident-ssr@0.2.0` and re-runs its battery; the private
+   `@littlekingsguard/provident-ssr` pre-release is retired (unpublished or
+   left as a historical rc).
+
+**Note:** the scoped name is ONLY for the private pre-release. The public
+release must ship as `provident-ssr` (the name the Electron consumer and the
+published 0.1.x line already use).
 
 ## PENDING (awaiting the user gate — bookmark, do NOT auto-proceed)
 

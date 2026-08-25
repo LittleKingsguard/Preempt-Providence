@@ -52,9 +52,9 @@ blind-test-pending notes.
 
 ## PENDING (awaiting the user gate)
 
-*(empty — the REQ-GAP-10 seam letter row and the REQ-GAP-12 destroy-cascade
-note both LANDED 2026-08-22 and moved to decisions.md; nothing currently
-awaits the user gate)*
+| Item | Gate |
+| --- | --- |
+| **Public 0.2.0 release — the private pre-release → public flip (2026-08-25)** | The Electron project validates `@littlekingsguard/provident-ssr@0.2.0-rc.1` (GitHub Packages) against its battery; any filed defects go through the normal handoff → gate → TDD loop first. Then: flip `package.json` `name` back to `provident-ssr` + bump to `0.2.0` (drop `-rc.1`); remove the GitHub-Packages `publishConfig`/`.npmrc`/publish workflow; restore the public README install/import; `npm publish` (as `rarasey`) to the public registry; tag `v0.2.0`; the Electron project re-installs the public `provident-ssr@0.2.0` and re-runs its battery. Full checklist in `docs/next-steps.md` §"PUBLIC RELEASE CHECKLIST — 0.2.0". The scoped name is ONLY for the private pre-release — the public release must ship as `provident-ssr` (the name the Electron consumer + the published 0.1.x line already use) |
 
 ## NOT-YET-IMPLEMENTED features
 
