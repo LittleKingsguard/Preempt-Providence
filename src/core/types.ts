@@ -154,6 +154,10 @@ export interface LayerApplyOp {
   sourceName: string
   decls: AnchorDecl[]
   nodes: NodeBaseData[]
+  /** FEATURE 4 (handoffs-review-9.md D1, ruling 23) — PRESERVE-BY-REVERSAL:
+   *  when true, the minted layer's origin-owned nodes reverse as authored
+   *  edits. Forwarded to the layer object (a runtime layer property). */
+  preserveByReversal?: boolean
 }
 /** HOOKS-ARRAY (§9.4 items 3-8, CONTRACT AMENDMENT C) — the rows-mint op:
  *  mints ONE family node per raw data row from a prototype resolved by
@@ -187,6 +191,11 @@ export interface RowsMintOp {
    *  mismatch on keyField/prototypeName/placementName) DEGRADES the WHOLE op
    *  to the plain whole-batch replace (batch-keyfield-invalid warn). */
   keyField?: string
+  /** FEATURE 4 (handoffs-review-9.md D1, ruling 23) — PRESERVE-BY-REVERSAL:
+   *  when true, the batch layer's origin-owned rows reverse as authored
+   *  edits. Forwarded to the layer object (a runtime layer property; NOT
+   *  carried in the batch record — D4). */
+  preserveByReversal?: boolean
 }
 /** HOOKS-ARRAY (§9.4 item 6 — the payload-controlled teardown). The op is
  *  the PAYLOAD-CONTROL: it deletes the `batches[hookName]` record (the
@@ -315,6 +324,13 @@ export interface NodeLayer {
   /** HOOKS — the authored anchor value preserved at the FIRST hook write;
    *  the clear path (`value: undefined`) restores it to the anchor. */
   hookFallback?: unknown
+  /** FEATURE 4 (handoffs-review-9.md D1, ruling 23) — PRESERVE-BY-REVERSAL:
+   *  when true, the origin-owned nodes minted under this layer reverse as
+   *  DELIBERATE EDITS in `nodeToLegacy` (not reverse-excluded). Read at
+   *  REVERSE time via the parent→layer relationship (the minted node's parent
+   *  holds this layer); a runtime layer property, never serialized. Absent
+   *  defaults to no (the current reverse-exclusion). */
+  preserveByReversal?: boolean
 }
 export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind>; batches?: Record<string, BatchRecord> }
 /** HOOKS-ARRAY (§9.4 item 1 — CONTRACT AMENDMENT C) — the closed kind union

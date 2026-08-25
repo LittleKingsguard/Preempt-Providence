@@ -191,6 +191,15 @@
           (S17), fenced pre, hr, img — the emitted markdown text asserted via
           7 checks.
         </li>
+        <li>
+          <a class="back" href="journal-condensing-scenarios.html"><strong>journal-condensing-scenarios — the bounded-journal demo (Feature 3)</strong></a>
+          — a supervisor with <code>maxJournalLength</code>: a state-slice
+          stream exceeds the threshold → the deferred condense rewrites the
+          pre-base entries into ONE <code>base</code> marker; a
+          <code>replay()</code> graph-REPLACEs + re-applies the post-base
+          entries; a post-base <code>undo()</code> operates on the restored
+          graph (D3). 4 checks.
+        </li>
       </ul>
     </section>
 

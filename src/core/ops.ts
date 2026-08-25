@@ -187,7 +187,7 @@ export function layerApply(op: LayerApplyOp, ctx: OpContext): { minted: NodeId[]
   const decls = (op.decls ?? []).map(d =>
     d.role === 'child' ? { ...d, options: { ...(d.options ?? {}), origin: op.layerId } } : d,
   )
-  target.addLayer({ id: op.layerId, sourceName: op.sourceName, anchors: decls })
+  target.addLayer({ id: op.layerId, sourceName: op.sourceName, anchors: decls, ...(op.preserveByReversal !== undefined ? { preserveByReversal: op.preserveByReversal } : {}) })
   return { minted, doorways: [target.id, ...minted] }
 }
 
@@ -343,7 +343,7 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
       minted.push(mintedNode.id)
     }
     const decls = minted.map((_, i) => ({ role: 'child', target, options: { priority: i, origin: layerId } } as AnchorDecl))
-    target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls })
+  target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls, ...(op.preserveByReversal !== undefined ? { preserveByReversal: op.preserveByReversal } : {}) })
     // OPTION C — the payload record (the single control handle)
     const batch: BatchRecord = {
       prototypeName: op.prototypeName,
@@ -446,7 +446,7 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
     })
     .sort((x, y) => (x.options.priority ?? 0) - (y.options.priority ?? 0))
     .map((a, i) => ({ role: 'child', target, options: { priority: a.options.priority ?? i, origin: layerId } } as AnchorDecl))
-  target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls })
+  target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls, ...(op.preserveByReversal !== undefined ? { preserveByReversal: op.preserveByReversal } : {}) })
   // the record — keyField written ONLY on the keyed path (D2)
   const batch: BatchRecord = {
     prototypeName: op.prototypeName,

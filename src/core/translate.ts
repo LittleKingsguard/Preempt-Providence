@@ -1170,7 +1170,7 @@ export interface ReverseTranslateOptions {
 /** One legacy NodeData from a live node: authored state from the LIVE cache
  *  (user edits preserved); component/placement anchors back to bindings;
  *  content-payload roots excluded from the authored children. */
-function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNodeData {
+function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean, preserved = false): LegacyNodeData {
   const data: LegacyNodeData = {}
   data.type = node.type
   if (node.content !== undefined) data.content = node.content
@@ -1394,8 +1394,22 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean): LegacyNo
   // (never authored): reverse-excluded like the runtimeMinted filter (the
   // authored envelope is base truth; the teardown's promotion clears the
   // marker — a promoted node reverses as authored content).
-  const kids = node.children.filter((c) => !isContentRoot(c) && !c.runtimeMinted && c.originLayer === undefined)
-  if (kids.length > 0) data.children = kids.map((k) => nodeToLegacy(k, isContentRoot))
+  // FEATURE 4 (handoffs-review-9.md D1/D2, ruling 23/26) — PRESERVE-BY-
+  // REVERSAL: a minted child whose origin layer carries `preserveByReversal:
+  // true` ships as a DELIBERATE EDIT (D1 read via the parent→layer
+  // relationship — the minted node's parent holds the layer). Once a preserved
+  // node ships, its descendants ship too (D2 — the threaded `preserved`
+  // context cascades the whole subtree, even for descendants whose own layer
+  // isn't flagged). The flag is consulted ONLY here (the ONE override site).
+  const kids = node.children.filter((c) => {
+    if (isContentRoot(c) || c.runtimeMinted) return false
+    if (c.originLayer === undefined) return true
+    if (preserved) return true
+    const parent = c.parent
+    const layer = parent?.layers.find((l) => l.id === c.originLayer)
+    return layer?.preserveByReversal === true
+  })
+  if (kids.length > 0) data.children = kids.map((k) => nodeToLegacy(k, isContentRoot, preserved || (k.originLayer !== undefined && (k.parent?.layers.find((l) => l.id === k.originLayer)?.preserveByReversal === true))))
   return data
 }
 

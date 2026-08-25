@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — journal-condensing-scenarios: the bounded-journal demo (Feature 3)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .journal-box, .state-box { border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+    .state-box { background: #fff8e7; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="journal-condensing-scenarios">
+  <!--
+    ============================================================================
+    JOURNAL-CONDENSING-SCENARIOS — the Feature 3 bounded-journal demo
+    (docs/specs/handoffs-review-8.md D1-D10, decisions.md JOURNAL-CONDENSING
+    row, 2026-08-25).
+
+    Demonstrates the auto-condensing Supervisor journal for a long-lived host:
+    a `maxJournalLength` init, a sequence of state-slice applies that exceeds
+    the threshold, the deferred microtask condense (pre-base entries → ONE
+    `base` marker), the base marker's `{kind:'base', snapshot}` shape, a
+    replay-from-base (graph-REPLACE restore + post-base re-apply), and the
+    post-base undo (D3 id-resolution to the restored graph).
+
+    The page module is CORE ONLY (dist/core/*) + the harness. It builds a
+    supervisor with `maxJournalLength`, applies a state-slice stream, awaits
+    the deferred condense, and asserts: the journal collapsed to a base marker
+    + post-base entries, the base snapshot is a valid SerializedRenderDoc, a
+    replay-from-base reproduces the post-stream render-relevant state, and a
+    post-base undo operates on the restored graph.
+
+    Banner: `journal-condensing-scenarios`; profile line
+    `[journal-condensing:profile]`; globals `__journalCondensingScenariosDone` +
+    `__journalCondensingScenariosProfile`.
+    ============================================================================
+  -->
+
+  <main>
+    <h1>journal-condensing-scenarios — the bounded-journal demo (Feature 3)</h1>
+    <p class="goals">
+      The auto-condensing Supervisor journal (Feature 3,
+      <code>docs/specs/handoffs-review-8.md</code> D1-D10): a
+      <code>maxJournalLength</code> init bounds a long-lived host's journal
+      growth. A state-slice stream exceeds the threshold → the deferred
+      microtask condense rewrites the pre-base entries into ONE
+      <code>base</code> marker (a serialized graph snapshot). A
+      <code>replay()</code> then restores the graph (graph-REPLACE) + re-applies
+      the post-base entries; a post-base <code>undo()</code> operates on the
+      restored graph (D3 id-resolution). The banner is
+      <code>journal-condensing-scenarios</code>; the profile line is
+      <code>[journal-condensing:profile]</code>.
+    </p>
+
+    <h2>Journal (live)</h2>
+    <div id="journal-box" class="journal-box"></div>
+
+    <h2>Root state (live)</h2>
+    <div id="state-box" class="state-box"></div>
+
+    <!-- the smoke shim seeds these; the page builds its graph programmatically -->
+    <script id="preempt-initial-data" type="application/json">{"main":{"template":{"root":{"type":"app","props":{"id":"root"}}},"content":[]}}</script>
+    <script id="server-data" type="application/json">{"goals":["condense: the journal collapses to ONE base marker","base marker shape: {kind:'base', snapshot} with result {status:'base'}","replay-from-base: graph-REPLACE + post-base re-apply reproduces the post-stream state","post-base undo (D3): the inverse operates on the restored graph"]}</script>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="journal-condensing-scenarios.js"></script>
+</body>
+</html>

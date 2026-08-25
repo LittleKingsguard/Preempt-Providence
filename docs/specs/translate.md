@@ -615,6 +615,11 @@ value-carrying root bindings become SOURCE providers (K6).
 > always ships — including one equal to the mint pattern (base-authored
 > wins; re-translate keeps it — `ensureAutoIds` only fills a missing id). A
 > runtime slice write of a NON-mint `props.id` ships as a live edit.
+> **ADV-S11 (2026-08-25 adversarial pass):** an authored `props.id` that EQUALS
+> the mint pattern `preempt-node-<id>` written via a RUNTIME SLICE is stripped
+> (the base-authored-wins carve-out covers only BASE-authored ids, not a runtime
+> slice write). A data-authoring surprise: a host that writes a mint-pattern id
+> at runtime loses it on reverse.
 > **Rendered-id precedence (handoffs-review REQ-GAP-3):** the rendered `id`
 > attribute is `css.id` when authored, else the authored `props.id`, else the
 > mint — css always overwrites the mint (emit order: props then css, both

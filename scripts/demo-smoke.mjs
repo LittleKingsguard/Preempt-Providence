@@ -806,6 +806,41 @@ await new Promise((r) => setTimeout(r, 250))
   }
 }
 
+// ---- journal-condensing-scenarios page: the Feature 3 bounded-journal demo ---
+// A supervisor with `maxJournalLength`; a state-slice stream exceeds the
+// threshold → the deferred microtask condense rewrites the pre-base entries
+// into ONE `base` marker; the checks assert the collapse, the base marker
+// shape, a replay-from-base (graph-REPLACE + post-base re-apply), and a
+// post-base undo (D3 id-resolution). Profile guard: timed sections cover ~all
+// of the total.
+{
+  const pageHtml = await readFile(`${base}demo/journal-condensing-scenarios.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/journal-condensing-scenarios.js`).catch((e) => {
+    console.error('journal-condensing-scenarios failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__journalCondensingScenariosDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__journalCondensingScenariosProfile
+  if (!prof) {
+    console.error('journal-condensing-scenarios profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`journal-condensing-scenarios profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  if (prof.baseMarkers !== 1) {
+    console.error(`journal-condensing-scenarios baseMarkers=${prof.baseMarkers} (expected 1)`)
+    process.exit(1)
+  }
+}
+
 // ---- markdown-adapter-scenarios page: MarkdownAdapter demo (Feature 2) --------
 // One legacy envelope (headings, bold/italic, link with title, blockquote,
 // nested-list-in-list, fenced pre, hr, img); the module translates it,
@@ -930,6 +965,10 @@ if (!banners.some((b) => b.includes('rows-scenarios') && /0 failed/.test(b))) {
 }
 if (!banners.some((b) => b.includes('markdown-adapter-scenarios') && /0 failed/.test(b))) {
   console.error('markdown-adapter-scenarios page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('journal-condensing-scenarios') && /0 failed/.test(b))) {
+  console.error('journal-condensing-scenarios page did not complete its checks (banner missing)')
   process.exit(1)
 }
 
