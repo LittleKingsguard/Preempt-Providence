@@ -24,6 +24,10 @@ jobs:
 
       - run: npm ci
 
+      # dist/ is gitignored; the demo-driven tests (fork-stress-data) import
+      # ../dist/core/* — build it before running the suite in the clean clone.
+      - run: npm run build
+
       - run: npm test
       - run: npm run typecheck
 
