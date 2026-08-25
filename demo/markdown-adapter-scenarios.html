@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — markdown-adapter-scenarios: MarkdownAdapter exercise (Feature 2)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .md-output { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; font-family: monospace; white-space: pre-wrap; }
+    .md-output h3 { margin-top: 0; }
+    .goals code { background: #eee; padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body data-page="markdown-adapter-scenarios">
+  <!--
+    ============================================================================
+    MARKDOWN-ADAPTER-SCENARIOS — MarkdownAdapter demo (Feature 2, D14 landing).
+
+     Exercises the MarkdownAdapter through `renderProducingProcess(…, adapter)`
+     with a legacy-JSON-envelope-driven page (the handlers-scenarios/rows-
+     scenarios pattern). The document contains every D3 closed type used in
+     the demo: h1, h2, p (with strong/em/link), blockquote>p,
+     div>ul>li (with nested ol), pre (fenced), hr, img.
+
+    Pipeline: translateLegacy → register → compile → renderProducingProcess
+    → applyOps → adapter.toString() → display.
+
+    Runner checks assert the markdown output contains expected content for
+    each section.
+
+    Banner: `markdown-adapter-scenarios`; profile line
+    `[markdown-adapter:profile]`; globals `__markdownAdapterScenariosDone` +
+    `__markdownAdapterScenariosProfile`.
+    ============================================================================
+  -->
+
+  <main>
+    <h1>markdown-adapter-scenarios — MarkdownAdapter exercise</h1>
+    <p class="goals">
+      The <code>MarkdownAdapter</code> (Feature 2, <code>handoffs-review-7.md</code>
+      D1-D15) renders a legacy-JSON-envelope document through
+      <code>renderProducingProcess(…, adapter)</code> and displays the emitted
+      markdown text. The document exercises D3 closed types: headings (h1/h2),
+      paragraph with inline content (strong/em/link with title),
+      blockquote containing a paragraph, a div wrapping a ul with nested ol,
+      a fenced pre block, an hr, and an img. The banner is
+      <code>markdown-adapter-scenarios</code>; the profile line is
+      <code>[markdown-adapter:profile]</code>.
+    </p>
+
+    <!-- Framework input: the ONE legacy envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">{"main":{"template":{"root":{"type":"div","props":{"id":"md-root"},"children":[{"type":"h1","content":"Markdown Adapter Demo"},{"type":"h2","content":"Inline Content"},{"type":"p","children":[{"type":"text","content":"This paragraph has "},{"type":"strong","content":"bold"},{"type":"text","content":", "},{"type":"em","content":"italic"},{"type":"text","content":", and a "},{"type":"a","props":{"href":"http://example.com","title":"a bold link"},"children":[{"type":"text","content":"link with title"}]},{"type":"text","content":"."}]},{"type":"h2","content":"Blockquote"},{"type":"blockquote","children":[{"type":"p","content":"This is a blockquote containing a paragraph."}]},{"type":"h2","content":"List with Nesting"},{"type":"div","children":[{"type":"ul","children":[{"type":"li","content":"First item"},{"type":"li","children":[{"type":"text","content":"Second item with nested list"},{"type":"ol","children":[{"type":"li","content":"Nested ordered one"},{"type":"li","content":"Nested ordered two"}]}]},{"type":"li","content":"Third item"}]}]},{"type":"h2","content":"Code Block"},{"type":"pre","content":"function hello() {\n  console.log('Hello, world!');\n}"},{"type":"hr"},{"type":"h2","content":"Image"},{"type":"img","props":{"src":"http://example.com/image.png","alt":"Example image"}}]}},"content":[],"clientConfig":{"runInstantiation":true,"runRendering":true}}}</script>
+
+    <script id="server-data" type="application/json">{"goals":["M1 headings: h1 and h2 render with # and ## markers","M2 inline content: strong renders **bold**, em renders *italic*, a renders [text](href \"title\")","M3 blockquote: blockquote wraps its paragraph content with > prefix","M4 list nesting: div (transparent container) wraps ul>li with a nested ol inside one li","M5 fenced pre: pre renders as a fenced code block","M6 hr: hr renders as ---","M7 img: img renders as ![alt](src)"]}</script>
+
+    <h3>Markdown Output</h3>
+    <div id="markdown-output" class="md-output"></div>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="markdown-adapter-scenarios.js"></script>
+</body>
+</html>

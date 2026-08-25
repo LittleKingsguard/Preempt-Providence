@@ -16,13 +16,16 @@
  *               and as the raw string in `received-html-data`.
  *   - markdown: __MARKDOWN_RAW__ = the raw markdown editor source, embedded
  *               verbatim for manual inspection alongside the live display.
+ *               __MARKDOWN_ADAPTER_RAW__ = the SAME feature-matrix document
+ *               rendered through the REAL MarkdownAdapter (D14 — the adapter
+ *               is the production shape; the raw source stays a demo fixture).
  * The body `data-mode` + `hidden` reveal state still render per-mode (the
  * dynamic serve additionally populates the live mount in SSR mode).
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildFeatureMatrixPage, renderFeatureMatrixSsrHtml } from './feature-matrix-server.mjs'
+import { buildFeatureMatrixPage, renderFeatureMatrixSsrHtml, renderFeatureMatrixMarkdown } from './feature-matrix-server.mjs'
 import { demoData } from '../demo/feature-matrix-fixture.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -57,6 +60,7 @@ export async function buildModeTogglePage(mode = 'client') {
   const template = await readFile(join(ROOT, 'demo', 'mode-toggle.template.html'), 'utf8')
   const ssrHtml = renderFeatureMatrixSsrHtml()
   const rawMarkdown = rawMarkdownSource()
+  const markdownAdapterOutput = renderFeatureMatrixMarkdown()
   return template
     .replace('__MODE__', mode)
     .replace('__SSR_HIDDEN__', mode === 'ssr' ? '' : ' hidden')
@@ -64,6 +68,7 @@ export async function buildModeTogglePage(mode = 'client') {
     .replace('__SSR_HTML__', () => ssrHtml)
     .replace('__SSR_HTML_RAW__', () => ssrHtml)
     .replace('__MARKDOWN_RAW__', () => escHtml(rawMarkdown))
+    .replace('__MARKDOWN_ADAPTER_RAW__', () => markdownAdapterOutput)
     .replace('__PREEMPT_INITIAL_DATA__', () => JSON.stringify(doc))
     .replace('__SERVER_DATA__', () => JSON.stringify(serverData))
 }

@@ -292,6 +292,24 @@ export function evictDestroyedNode(node: Node): void {
   unregisterMinted(node.id)
 }
 
+/** Journal-condensing (D4, handoffs-review-8.md) — the SYNCHRONOUS
+ *  pending-destroy drain: finalize + evict every queued node NOW, so the
+ *  `_restoreBase` graph-REPLACE critical section can run without an async
+ *  sweep interleaving (a deferred sweep must never finalize a NEW seed).
+ *  Mirrors the async runSweep's per-node handling; the pass-2 compile half
+ *  is NOT run here (the restore schedules its own full pass-2 refresh). */
+export function drainPendingDestroy(): void {
+  const batch = pendingDestroy.splice(0)
+  for (const node of batch) {
+    const flag = cascadeFlags.get(node)
+    cascadeFlags.delete(node)
+    if (node.destroyed) continue
+    if (node.state === 'in-tree' || node.state === 'prototype') continue
+    if (isContentNode(node)) continue
+    finalizeDestroyed(node, flag)
+  }
+}
+
 /** REQ-GAP-11 — the per-supervisor sweep hook seam (handoffs-review-2 §5
  *  accepted shape: "a sweep hook (or the destroy path) evicts the finalized
  *  node from this.nodes"). The sweep is module-level; each Supervisor

@@ -182,7 +182,7 @@ engine-owned, not per-host derivation.
 renderer's own drain — the method takes it as the CALLER of the report, never
 from inside a handler getter). Explicit rejections (pinned): **journal-
 snapshot derivation** (O(journal) per dispatch — pins in the exact cost the
-host complained about; the journal stays append-only for replay), and
+host complained about; the journal stays append-only for replay — **append-only BETWEEN condensations, Feature 3 (handoffs-review-8.md D7, 2026-08-25: a condense rewrites the pre-base window into ONE `base` marker)**), and
 **`takePass2States` from handler getters** (renderer-owned drain).
 
 ### 3.3 Idempotency — OPT-IN bounded `requestId` dedup

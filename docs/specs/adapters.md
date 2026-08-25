@@ -474,9 +474,15 @@ text when no href (never a dangling `[]()`); `blockquote` → `> `; `code`/`pre`
 (D3) — render their text + inline children, no marker.
 
 **Escaping (D9):** adapter-emitted markers are unescaped; CONTENT
-metacharacters are escaped at line-leading (`#`, `>`, `-`, `N. `) and
-inline-pairing (`*`, `_`, backtick, `[`, `]`, `(`, `)`) positions — so a
-literal `# heading` in text stays literal, never a false structural marker.
+metacharacters are escaped globally (`*`, `_`, backtick, `[`, `]`, `(`, `)`)
+and at line-leading (`#`, `>`, `-`, `N. `) positions — so a literal `#
+heading` in text stays literal, never a false structural marker. The
+global escape of `(` and `)` protects link/code delimiters in all contexts
+(not only at pairing positions). **MD-PRE-ESCAPE carve-out (2026-08-25):**
+the content INSIDE a fenced `pre` is NOT escaped — the triple-backtick
+fence IS the escape mechanism, so `function hello() {` emits verbatim
+(fences are literal; escaping would corrupt code with stray backslashes).
+`code` (inline backtick) content follows the general D9 rule.
 
 **Parity (D12):** the markdown adapter is a **NEW parity family, NOT a PAR-5
 extension** — the lossy text output (attrs/handlers/node-ids dropped by ruling
@@ -736,7 +742,8 @@ and `render-helpers.ts` need no DOM.
 | MD-H6 | `setProp(w,'css:style',…)` / `css:classes` | dropped — emphasis from element TYPE only (D5) |
 | MD-H7 | `div`/`span`/`section`/unknown | transparent container — render text + inline children, no marker |
 | MD-H8 | `blockquote` / `code`/`pre` / `hr` / `br` / `img` | `> quote` / backtick / `---` / newline / `![alt](src)` |
-| MD-H9 | content text with markdown metacharacters | escaped at line-leading + inline-pairing (D9); adapter markers unescaped |
+| MD-H9 | content text with markdown metacharacters | globally escaped (`*`, `_`, backtick, `[`, `]`, `(`, `)`) + line-leading escaped (`#`, `>`, `-`, `N. `); adapter markers unescaped (D9). **Fence content (pre) is NOT escaped — MD-PRE-ESCAPE carve-out (2026-08-25)** |
+| MD-H9b | `inlineContent` child filtering | pulls ONLY true inline children (text/strong/em/a/code/img/br/span — `classify === 'inline'`); headings/lists/pre/hr/blockquote render as their own lines, never folded into the parent's inline line (MD-INLINE-FILTER, 2026-08-25) |
 | MD-H10 | `removeEl` a child; `appendChild` a reorder | subtree text vanishes; reorder splices by identity (no duplicate text — D8) |
 | MD-H11 | empty doc / empty container | `''` / nothing (D11) |
 | MD-H12 | set-only re-render (`setProp` after create) | folds onto the retained tree (D2/D10 — `fragments` is the sole source) |

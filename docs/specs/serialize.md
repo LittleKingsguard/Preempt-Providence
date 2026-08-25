@@ -156,6 +156,14 @@ DEFECT #9 semantics, `translateLegacy` uses the same factory internally):
   Tracked: defects.md ADVERSARIAL-S4.
 - **Handlers stay runtime-only**: function bodies never serialize; a host
   re-supplies bodies by name (the layer seam — see handlers.md §6).
+- **Feature 3 base (2026-08-25, handoffs-review-8.md D2/D9):** the condensed
+  journal base is a `SerializedRenderDoc` — it INHERITS every residual above
+  (handler bodies stay post-base; minted-row/link ids are fresh on re-mint;
+  the literal layer-stack structure is lost while its value effects survive
+  via the merged canon). "Reproduces the full stream exactly" is scoped to
+  SER-R1 render-relevant state + the post-base no-journal re-apply. A base
+  marker written by an older engine fails `NodeSchema-shape-mismatch` at the
+  restore's `loadState` (the existing schema boundary — contained).
 
 ## 5. Round-trip guarantees
 

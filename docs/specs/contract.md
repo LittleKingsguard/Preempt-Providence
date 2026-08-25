@@ -217,14 +217,14 @@ forms below must work:
 export type JournalEntry = { id: string; op: MutationOp }
 
 export class Supervisor {
-  constructor(init: { hub: LinkConfigNameHub; events: EventBridge })   // api.test.ts form
+  constructor(init: { hub: LinkConfigNameHub; events: EventBridge; maxJournalLength?: number })   // api.test.ts form; Feature 3: absent = never condenses
   constructor(root: Node, nodes: Map<string, Node>)                     // ops.test.ts form
-  readonly journal: JournalEntry[]        // replayable op stream, appended by apply()
+  readonly journal: JournalEntry[]        // replayable op stream, appended by apply(); **append-only BETWEEN condensations (Feature 3, handoffs-review-8.md D7 — a condense rewrites the pre-base window into ONE base marker; the base is NOT entry-by-entry replayable)**
   registerNode(node: Node): void          // registers in the owned registry
   apply(op: WireMutationOp | MutationOp): ApplyStatus   // wire shape resolved via registry; journals
-  replay(): void                          // re-execute journal in order on the current registry
-  undo(): void                            // invert/undo last journaled op
-  redo(): void                            // reapply the undone op
+  replay(): void                          // re-execute journal in order on the current registry; **a base marker triggers _restoreBase (graph-REPLACE) then the post-base entries re-apply no-journal**
+  undo(): void                            // invert/undo last journaled op; **cannot cross the base boundary (base-boundary warn + fail, ruling 19); post-base undo id-resolves to the restored graph (D3)**
+  redo(): void                            // reapply the undone op; **id-resolves to the restored graph after replay-from-base (D3)**
 }
 ```
 

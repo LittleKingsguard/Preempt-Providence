@@ -63,6 +63,52 @@ describe('G-S3 — pre is fenced', () => {
   })
 })
 
+describe('G-PRE-ESCAPE — fence content is LITERAL (MD-PRE-ESCAPE fix)', () => {
+  it('( ) * # backticks inside a pre are NOT escaped (the fence is the escape)', () => {
+    const a = fresh()
+    a.createEl('pre', 'p'); a.setProp('p', 'text', 'function hello() {\n  return 1 * 2; // (#)\n}')
+    expect(a.toString()).toBe('```\nfunction hello() {\n  return 1 * 2; // (#)\n}\n```')
+  })
+  it('a line-leading # inside the fence stays a literal # (no \\# escape)', () => {
+    const a = fresh()
+    a.createEl('pre', 'p'); a.setProp('p', 'text', '# not a heading')
+    expect(a.toString()).toBe('```\n# not a heading\n```')
+  })
+  it('multi-line fence content with + and > stays verbatim', () => {
+    const a = fresh()
+    a.createEl('pre', 'p'); a.setProp('p', 'text', 'a > b\nc + d')
+    expect(a.toString()).toBe('```\na > b\nc + d\n```')
+  })
+})
+
+describe('G-INLINE-FILTER — inlineContent pulls only TRUE inline children (MD-INLINE-FILTER fix)', () => {
+  it('a block container with heading + pre children does NOT fold them into its inline line (no marker-less head, no escaped pre)', () => {
+    const a = fresh()
+    a.createEl('div', 'd')
+    a.createEl('h1', 'h'); a.setProp('h', 'text', 'Title')
+    a.createEl('pre', 'p'); a.setProp('p', 'text', 'x = f(a)')
+    a.appendChild('d', 'h')
+    a.appendChild('d', 'p')
+    expect(a.toString()).toBe('# Title\n```\nx = f(a)\n```')
+  })
+  it('a heading inside a paragraph stays OUT of the paragraph inline line (rendered as its own line)', () => {
+    const a = fresh()
+    a.createEl('div', 'd')
+    a.createEl('p', 'p'); a.setProp('p', 'text', 'lead-in')
+    a.createEl('h2', 'h'); a.setProp('h', 'text', 'Sub')
+    a.appendChild('d', 'p')
+    a.appendChild('d', 'h')
+    expect(a.toString()).toBe('lead-in\n## Sub')
+  })
+  it('true inline children (strong/em/a) still fold into the parent inline line', () => {
+    const a = fresh()
+    a.createEl('p', 'p')
+    a.createEl('strong', 's'); a.setProp('s', 'text', 'Bold')
+    a.appendChild('p', 's')
+    expect(a.toString()).toBe('**Bold**')
+  })
+})
+
 describe('G-S4 — link title is escaped', () => {
   it('a title with a double-quote is escaped (no broken (href "…"))', () => {
     const a = fresh()

@@ -56,6 +56,18 @@ if (mode === 'ssr') {
   }
 }
 
+// Markdown mode: mirror the embedded MarkdownAdapter output into the inspection
+// pane (raw text/plain script → pre, like the SSR arm above).
+let markdownAdapterOutput = ''
+if (mode === 'markdown') {
+  const raw = document.getElementById('markdown-adapter-data')
+  const pane = document.getElementById('markdown-adapter-raw')
+  if (raw) {
+    markdownAdapterOutput = raw.textContent ?? ''
+    if (pane) pane.textContent = markdownAdapterOutput
+  }
+}
+
 const initialData = JSON.parse(document.getElementById('preempt-initial-data').textContent)
 const serverData = JSON.parse(document.getElementById('server-data').textContent)
 
@@ -68,5 +80,6 @@ runFeatureMatrixTests({
   mode,
   receivedHtml,
   markdownSource: document.getElementById('markdown-source')?.textContent ?? '',
+  markdownAdapterOutput,
   title: `Mode toggle — ${mode}`,
 })

@@ -53,6 +53,7 @@ export async function runFeatureMatrixTests({
   mode = 'client',
   receivedHtml = '',
   markdownSource = '',
+  markdownAdapterOutput = '',
   title = 'Feature Matrix',
 }) {
   const runner = makeRunner()
@@ -563,6 +564,15 @@ export async function runFeatureMatrixTests({
       // assert it carries the re-parsed content, not the stale initial value
       if (!nodeText(byName['md-prefix'])) throw new Error('markdown display not rendered (md-prefix empty)')
       if (nodeText(byName['md-bold']) !== 'friend') throw new Error(`live display did not re-parse bold: "${nodeText(byName['md-bold'])}"`)
+    })
+
+    await runner.check('markdown mode (D14): the feature-matrix document renders through the REAL MarkdownAdapter (embedded adapter output — key doc content present, no HTML surface leaked, content escaping is the D9 contract)', () => {
+      if (!markdownAdapterOutput) throw new Error('markdown-adapter output not embedded')
+      if (!markdownAdapterOutput.includes('Feature Matrix')) throw new Error('adapter output missing the document title text')
+      if (!markdownAdapterOutput.includes('Preempt renders placements')) throw new Error('adapter output missing the article body text')
+      if (!markdownAdapterOutput.includes('theme: dark') || !markdownAdapterOutput.includes('theme: light')) throw new Error('adapter output missing the fork-arm themes')
+      if (!markdownAdapterOutput.includes('First comment.')) throw new Error('adapter output missing the payload content')
+      if (/<div[ >]|<span[ >]|<section[ >]/.test(markdownAdapterOutput)) throw new Error(`adapter output leaked HTML surface: ${markdownAdapterOutput.slice(0, 80)}`)
     })
 
     // restore the editor to the SHIPPED raw source (the harness's typing test

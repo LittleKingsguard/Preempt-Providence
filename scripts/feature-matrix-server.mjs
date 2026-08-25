@@ -15,7 +15,7 @@
  */
 import { diffMinimal } from '../dist/core/render.js'
 import { serializeSlice } from '../dist/core/serialize.js'
-import { SSRFragmentAdapter } from '../dist/core/adapters.js'
+import { SSRFragmentAdapter, MarkdownAdapter } from '../dist/core/adapters.js'
 import { applyOps } from '../dist/core/render-helpers.js'
 import { emitElements } from '../dist/core/render-helpers.js'
 import { treeFromOps, treeSig } from '../dist/core/render-helpers.js'
@@ -108,4 +108,20 @@ export function renderFeatureMatrixSsrHtml() {
     throw new Error('server-rendered SSR HTML diverges from the parity reference')
   }
   return html
+}
+
+/** The feature-matrix document rendered through the REAL MarkdownAdapter
+ *  (src/core/adapters.ts — the D14 "adapter is the production shape" arm).
+ *  The SAME emitted surface as the SSR arm feeds the op stream; toString()
+ *  yields the markdown text. Non-empty is asserted here (the page + smoke
+ *  pin it too) so a renderer regression fails at the BUILDER, not the page. */
+export function renderFeatureMatrixMarkdown() {
+  const { serverOps } = buildFeatureMatrixSurface()
+  const adapter = new MarkdownAdapter()
+  applyOps(adapter, serverOps)
+  const md = adapter.toString()
+  if (typeof md !== 'string' || md.length === 0) {
+    throw new Error('feature-matrix markdown render is empty')
+  }
+  return md
 }

@@ -5,8 +5,8 @@
 // Depends on the Node class only through its public surface; `findCycle` is
 // the sole runtime import from node.js (used at call time, so the circular
 // import between the two modules is safe).
-import { findCycle } from './node.js'
-import type { Node } from './node.js'
+import { findCycle, reconcileParentTargets, Node } from './node.js'
+import type { Node as NodeType } from './node.js'
 import { Link } from './link.js'
 import { CycleError, SingleParentError } from './errors.js'
 import { EventBridge } from './events.js'
@@ -14,9 +14,10 @@ import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
 import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
-import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin } from './registry.js'
+import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin, drainPendingDestroy, defRootPrototypeEntries, defPrototypeEntries } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
+import { serializeSlice, loadState, reRegisterDefPrototypes } from './serialize.js'
 import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
 
 let journalSeq = 0
@@ -126,19 +127,26 @@ export class Supervisor {
   private redoStack: JournalEntry[] = []
   private client: ClientAPI | null = null
   private handlerCtx: HandlerContext | null = null
+  /** Feature 3 (handoffs-review-8.md, ruling 17) — the condense trigger:
+   *  absent = never; a journal length above it schedules a deferred condense
+   *  (D5). Read-only once constructed. */
+  private readonly maxJournalLength: number | undefined
+  private condenseScheduled = false
 
-  constructor(rootOrOpts: Node | { hub?: LinkConfigNameHub; events?: EventBridge }, nodes?: Map<NodeId, Node>) {
+  constructor(rootOrOpts: Node | { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number }, nodes?: Map<NodeId, Node>) {
     this.hub = null
     this.events = null
+    this.maxJournalLength = undefined
     if (rootOrOpts !== null && typeof rootOrOpts === 'object' && (rootOrOpts as { isNode?: boolean }).isNode === true) {
       const root = rootOrOpts as Node
       this.nodes = nodes ?? new Map<NodeId, Node>()
       this.nodes.set(root.id, root)
     } else {
-      const opts = rootOrOpts as { hub?: LinkConfigNameHub; events?: EventBridge }
+      const opts = rootOrOpts as { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number }
       this.nodes = new Map<NodeId, Node>()
       this.hub = opts.hub ?? null
       this.events = opts.events ?? null
+      this.maxJournalLength = opts.maxJournalLength
     }
     // REQ-GAP-11 — the sweep-hook seam: cascade-finalized nodes (the sweep's
     // own finalization, terminal) leave this supervisor's scan surfaces too.
@@ -567,7 +575,165 @@ export class Supervisor {
     this.journal.push(entry)
     this.undoStack.push(entry)
     this.redoStack = []
+    // Feature 3 (ruling 17, D5) — the O(1) condense trigger: a journal above
+    // the configured length schedules a DEFERRED condense (microtask — never
+    // an inline O(graph) serialize in apply's hot path; D5). Suppressed
+    // applies (redo/replay) never trigger it — the journal is not growing.
+    if (this.maxJournalLength !== undefined && this.journal.length > this.maxJournalLength) {
+      this.scheduleCondense()
+    }
     return entry
+  }
+
+  /** Feature 3 (D5) — schedule the deferred condense ONCE (a microtask); the
+   *  condense itself runs after the triggering op returns, so a tight apply
+   *  loop never blocks on the O(graph) serialize. */
+  private scheduleCondense(): void {
+    if (this.condenseScheduled) return
+    this.condenseScheduled = true
+    setTimeout(() => {
+      this.condenseScheduled = false
+      this.condense()
+    }, 0)
+  }
+
+  /** Feature 3 (D5/D6/D7) — the condense: build the base snapshot (the
+   *  round-trip recipe, D1), size-guard (D5), and rewrite the journal to ONE
+   *  base marker. Failure-contained (D5): a serialize throw aborts with a
+   *  `condense-aborted` warn and the journal is UNTOUCHED. */
+  /** Feature 3 (D5) — the honest memory-win guard: a base ≥ the journal it
+   *  replaces is a regression; warn + skip (the host raises the threshold).
+   *  Sizes are ESTIMATED with a circular-safe walk. LIVE node references
+   *  (op.node / op.target) count as a fixed O(1) pointer — the journal's
+   *  actual memory is the DATA payloads, not the graph they reference (which
+   *  the base ALSO captures; recursing into the node graph would double-count
+   *  it and make the guard never skip). */
+  private static estBytes(v: unknown, seen: Set<object> = new Set()): number {
+    if (v === null || v === undefined) return 4
+    const t = typeof v
+    if (t === 'string') return (v as string).length
+    if (t === 'number' || t === 'boolean') return 8
+    if (t === 'function') return String(v).length
+    if (t === 'object') {
+      if (seen.has(v as object)) return 4 // circular ref — counted once
+      // a LIVE NODE (op.node / op.target) — count as an O(1) pointer; the
+      // graph it owns is captured by the base, not the journal payload
+      if ((v as { isNode?: boolean }).isNode === true) return 8
+      seen.add(v as object)
+      if (Array.isArray(v)) {
+        let n = 4
+        for (const e of v) n += Supervisor.estBytes(e, seen)
+        return n
+      }
+      let n = 8
+      for (const [, val] of Object.entries(v as Record<string, unknown>)) n += Supervisor.estBytes(val, seen)
+      return n
+    }
+    return 8
+  }
+
+  private condense(): void {
+    if (this.journal.length === 0) return
+    const preLen = this.journal.length
+    try {
+      const root = this.allNodes().find((n) => {
+        const child = n.childAnchor()
+        if (!child) return false
+        const pa = child.link.anchorsOf('parent')[0]
+        return pa !== undefined && pa.target === 'rootNode'
+      })
+      if (!root) return
+      // D8 — the capture slice = allNodes() ∪ the def-prototype registry
+      // (plain prototypes stay OUT of this.nodes by design — serialize.md §3
+      // step 5; the census must still ship them so the restore re-registers
+      // them and a post-restore rows-mint by name resolves). ADV-S12 — the
+      // pull is GRAPH-FILTERED: prototypes built on a DIFFERENT hub (another
+      // graph in this process) must not leak into this base (the census is
+      // instance-membership-scoped to THIS graph's nodes).
+      const protoSet = new Set<Node>()
+      for (const [, protos] of defPrototypeEntries()) for (const p of protos) if (p.hubFor === this.hub) protoSet.add(p)
+      for (const [, r] of defRootPrototypeEntries()) if (r.hubFor === this.hub) protoSet.add(r)
+      const kids = this.allNodes()
+      for (const p of protoSet) if (p !== root) kids.push(p)
+      const snapshot = serializeSlice(root, kids) as never
+      const baseBytes = Supervisor.estBytes(snapshot)
+      const journalBytes = Supervisor.estBytes(this.journal.slice(0, preLen))
+      if (baseBytes >= journalBytes) {
+        console.warn(`condense-skipped-size at journal-${journalSeq}: base ${baseBytes}B >= pre-base journal ${journalBytes}B; no rewrite (raise maxJournalLength)`)
+        return
+      }
+      const marker: JournalEntry = {
+        id: `journal-${journalSeq++}`,
+        op: { kind: 'base', snapshot },
+        result: { status: 'base' },
+      }
+      // D6 — the rewrite: ONE base marker replaces the pre-base entries; the
+      // marker is NEVER pushed to undoStack; redoStack clears (a pre-base
+      // entry lingering there would double-apply); undoStack truncates to the
+      // post-base entries.
+      this.journal.splice(0, preLen, marker)
+      const baseIds = new Set(this.journal.slice(1).map((e) => e.id))
+      this.undoStack = this.undoStack.filter((e) => baseIds.has(e.id))
+      this.redoStack = []
+    } catch (e) {
+      // D5 — failure containment: never a partial rewrite
+      console.warn(`condense-aborted: ${(e as Error)?.message ?? String(e)}; journal untouched`)
+    }
+  }
+
+  /** Feature 3 (D4) — the SYNCHRONOUS graph-REPLACE restore: drain the
+   *  pending-destroy queue + evict the pre-base nodes, clear this.nodes, run
+   *  the §3 recipe (loadState → seed with the SAME hub → reconcileParentTargets
+   *  → reRegisterDefPrototypes → registerNode per node → re-mint rows per the
+   *  batches records), then schedule a FULL pass-2 refresh. The async sweep
+   *  cannot interleave (the drain ran synchronously). Re-runnable: a second
+   *  restore drains the first restore's nodes the same way. */
+  private _restoreBase(snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown }): void {
+    // step 1 — drain + evict every pre-base node (synchronous critical section)
+    drainPendingDestroy()
+    for (const n of [...this.nodes.values()]) {
+      evictDestroyedNode(n)
+      this.nodes.delete(n.id)
+    }
+    this.destroyedRefs.clear()
+    // step 2 — the §3 recipe (D1: the round-trip, executed in-process).
+    // The template (root) seeds FIRST, then the content states (the §3
+    // ordering — a def-root must precede its def-children).
+    const hub = this.hub
+    if (!hub) return
+    const doc = snapshot as unknown as { template: unknown; content: unknown[] }
+    const seeds: Node[] = []
+    seeds.push(new Node(doc.template as never, hub))
+    for (const d of loadState(doc as never)) seeds.push(new Node(d as never, hub))
+    reconcileParentTargets(seeds)
+    reRegisterDefPrototypes(doc as never, hub, seeds as never[])
+    for (const n of seeds) this.registerNode(n)
+    // step 3 — re-mint rows per the batches records (step 4.5 of the §3
+    // recipe; fresh ids — the serialize.md §4 residual). Runs with the
+    // journal suppressed — the restore must not grow the journal.
+    for (const n of seeds) {
+      const batches = (n as unknown as { batches?: Record<string, { prototypeName: string; mintKind?: string; placementName?: string; keyField?: string; rows: unknown[] }> }).batches
+      if (!batches) continue
+      for (const [hookName, rec] of Object.entries(batches)) {
+        this.apply({
+          kind: 'rows-mint',
+          target: n,
+          hookName,
+          mintKind: rec.mintKind ?? 'component',
+          prototypeName: rec.prototypeName,
+          ...(rec.placementName !== undefined ? { placementName: rec.placementName } : {}),
+          ...(rec.keyField !== undefined ? { keyField: rec.keyField } : {}),
+          rows: rec.rows,
+          sourceName: 'condense-restore',
+        } as never, { journal: false, quiet: true })
+      }
+    }
+    // step 4 — the full pass-2 refresh: every restored node is remote-dirty,
+    // so the renderer sees a consistent window (no stale compiled states).
+    for (const n of seeds) {
+      n.markDirty('remote')
+      this.markPass2(n.id)
+    }
   }
 
   /** INTERNAL (handoffs-review-4.md §3c — redo/replay use it): re-apply an op
@@ -575,7 +741,13 @@ export class Supervisor {
    *  entry's `result` in place instead). The public `apply` signature is
    *  unchanged; `opts` is underscored-internal. */
   private suppressJournal = false
-  apply(op: { kind: string; node?: Node; [key: string]: unknown }, opts?: { journal?: boolean; skipKindGate?: boolean }): {
+  /** ADV-S5 (2026-08-25 adversarial pass) — the internal restore re-mint is a
+   *  QUIET graph-REPLACE: `_restoreBase` runs rows-mint through `apply` with
+   *  `quiet:true`, which suppresses the before-compile phase handlers + the
+   *  `structure` event (a restore must not fire side effects the journal does
+   *  not record). Mirrors `suppressJournal`. */
+  private quietApply = false
+  apply(op: { kind: string; node?: Node; [key: string]: unknown }, opts?: { journal?: boolean; skipKindGate?: boolean; quiet?: boolean }): {
     status: 'applied' | 'no-usable-state' | 'rejected'
     journalId?: string
     dirtied?: NodeId[]
@@ -591,6 +763,8 @@ export class Supervisor {
     const node = op.node as Node | undefined
     const prevSuppress = this.suppressJournal
     if (opts?.journal === false) this.suppressJournal = true
+    const prevQuiet = this.quietApply
+    if (opts?.quiet) this.quietApply = true
     if (!node && op.kind !== 'clone-instance' && op.kind !== 'layer-apply' && op.kind !== 'rows-mint' && op.kind !== 'rows-clear') {
       this.suppressJournal = prevSuppress
       return { status: 'rejected', error: { code: 'unknown-node' } }
@@ -616,9 +790,11 @@ export class Supervisor {
     }
 
     // before-compile: phase handlers run before the op executes (and its
-    // compile/apply happens). Errors are contained by dispatchPhase.
+    // compile/apply happens). Errors are contained by dispatchPhase. A QUIET
+    // apply (the restore re-mint, ADV-S5) skips them — a restore is an
+    // internal graph-REPLACE, not a user op.
     const phaseTarget = op.kind === 'layer-apply' || op.kind === 'rows-mint' || op.kind === 'rows-clear' ? (op.target as Node | undefined) : node
-    if (phaseTarget) this.runPhaseOnNode('before-compile', phaseTarget)
+    if (phaseTarget && !this.quietApply) this.runPhaseOnNode('before-compile', phaseTarget)
 
     try {
       if (op.kind === 'state-slice') {
@@ -949,7 +1125,12 @@ export class Supervisor {
             }
           }
         }
-        this.emitStructure('rows-mint', target.id)
+        if (this.quietApply) {
+          // ADV-S5 — the restore re-mint is a QUIET internal op: no structure
+          // event (the renderer must not see a forward rows-mint for a restore)
+        } else {
+          this.emitStructure('rows-mint', target.id)
+        }
         this.markPass2(target.id)
         // NOTE: the minted rows are NOT independently pass-2'ed — their
         // element states are produced by the ancestor/consumer compiles that
@@ -1011,6 +1192,7 @@ export class Supervisor {
       throw e
     } finally {
       this.suppressJournal = prevSuppress
+      this.quietApply = prevQuiet
     }
   }
 
@@ -1020,6 +1202,14 @@ export class Supervisor {
     // loop for any op that applies successfully on replay. The replayed ops
     // are the ORIGINAL entries only.
     for (const entry of [...this.journal]) {
+      // Feature 3 (D6) — the base branch runs FIRST: a base marker restores
+      // the graph snapshot (D4) and is NEVER dispatched to apply(). The
+      // post-base entries then re-apply with their existing gates below.
+      if (entry.op.kind === 'base') {
+        const snapshot = (entry.op as { snapshot?: { template: unknown; content: unknown[] } }).snapshot
+        if (snapshot) this._restoreBase(snapshot)
+        continue
+      }
       // DEFECT-JOURNAL-REPLAY-APPEND + DEFECT-CLONE-REPLAY-NONIDEMPOTENT
       // (handoffs-review-4.md §3b/§4) — the idempotency gate: a state-slice
       // whose recorded sliceLayers all exist is already applied (skip);
@@ -1035,14 +1225,12 @@ export class Supervisor {
       if (kind === 'state-slice' && entry.op.mutation && this.gateBlocksReplay(entry, result)) continue
       if (kind === 'clone-instance' && result.minted && result.minted.every((id) => !this.nodes.get(id)?.destroyed)) continue
       const op = { ...entry.op } as { kind: string; node?: Node; [key: string]: unknown }
-      // resolve from the entry's own live reference first; id-resolution is
-      // only a fallback (shared-id loadState-re-seeded graphs).
-      const liveNode = entry.op.node as Node | undefined
-      if (op.node && liveNode && !liveNode.destroyed) {
-        op.node = liveNode
-      } else if (op.node) {
-        op.node = this.nodes.get((op.node as Node).id) ?? op.node
-      }
+      // Feature 3 (D3) — id-resolve BOTH the live node ref AND the rows-op
+      // target (ADV-S11/S19: the rows ops carry their subject on `op.target`,
+      // not `op.node`). A `_restoreBase`-evicted ref resolves by id to the
+      // restored seed; the live ref is preferred only while it is STILL this
+      // supervisor's registered node.
+      this._resolveOpRefs(op, entry.op)
       try {
         // no-journal re-apply + in-place result refresh (the re-apply mints
         // fresh slice layer ids — the recorded ones would go stale).
@@ -1063,10 +1251,46 @@ export class Supervisor {
         // replay reproduces same rejections silently
       }
     }
+    // ADV-S4 (2026-08-25 adversarial pass) — a replay that hit a base marker
+    // must CLEAR the redoStack. D6 clears it at condense; replay runs AFTER
+    // the condense (a host can replay a condensed journal) and must not leave
+    // pre-replay undo entries in the redoStack — a subsequent redo would
+    // re-apply an op already consumed by the replay/undo and double-apply it
+    // (worst for non-idempotent rows-mint/destroy). Clearing on the base
+    // branch makes replay a clean graph-REPLACE (the pre-replay undo/redo
+    // state is meaningless against the restored graph).
+    if (this.journal.some((e) => e.op.kind === 'base')) this.redoStack = []
+  }
+
+  /** Feature 3 (D3, ADV-S11/S19) — id-resolve BOTH the live node ref and the
+   *  rows-op target against the CURRENTLY registered nodes, so a replay/redo/
+   *  undo after a `_restoreBase` graph-REPLACE targets the restored seed (same
+   *  ids, fresh objects). The live ref is preferred only while it is STILL
+   *  this supervisor's registered node; otherwise the id fallback resolves it
+   *  (or leaves it untouched if the id is gone). */
+  private _resolveOpRefs(op: { node?: Node; target?: Node; [key: string]: unknown }, from: { node?: Node; target?: Node; [key: string]: unknown }): void {
+    const resolveOne = (key: 'node' | 'target'): void => {
+      const live = from[key] as Node | undefined
+      const current = op[key] as Node | undefined
+      if (current && live) {
+        if (!live.destroyed && this.nodes.get(live.id) === live) {
+          op[key] = live
+        } else {
+          op[key] = this.nodes.get(live.id) ?? live
+        }
+      }
+    }
+    resolveOne('node')
+    resolveOne('target')
   }
 
   private gateBlocksReplay(entry: JournalEntry, result: { sliceLayers?: string[]; hookUndo?: { name: string; preValue: unknown; created: boolean; cleared: boolean }[] }): boolean {
-    const node = (entry.op.node ?? entry.op.target) as Node | undefined
+    // Feature 3 (D3) — resolve the node by id FIRST: after a replay-from-base
+    // the entry's live ref is the evicted pre-base object whose layers still
+    // exist (the gate would wrongly skip the post-base re-apply). The id
+    // fallback targets the CURRENTLY REGISTERED node (same ids, fresh seeds).
+    const rawNode = (entry.op.node ?? entry.op.target) as Node | undefined
+    const node = rawNode ? (this.nodes.get(rawNode.id) ?? rawNode) : undefined
     if (!node) return false
     if (result.sliceLayers && result.sliceLayers.length > 0) {
       if (!result.sliceLayers.every((id) => node.layers.some((l) => l.id === id))) return false
@@ -1085,17 +1309,28 @@ export class Supervisor {
   }
 
   undo(): void {
-    if (this.undoStack.length === 0) return
+    // Feature 3 (ruling 19) — the base-boundary guard: an undo with no
+    // post-base entries left (the undoStack was truncated at condense) would
+    // have to cross the base marker — warn + fail, never a silent no-op,
+    // never a partial restore.
+    if (this.undoStack.length === 0) {
+      if (this.journal.some((e) => e.op.kind === 'base')) {
+        console.warn('base-boundary: undo cannot cross the condensed base marker (undoStack truncated at condense)')
+      }
+      return
+    }
     const entry = this.undoStack.pop()!
     this.redoStack.push(entry)
     const kind = entry.op.kind
     const rawNode = entry.op.node ?? entry.op.target
     const node = rawNode as Node
     if (!node) return
-    // resolve from the entry's own live reference first; id-resolution is
-    // only a fallback. Undo on a destroyed node is a silent no-op — never
-    // throws (`destroyed node writes are rejected`).
-    const resolved = !node.destroyed ? node : null
+    // Feature 3 (D3) — the id-fallback: after a replay-from-base the pre-base
+    // node OBJECTS are replaced by fresh seeds with the SAME ids; undo() must
+    // re-resolve an evicted/destroyed live ref by id (mirror of replay's
+    // resolution — prefer the live ref only when it is STILL this supervisor's
+    // registered node; the wrong-node hazard note handoffs-review-4 §5).
+    const resolved = !node.destroyed && this.nodes.get(node.id) === node ? node : (this.nodes.get(node.id) ?? null)
     if (!resolved) return
     try {
       if (kind === 'attach') {
@@ -1231,12 +1466,10 @@ export class Supervisor {
     if (this.redoStack.length === 0) return
     const entry = this.redoStack.pop()!
     const op = { ...entry.op } as { kind: string; node?: Node; [key: string]: unknown }
-    const liveNode = entry.op.node as Node | undefined
-    if (op.node && liveNode && !liveNode.destroyed) {
-      op.node = liveNode
-    } else if (op.node) {
-      op.node = this.nodes.get((op.node as Node).id!) ?? op.node
-    }
+    // Feature 3 (D3, ADV-S19) — id-resolve BOTH op.node AND op.target (the
+    // rows ops carry their subject on op.target; a _restoreBase-evicted ref
+    // must resolve to the restored seed).
+    this._resolveOpRefs(op, entry.op)
     try {
       // no-journal re-apply + in-place result refresh; push the SAME entry to
       // undoStack (one journal entry per op — no double-undo) and never clear

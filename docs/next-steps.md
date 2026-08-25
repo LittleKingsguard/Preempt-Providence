@@ -20,14 +20,15 @@ authoritative plan; all 26 user rulings recorded there).
 | 1 rows demo gate | ✅ (census measured + tripwire) | ✅ rows-fanout.test.ts (4) + rows-scenarios page + rows-blind-test vitest (8) | **LANDED — BLIND-TEST LOOP COMPLETE (2026-08-24: writer → proofreader → page-reviewer; zero engine defects; 1 data-only fix in check assertion)** |
 | **⚠ ADVERSARIAL FIX QUEUE (Features 1a+1 guardrail gaps — 2026-08-24)** | ✅ (scenario→probe→review census complete) | ✅ **TDD LANDED (2026-08-24 fix pass — tests/unit/rows-mint-guardrails.test.ts, 25 tests: red 20 → green; trio green 1088)** | **COMPLETE — 12 engine defects fixed (S1-S5, S6a, S7, S8b/S9, S13-S16), 3 documented dispositions (S6b children-only legal, S10 hooksKind-authoritative, S11/S12b unreachable/documented) — defects.md ADVERSARIAL-* FIXED rows; Feature 1b's gate is UNBLOCKED** |
 | 1b keyed batch-reuse | ✅ gate (handoffs-review-6.md PROCEED-AS-RESHAPED, D1-D14) | ✅ keyed-batch-reuse.test.ts (22) + keyed-reuse-guardrails.test.ts (6) | **LANDED — trio green 1116 (tests, typecheck, build, smoke). ADVERSARIAL-1b FIX ROUND COMPLETE (S15 parent guard, S22 skipKindGate, S16/S5/S10 re-arm reshape, S17/S18 minor — defects.md FIXED)** |
-| 2 MarkdownAdapter | ✅ gate (handoffs-review-7.md PROCEED-AS-RESHAPED, D1-D15) | ✅ markdown-adapter.test.ts (20) + markdown-adapter-guardrails.test.ts (11) | **ADAPTER LANDED — trio green 1147. ADVERSARIAL-MD FIX ROUND COMPLETE (S17/S1/S2/S3/S4/S5/S6/S8 — defects.md FIXED)** |
-| 3 journal condensing | ⏳ gate | — | ready (rulings: auto-trigger, graph-state-capture base, warn+fail base-boundary undo) |
+| 2 MarkdownAdapter | ✅ gate (handoffs-review-7.md PROCEED-AS-RESHAPED, D1-D15) | ✅ markdown-adapter.test.ts (20) + markdown-adapter-guardrails.test.ts (11) + G-PRE-ESCAPE/G-INLINE-FILTER (6) | **FULLY LANDED — trio green 1153. ADVERSARIAL-MD fix round COMPLETE. DEMO PAGE + BLIND-TEST LOOP COMPLETE (markdown-adapter-scenarios 7 checks M1-M7). REVIEW RESOLUTIONS (2026-08-25): D14 mode-toggle MarkdownAdapter arm LANDED (mode-toggle markdown 14 checks); MD-PRE-ESCAPE FIXED (fence content literal); MD-INLINE-FILTER FIXED (inlineContent pulls true inline only).** |
+| 3 journal condensing | ✅ gate — **PROCEED-AS-RESHAPED (handoffs-review-8.md, 2026-08-25, D1-D10)** | ✅ **TDD LANDED (2026-08-25 — journal-condensing.test.ts, 16 tests; trio green 1169) + ADVERSARIAL fix round (ADV-S11/S19/S4/S5/S12, trio green 1174)** | **LANDED.** D1-D10: D1 merged-only restore (no layers field — step-2 H2 win), D2 handler-faithful replay bounded to post-base, D3 undo/redo/replay id-resolve evicted refs to the restored graph, D4 sync graph-REPLACE `_restoreBase` (drain + evict + §3 recipe + re-mint rows), D5 deferred microtask condense + circular-safe size guard (`condense-skipped-size`) + failure containment (`condense-aborted`), D6 base marker `{kind:'base', snapshot, result:{status:'base'}}` + replay branches first + marker never in undoStack, D7 append-only pins amended same-pass, D8 rows/defs composition (capture unions the def-prototype registry), D9 shipped-vs-lost scope, D10 memory win + ruling-21 integrity. **ADVERSARIAL (2026-08-25):** S11/S19 CRITICAL (replay/redo id-resolve `op.target`), S4 (replay clears redoStack), S5 (quiet restore re-mint), S12 (graph-filtered condense protoSet), S20 (clone-instance loss documented). **D14 demo-arm + blind-test loop PENDING (AGENTS.md item 10)** |
 | 4 preservation-by-reversal flag | ⏳ gate | — | ready (rulings: layer field, re-mint on re-translate, whole-subtree, compression) |
 
-**Next action**: build the Feature 2 (MarkdownAdapter) demo page + run its
-AGENTS.md item-10 blind-test loop (Mimo-2.5 — writer → proofreader →
-page-reviewer), then run the Feature 3 (journal condensing) three-agent gate
-(verdict lands as docs/specs/handoffs-review-8.md).
+**Next action (the pick-up queue is in `docs/HANDOFF-6.md`)**: run the Feature
+3 (journal condensing) demo arm + blind-test loop (AGENTS.md item 10, Mimo-2.5),
+then Feature 4, then publish 0.2.0. The Feature 3 engine is LANDED
+(journal-condensing.test.ts, 16 tests, trio green 1169, 2026-08-25); the D14
+demo arm + blind-test is pending.
 
 ## PENDING (awaiting the user gate — bookmark, do NOT auto-proceed)
 

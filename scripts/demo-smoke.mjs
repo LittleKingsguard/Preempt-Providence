@@ -98,7 +98,10 @@ for (const mode of ['client', 'ssr', 'markdown']) {
   const pageHtml = await buildModeTogglePage(mode)
   seedPage(pageHtml)
   if (mode === 'ssr') seedRawText(pageHtml, 'script', 'received-html-data')
-  if (mode === 'markdown') seedRawText(pageHtml, 'pre', 'markdown-source')
+  if (mode === 'markdown') {
+    seedRawText(pageHtml, 'pre', 'markdown-source')
+    seedRawText(pageHtml, 'script', 'markdown-adapter-data')
+  }
   await import(`${base}demo/mode-toggle.js?mode=${mode}`).catch((e) => {
     console.error(`mode-toggle (${mode}) failed:`, e)
     process.exit(1)
@@ -803,6 +806,36 @@ await new Promise((r) => setTimeout(r, 250))
   }
 }
 
+// ---- markdown-adapter-scenarios page: MarkdownAdapter demo (Feature 2) --------
+// One legacy envelope (headings, bold/italic, link with title, blockquote,
+// nested-list-in-list, fenced pre, hr, img); the module translates it,
+// compiles, renders through MarkdownAdapter via renderProducingProcess, and
+// asserts the toString() output. Profile guard: timed sections must cover ~all
+// of the total.
+{
+  const pageHtml = await readFile(`${base}demo/markdown-adapter-scenarios.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/markdown-adapter-scenarios.js`).catch((e) => {
+    console.error('markdown-adapter-scenarios failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__markdownAdapterScenariosDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__markdownAdapterScenariosProfile
+  if (!prof) {
+    console.error('markdown-adapter-scenarios profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`markdown-adapter-scenarios profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+}
+
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
 
@@ -893,6 +926,10 @@ if (!banners.some((b) => b.includes('hooks-scenarios') && /0 failed/.test(b))) {
 }
 if (!banners.some((b) => b.includes('rows-scenarios') && /0 failed/.test(b))) {
   console.error('rows-scenarios page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('markdown-adapter-scenarios') && /0 failed/.test(b))) {
+  console.error('markdown-adapter-scenarios page did not complete its checks (banner missing)')
   process.exit(1)
 }
 

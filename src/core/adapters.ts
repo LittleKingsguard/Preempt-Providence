@@ -643,7 +643,11 @@ export class MarkdownAdapter implements RenderAdapter<MdNode> {
     if (kind === 'pre') {
       // ADVERSARIAL-MD-S3 — `pre` is a triple-backtick FENCED block (the D3/M7
       // contract); `code` stays inline-backtick (renderInline).
-      return ['```', this.inlineContent(node), '```']
+      // MD-PRE-ESCAPE — the fence content is LITERAL: the triple-backtick
+      // fence IS the escape mechanism, so the content is emitted VERBATIM
+      // (no escapeMarkdown — escaping `(`/`)`/`*`/`#` inside the fence would
+      // corrupt code with stray backslashes).
+      return ['```', node.text, '```']
     }
     if (kind === 'hr') return ['---']
     if (kind === 'block') {
@@ -680,8 +684,13 @@ export class MarkdownAdapter implements RenderAdapter<MdNode> {
 
   private inlineContent(node: MdNode): string {
     const text = node.text ? escapeMarkdown(node.text) : ''
+    // MD-INLINE-FILTER — pull ONLY true inline children (text/strong/em/a/
+    // code/img/br/span). The pre-2026-08-25 filter `!== 'block'` folded
+    // headings/lists/pre/hr/blockquote into the parent's inline line —
+    // marker-less heads + escaped fence content in the line. Block-level
+    // children render as their own lines (renderTree), never here.
     const inlineKids = node.children
-      .filter((c) => this.classify(c.type) !== 'block')
+      .filter((c) => this.classify(c.type) === 'inline')
       .map((c) => this.renderInline(c))
       .join('')
     return text + inlineKids
@@ -730,7 +739,7 @@ export class MarkdownAdapter implements RenderAdapter<MdNode> {
     if (type === 'blockquote') return 'quote'
     if (type === 'hr') return 'hr'
     if (type === 'pre') return 'pre'
-    if (type === 'strong' || type === 'em' || type === 'b' || type === 'i' || type === 'a' || type === 'code' || type === 'img' || type === 'br' || type === 'span') return 'inline'
+    if (type === 'strong' || type === 'em' || type === 'b' || type === 'i' || type === 'a' || type === 'code' || type === 'img' || type === 'br' || type === 'span' || type === 'text') return 'inline'
     return 'block' // div/section/article/p/unknown = transparent block container
   }
 }

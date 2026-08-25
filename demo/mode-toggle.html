@@ -26,7 +26,9 @@
                     serialized `preempt-initial-data` and renders it directly.
       · markdown  — the server embeds the RAW markdown editor source verbatim
                     for manual inspection (see the "markdown mode" section),
-                    alongside the live rendered display.
+                    alongside the live rendered display AND the SAME document
+                    rendered through the REAL MarkdownAdapter (D14 — the
+                    production shape; the raw source stays a demo fixture).
 
     Every mode drives the SAME shared harness (demo/lib/feature-matrix-tests.js)
     — the identical feature-matrix checks, plus mode-specific assertions
@@ -97,6 +99,30 @@
         <strong id="md-live-bold" class="md-part md-bold"></strong>
         <span id="md-live-suffix" class="md-part"></span>
       </div>
+
+      <h3>MarkdownAdapter output — the SAME feature-matrix document rendered
+        through the real MarkdownAdapter (D14)</h3>
+      <p class="expect">
+        The production shape: this is the feature-matrix document emitted as
+        markdown text by <code>renderProducingProcess(…, MarkdownAdapter)</code>
+        on the server (the raw source above is the demo fixture; the adapter
+        output below is what an agentic consumer would receive).
+      </p>
+      <script id="markdown-adapter-data" type="text/plain">theme: dark
+Feature Matrix
+anonymous
+Login
+Logout
+****
+Preempt renders placements, components, and handlers.
+Payload-owned content persists while unplaced \(P-4\).
+First comment.
+Drop comments
+theme: dark
+theme: light
+Loop probe — circular-source arm dropped; sibling content below survives:
+Survivor: a plain sibling with no component reference — it renders while the looped arm above is dropped.</script>
+      <pre id="markdown-adapter-raw" class="doc"></pre>
     </section>
 
     <section>
