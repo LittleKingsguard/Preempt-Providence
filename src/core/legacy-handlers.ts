@@ -364,11 +364,13 @@ export function legacyContext(ctx: HandlerContext): LegacyContext {
   return out
 }
 
-/** The real supervisor passthrough with a read-only `userData` member. */
+/** The real supervisor passthrough with a read-only `userData` member.
+ *  D4 — reads the supervisor's OWN graph scope's userData (the shared default
+ *  when unopt), never another graph's slot. */
 function supervisorWithUserData(sup: Supervisor): unknown {
   return new Proxy(sup, {
     get(target, prop, receiver) {
-      if (prop === 'userData') return getTranslateUserData()
+      if (prop === 'userData') return getTranslateUserData(sup.graphScope ?? undefined)
       return Reflect.get(target, prop, receiver)
     },
     set(target, prop, value, receiver) {

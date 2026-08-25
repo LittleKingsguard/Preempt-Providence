@@ -5,7 +5,8 @@
 import type { Node } from './node.js'
 import type { AnchorTarget, DerivedDecl, LinkConfigNameHub, NodeBaseData, NodeRef, Role } from './types.js'
 import { validateDerived } from './derived.js'
-import { defPrototypeEntries, defRootPrototypeEntries, defNameForLink, registerDefPrototypes, registerDefRootPrototype } from './registry.js'
+import { defPrototypeEntries, defRootPrototypeEntries, defNameForLink, registerDefPrototypes, registerDefRootPrototype, scopeOf, DEFAULT_SCOPE } from './registry.js'
+import type { GraphScope } from './registry.js'
 
 export type SerializedAnchor = {
   role: Role
@@ -192,14 +193,16 @@ export function serializeSlice(node: Node, kids: Node[], clientConfig?: { adapte
   const sliceSet = new Set<Node>([node, ...contentKids])
   const census: { name: string; nodeId: string; isRoot: boolean }[] = []
   const prototypeInstances = new Set<Node>()
-  for (const [link, root] of defRootPrototypeEntries()) {
+  // MULTI-GRAPH — the census enumerates the node's OWN scope (D3/D8).
+  const myScope = scopeOf(node)
+  for (const [link, root] of defRootPrototypeEntries(myScope)) {
     const name = defNameForLink(link)
     if (name === undefined) continue
     if (!sliceSet.has(root)) continue
     census.push({ name, nodeId: root.id, isRoot: true })
     prototypeInstances.add(root)
   }
-  for (const [link, protos] of defPrototypeEntries()) {
+  for (const [link, protos] of defPrototypeEntries(myScope)) {
     const name = defNameForLink(link)
     if (name === undefined) continue
     for (const p of protos) {
@@ -487,7 +490,7 @@ export const reResolve = loadState
  *  'unplaced' — sweep-vulnerable; a violation is a crafted/ill-ordered doc →
  *  NodeSchema-shape-mismatch). Never touches rows (the host drives the
  *  post-restore rows-mint per batches record itself). */
-export function reRegisterDefPrototypes(doc: SerializedRenderDoc, hub: LinkConfigNameHub, nodes: Node[]): void {
+export function reRegisterDefPrototypes(doc: SerializedRenderDoc, hub: LinkConfigNameHub, nodes: Node[], scope: GraphScope = DEFAULT_SCOPE): void {
   const census = doc.defPrototypes
   if (census === undefined || census.length === 0) return
   const byId = new Map(nodes.map((n) => [n.id, n]))
@@ -508,10 +511,10 @@ export function reRegisterDefPrototypes(doc: SerializedRenderDoc, hub: LinkConfi
     }
   }
   for (const [name, root] of roots) {
-    registerDefRootPrototype(hub.linkFor(name, 'component'), root)
+    registerDefRootPrototype(hub.linkFor(name, 'component'), root, scope)
   }
   for (const [name, protos] of children) {
-    registerDefPrototypes(hub.linkFor(name, 'component'), protos)
+    registerDefPrototypes(hub.linkFor(name, 'component'), protos, scope)
   }
   for (const entry of census) {
     const node = byId.get(entry.nodeId)!

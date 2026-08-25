@@ -15,6 +15,7 @@ import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
 import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
 import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin, drainPendingDestroy, defRootPrototypeEntries, defPrototypeEntries } from './registry.js'
+import type { GraphScope } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
 import { serializeSlice, loadState, reRegisterDefPrototypes } from './serialize.js'
@@ -123,6 +124,10 @@ export class Supervisor {
   private readonly destroyedRefs = new Map<NodeId, Node>()
   private readonly hub: LinkConfigNameHub | null
   readonly events: EventBridge | null
+  /** MULTI-GRAPH (D1-D8) — the graph scope this supervisor renders into
+   *  (isolated opt-in, else null → the shared default). Threaded to ops so
+   *  minted/registered nodes + the sweep stay scope-local. */
+  readonly graphScope: GraphScope | null
   private undoStack: JournalEntry[] = []
   private redoStack: JournalEntry[] = []
   private client: ClientAPI | null = null
@@ -133,20 +138,23 @@ export class Supervisor {
   private readonly maxJournalLength: number | undefined
   private condenseScheduled = false
 
-  constructor(rootOrOpts: Node | { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number }, nodes?: Map<NodeId, Node>) {
+  constructor(rootOrOpts: Node | { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number; graphScope?: GraphScope }, nodes?: Map<NodeId, Node>) {
     this.hub = null
     this.events = null
     this.maxJournalLength = undefined
+    this.graphScope = null
     if (rootOrOpts !== null && typeof rootOrOpts === 'object' && (rootOrOpts as { isNode?: boolean }).isNode === true) {
       const root = rootOrOpts as Node
       this.nodes = nodes ?? new Map<NodeId, Node>()
       this.nodes.set(root.id, root)
+      this.graphScope = root.graphScope ?? null
     } else {
-      const opts = rootOrOpts as { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number }
+      const opts = rootOrOpts as { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number; graphScope?: GraphScope }
       this.nodes = new Map<NodeId, Node>()
       this.hub = opts.hub ?? null
       this.events = opts.events ?? null
       this.maxJournalLength = opts.maxJournalLength
+      this.graphScope = opts.graphScope ?? null
     }
     // REQ-GAP-11 — the sweep-hook seam: cascade-finalized nodes (the sweep's
     // own finalization, terminal) leave this supervisor's scan surfaces too.
@@ -651,8 +659,9 @@ export class Supervisor {
       // graph in this process) must not leak into this base (the census is
       // instance-membership-scoped to THIS graph's nodes).
       const protoSet = new Set<Node>()
-      for (const [, protos] of defPrototypeEntries()) for (const p of protos) if (p.hubFor === this.hub) protoSet.add(p)
-      for (const [, r] of defRootPrototypeEntries()) if (r.hubFor === this.hub) protoSet.add(r)
+      const protoScope = this.graphScope ?? undefined
+      for (const [, protos] of defPrototypeEntries(protoScope)) for (const p of protos) if (p.hubFor === this.hub) protoSet.add(p)
+      for (const [, r] of defRootPrototypeEntries(protoScope)) if (r.hubFor === this.hub) protoSet.add(r)
       const kids = this.allNodes()
       for (const p of protoSet) if (p !== root) kids.push(p)
       const snapshot = serializeSlice(root, kids) as never
@@ -703,10 +712,11 @@ export class Supervisor {
     if (!hub) return
     const doc = snapshot as unknown as { template: unknown; content: unknown[] }
     const seeds: Node[] = []
-    seeds.push(new Node(doc.template as never, hub))
-    for (const d of loadState(doc as never)) seeds.push(new Node(d as never, hub))
+    const scope = this.graphScope ?? undefined
+    seeds.push(new Node(doc.template as never, hub, undefined, false, scope))
+    for (const d of loadState(doc as never)) seeds.push(new Node(d as never, hub, undefined, false, scope))
     reconcileParentTargets(seeds)
-    reRegisterDefPrototypes(doc as never, hub, seeds as never[])
+    reRegisterDefPrototypes(doc as never, hub, seeds as never[], scope)
     for (const n of seeds) this.registerNode(n)
     // step 3 — re-mint rows per the batches records (step 4.5 of the §3
     // recipe; fresh ids — the serialize.md §4 residual). Runs with the
@@ -1046,12 +1056,12 @@ export class Supervisor {
         // minted ids (A3 — replay resolves them to the existing nodes).
         const target = op.target as Node | undefined
         if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
-        const res = layerApply(op as never, { hub: target.hubFor ?? this.hub ?? null as never, nodes: this.nodes })
+        const res = layerApply(op as never, { hub: target.hubFor ?? this.hub ?? null as never, nodes: this.nodes, ...(this.graphScope ? { graphScope: this.graphScope } : {}) })
         // supervisor visibility: every minted node is registered here so
         // getNode/allNodes/pass-2 resolve it (the minted-set registry tracks
         // ownership for teardown; the supervisor tracks the graph)
         for (const id of res.minted) {
-          const n = resolveNodeRef(id)
+          const n = this.graphScope ? this.graphScope.byId.get(id) : resolveNodeRef(id)
           if (n) this.registerNode(n)
         }
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways, minted: res.minted })
@@ -1086,9 +1096,9 @@ export class Supervisor {
             return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: undeclared hook — only 'component' is implied; declare hooksKind` } }
           }
         }
-        const res = rowsMint(rowsOp as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes })
+        const res = rowsMint(rowsOp as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes, ...(this.graphScope ? { graphScope: this.graphScope } : {}) })
         for (const id of res.minted) {
-          const n = resolveNodeRef(id)
+          const n = this.graphScope ? this.graphScope.byId.get(id) : resolveNodeRef(id)
           if (n) this.registerNode(n)
         }
         const entry = this.journalIfApplied(op, {
@@ -1113,7 +1123,7 @@ export class Supervisor {
         // empty walk → target-only dirtied (replay-churn bound).
         const consumed = new Set<string>()
         for (const id of [...(res.minted ?? []), ...(res.reused ?? []), ...(res.removed ?? []).map((r) => r.nodeId)]) {
-          const n = resolveNodeRef(id)
+          const n = this.graphScope ? this.graphScope.byId.get(id) : resolveNodeRef(id)
           if (!n) continue
           for (const a of n.anchors) {
             if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
@@ -1149,7 +1159,7 @@ export class Supervisor {
         // apparatus is never addressed directly.
         const target = op.target as Node | undefined
         if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
-        const res = rowsClear(op as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes })
+        const res = rowsClear(op as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes, ...(this.graphScope ? { graphScope: this.graphScope } : {}) })
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways })
         // ADVERSARIAL-S5 (2026-08-24) — the mint-side consumer walk on
         // teardown too: rows-clear marks the field-name consumers pass-2 so
@@ -1157,7 +1167,7 @@ export class Supervisor {
         // mint only; a clear/undo must not leave ghost arms in the store).
         const consumed = new Set<string>()
         for (const id of res.minted ?? []) {
-          const n = resolveNodeRef(id)
+          const n = this.graphScope ? this.graphScope.byId.get(id) : resolveNodeRef(id)
           if (!n) continue
           for (const a of n.anchors) {
             if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
@@ -1377,12 +1387,12 @@ export class Supervisor {
               // ADVERSARIAL-S5 (2026-08-24) — capture the minted set before the
               // teardown + walk the field-name consumers (the undo path must
               // refresh their pass-2 states — no stale fan-out arms after undo).
-              const minted = mintedByOrigin(record.layerId)
+              const minted = mintedByOrigin(record.layerId, this.graphScope ?? undefined)
               delete batches[hookName]
               resolved.rowsTeardown(record.layerId)
               resolved.removeLayer(record.layerId)
               for (const id of minted) {
-                const n = resolveNodeRef(id)
+                const n = this.graphScope ? this.graphScope.byId.get(id) : resolveNodeRef(id)
                 if (!n) continue
                 for (const a of n.anchors) {
                   if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue

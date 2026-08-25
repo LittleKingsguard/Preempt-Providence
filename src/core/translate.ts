@@ -33,6 +33,7 @@
 import { Node, mintNodeId, ancestorConsumesZone } from './node.js'
 import { Link } from './link.js'
 import { registerContentNode, registerDefPrototypes, registerDefRootPrototype, defRootPrototypeFor, registerHandlerDef, setTranslateUserData } from './registry.js'
+import type { GraphScope } from './registry.js'
 import { wrapLegacyHandler } from './legacy-handlers.js'
 import { validateDerived } from './derived.js'
 import type { Anchor, DerivedDecl, DerivedExpr, HookKind, LinkConfigNameHub, NodeBaseData } from './types.js'
@@ -623,6 +624,7 @@ function planBindings(
   authoredDerived: DerivedDecl | undefined,
   warnings: TranslatedWarning[],
   path: string,
+  graphScope?: GraphScope,
 ): { plans: BindingPlan[]; count: number } {
   const plans: BindingPlan[] = []
   if (component === undefined || component === null) return { plans, count: 0 }
@@ -679,7 +681,7 @@ function planBindings(
         } else if (fmt !== undefined) {
           warn(warnings, 'handler-format-invalid', path, `format "${String(fmt)}" is not 'legacy' or 'modern'; falling back to the seam default (legacy)`)
         }
-        registerHandlerDef(reference, { name: v.name, body: v.body, format })
+        registerHandlerDef(reference, { name: v.name, body: v.body, format }, graphScope)
       }
     }
     if (target !== undefined) {
@@ -789,6 +791,7 @@ function mintDefPrototypes(
   warnings: TranslatedWarning[],
   path: string,
   seamRefs: ReadonlySet<string>,
+  graphScope?: GraphScope,
 ): void {
   for (const plan of plans) {
     if ((plan.role !== 'source' && plan.role !== 'duplex') || plan.value === undefined) continue
@@ -820,22 +823,22 @@ function mintDefPrototypes(
       if (defComponent !== undefined) {
         defRootData.component = defComponent as LegacyComponentBinding | LegacyComponentBinding[]
       }
-      const defRoot = translateNodeData(defRootData, hub, nodes, warnings, `${path}.component.value`)
+      const defRoot = translateNodeData(defRootData, hub, nodes, warnings, `${path}.component.value`, undefined, new Set(), undefined, graphScope)
       attachToPermanentOwner(defRoot, 'component')
-      registerDefRootPrototype(link, defRoot)
+      registerDefRootPrototype(link, defRoot, graphScope)
     }
     if (hasChildren) {
-      const root = defRootPrototypeFor(link)
+      const root = defRootPrototypeFor(link, graphScope)
       def.children!.forEach((childData, i) => {
         // child-side attach: the def-children prototypes attach to the
         // def-root (or the 'component' token when no def-root exists)
-        const child = translateNodeData(childData, hub, nodes, warnings, `${path}.component.value.children[${i}]`, undefined, new Set(), root ? { node: root, index: i } : undefined)
+        const child = translateNodeData(childData, hub, nodes, warnings, `${path}.component.value.children[${i}]`, undefined, new Set(), root ? { node: root, index: i } : undefined, graphScope)
         if (!root) attachToPermanentOwner(child, 'component')
         minted.push(child)
       })
       // the D7 seam materialization wires these pre-minted prototypes onto the
       // seam consumers (ops.md ALS-1 — the child links materialize FROM them)
-      if (minted.length > 0) registerDefPrototypes(link, minted)
+      if (minted.length > 0) registerDefPrototypes(link, minted, graphScope)
     }
   }
 }
@@ -915,14 +918,15 @@ function translateNodeData(
   opts: { asContentRoot?: boolean; extraDerived?: DerivedDecl } = {},
   seamRefs: ReadonlySet<string> = new Set<string>(),
   parent: { node: Node; index: number } | undefined = undefined,
+  graphScope?: GraphScope,
 ): Node {
   // component bindings (K1–K8): planned BEFORE construction so the
   // synthesized derived merge rides the node's base data ("authored-derived
   // wins", review doc §2.2 K2)
-  const { plans } = planBindings(data.component, data.derived, warnings, path)
+  const { plans } = planBindings(data.component, data.derived, warnings, path, graphScope)
   let derived = mergeSynthesized(data.derived, plans)
   if (opts.extraDerived) derived = mergeDecl(derived, opts.extraDerived)
-  const node = new Node(baseFrom(data, derived, warnings, path), hub, mintNodeId(), opts.asContentRoot === true)
+  const node = new Node(baseFrom(data, derived, warnings, path), hub, mintNodeId(), opts.asContentRoot === true, graphScope)
   nodes.push(node)
 
   // P3 §10.ad (F-13) — contentNodes-ownership minting: every content payload
@@ -1057,7 +1061,7 @@ function translateNodeData(
  * in `TranslatedTree.content` and keep the payload metadata/userData on the
  * result (first payload wins).
  */
-export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHub }): TranslatedTree {
+export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHub; graphScope?: GraphScope }): TranslatedTree {
   // DEFECT #8 fix (stress round 3, 2026-08-15): a TRUTHY NON-OBJECT root
   // (42, an array) is a malformed envelope too — silently minting a default
   // div with zero warns was the defect. The root must be a NodeData OBJECT.
@@ -1068,6 +1072,7 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
     throw new Error('legacy-envelope-mismatch: expected { template: { root }, content?, clientConfig? }')
   }
   const hub = opts?.hub ?? createLinkHub()
+  const graphScope = opts?.graphScope
   const nodes: Node[] = []
   const warnings: TranslatedWarning[] = []
   const template = doc.template
@@ -1080,13 +1085,13 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   // template.component binding on the root itself (K6/K7): planned before the
   // root's construction so its synthesis rides the root's base data
   const rootBinding = template.component
-  const rootPlan = planBindings(rootBinding, template.root.derived, warnings, 'root')
+  const rootPlan = planBindings(rootBinding, template.root.derived, warnings, 'root', graphScope)
   const rootSynthesis = mergeSynthesized(undefined, rootPlan.plans)
 
   // root with its own default children (stored in the root itself)
   const root = translateNodeData(template.root, hub, nodes, warnings, 'root', {
     ...(rootSynthesis !== undefined ? { extraDerived: rootSynthesis } : {}),
-  }, seamRefs)
+  }, seamRefs, undefined, graphScope)
   attachToPermanentOwner(root, 'rootNode')
 
   // K6 — a value-carrying root binding is a SOURCE (provider) anchor; the
@@ -1096,7 +1101,7 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
 
   // D8/F16 — template.component def values pre-mint their children prototypes
   // at the root's own translate site too (B2 scoping)
-  mintDefPrototypes(rootPlan.plans, hub, nodes, warnings, 'template.component', seamRefs)
+  mintDefPrototypes(rootPlan.plans, hub, nodes, warnings, 'template.component', seamRefs, graphScope)
 
   // content nodes: template.children + content payloads — contentNodes-owned
   // (family-'in-tree' via the permanent-owner token, P3 §10.ad/F-13; NOT
@@ -1109,7 +1114,7 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
   let userData: unknown
   if (Array.isArray(template.children)) {
     template.children.forEach((childData, i) => {
-      const n = translateNodeData(childData, hub, nodes, warnings, `template.children[${i}]`, { asContentRoot: true }, seamRefs)
+      const n = translateNodeData(childData, hub, nodes, warnings, `template.children[${i}]`, { asContentRoot: true }, seamRefs, undefined, graphScope)
       registerContentNode(n)
       content.push(n)
     })
@@ -1128,7 +1133,7 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
       if (metadata === undefined) metadata = payload.metadata
       if (userData === undefined) userData = payload.userData
       payload.content.forEach((contentData, i) => {
-        const n = translateNodeData(contentData, hub, nodes, warnings, `content[${p}].content[${i}]`, { asContentRoot: true })
+        const n = translateNodeData(contentData, hub, nodes, warnings, `content[${p}].content[${i}]`, { asContentRoot: true }, new Set(), undefined, graphScope)
         registerContentNode(n)
         content.push(n)
       })
@@ -1146,8 +1151,8 @@ export function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfi
 
   // DECISION 6 (2026-08-15) — the legacy bridge's read-only
   // `supervisor.userData` member captures the translated userData here (the
-  // first payload's value; undefined clears the slot).
-  setTranslateUserData(userData)
+  // first payload's value; undefined clears the slot). D4 — scoped per graph.
+  setTranslateUserData(userData, graphScope)
 
   return { root, nodes, content, warnings, metadata, userData, clientConfig: { adapter, persistence } }
 }

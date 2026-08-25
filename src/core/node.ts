@@ -18,7 +18,8 @@ import type {
 import { SingleParentError } from './errors.js'
 import { Link } from './link.js'
 import { MAX_COMPILE_DEPTH } from './constants.js'
-import { registerNode, scheduleSweep, markPending, resolveNodeRef, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, unregisterMinted, handlerDef, compileHandlerBody } from './registry.js'
+import { registerNode, scheduleSweep, markPending, resolveNodeRef, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, unregisterMinted, handlerDef, compileHandlerBody, scopeOf } from './registry.js'
+import type { GraphScope } from './registry.js'
 import { resolveArms, resolvePathTargets, providerValueFor, providerValueFromLink, hookWriteGuard } from './resolve.js'
 import { logCompilePass, compilePassLogEnabled } from './debug.js'
 import { validateDerived, applyDerived } from './derived.js'
@@ -386,6 +387,10 @@ export class Node {
   private readonly _anchors: Anchor[]
   private readonly _dirty: Set<DirtyScope>
   private readonly hub: LinkConfigNameHub | null
+  /** MULTI-GRAPH (D1-D8) — the graph scope this node registered into (its
+   *  isolated graph partition, else the shared default). Null on the default
+   *  path (the module singleton). Threaded from the host opt-in. */
+  readonly graphScope: GraphScope | null
   private _resolved: CompiledState[] = []
   private pass1: {
     type: string
@@ -411,7 +416,7 @@ export class Node {
     return this._dirty
   }
 
-  constructor(data: NodeBaseData = {}, hub?: LinkConfigNameHub, id?: string, noSeed = false) {
+  constructor(data: NodeBaseData = {}, hub?: LinkConfigNameHub, id?: string, noSeed = false, graphScope?: GraphScope) {
     validateDerived(data.derived)
     this.id = id ?? data.id ?? mintNodeId()
     this.base = { ...data }
@@ -424,6 +429,7 @@ export class Node {
     this._anchors = []
     this._dirty = new Set<DirtyScope>()
     this.hub = hub ?? null
+    this.graphScope = graphScope ?? null
     this.pass1 = { type: 'div', props: {}, css: {}, content: undefined, handlers: [], derived: undefined }
     if (data.type && !noSeed) {
       this.layers.push(makeLayer(`seed-${this.id}`, undefined, {
@@ -452,8 +458,11 @@ export class Node {
           const parentTarget: string = sa.parent ?? target
           const pa: Anchor = { role: 'parent', target: parentTarget, options: {}, link }
           // resolve the parent reference to a live node if already constructed
+          // (scope-local — an isolated graph never adopts another graph's node, D3)
           if (parentTarget !== 'rootNode' && parentTarget !== 'component' && parentTarget !== 'contentNodes') {
-            const resolved = resolveNodeRef(parentTarget)
+            const resolved = this.graphScope
+              ? resolveNodeRef(parentTarget, this.graphScope)
+              : resolveNodeRef(parentTarget)
             if (resolved) pa.target = resolved
           }
           link.addAnchor(pa)
@@ -723,8 +732,13 @@ export class Node {
    *  cleared and the registry entry dropped for every touched node
    *  (double-remove no-ops; the record never lingers past its rollback). */
   private teardownMinted(layerId: string): void {
-    for (const id of mintedByOrigin(layerId)) {
-      const node = resolveNodeRef(id)
+    // D5 — the plain layer-apply teardown is scope-guarded (the same
+    // `parent === target`/scope guard the keyed rows path has): an isolated
+    // graph A's removeLayer never cross-destroys graph B's minted set under
+    // the SAME layerId/node-id (mintedByLayer is node-id-keyed — DEFECT #23).
+    const myScope = scopeOf(this)
+    for (const id of mintedByOrigin(layerId, myScope)) {
+      const node = myScope.byId.get(id)
       if (node) {
         let originOnChain = false
         for (let cur: Node | null = node; cur; cur = cur.parent) {
@@ -747,7 +761,7 @@ export class Node {
           node.originLayer = undefined
         }
       }
-      unregisterMinted(id)
+      unregisterMinted(id, myScope)
     }
   }
 
@@ -762,13 +776,14 @@ export class Node {
    *  by the PAYLOAD-CONTROL clear — never addressed directly by external
    *  code. */
   rowsTeardown(layerId: string): void {
-    for (const id of mintedByOrigin(layerId)) {
-      const node = resolveNodeRef(id)
+    const myScope = scopeOf(this)
+    for (const id of mintedByOrigin(layerId, myScope)) {
+      const node = myScope.byId.get(id)
       if (node) {
         detachNodeSafe(node)
         node.originLayer = undefined
       }
-      unregisterMinted(id)
+      unregisterMinted(id, myScope)
     }
   }
 
@@ -1665,8 +1680,9 @@ export class Node {
       // twice on the shared Link and fork a packet into a phantom second
       // route (placement-path-spec §10.ag).
       if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
-      const protos = defPrototypesFor(link)
-      const defRoot = defRootPrototypeFor(link)
+      const myScope = scopeOf(this)
+      const protos = defPrototypesFor(link, myScope)
+      const defRoot = defRootPrototypeFor(link, myScope)
       if (seam === 'children' && defRoot !== undefined) {
         if (!this.hasSeamParentFor(defRoot)) {
           const seamLink = new Link({ name: 'parent-child' })
@@ -1747,7 +1763,9 @@ export class Node {
     for (const a of this.anchors) {
       if ((a.role !== 'target' && a.role !== 'duplex') || typeof a.target !== 'string') continue
       if (a.options.handlerEvent === undefined && a.options.handlerPhase === undefined) continue
-      const def = handlerDef(a.target)
+      // D2 — resolution + compilation are scope-local: an isolated graph's
+      // consumer never resolves/compiles a def body from another scope.
+      const def = handlerDef(a.target, scopeOf(this))
       if (def) {
         // DEFECT #18 fix (round 5): per-ENTRY containment — a malformed def
         // body warns handler-body-invalid + skips THAT entry (the inline

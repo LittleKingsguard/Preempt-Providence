@@ -1,12 +1,16 @@
 import type { AnchorDecl, BatchRecord, LayerApplyOp, LayerMutationList, LinkConfigNameHub, MutationOp, NodeBaseData, NodeId, PlacementAttachOp, PlacementTrigger, RowsClearOp, RowsMintOp, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
 import { Node, findCycle, ancestorConsumesZone } from './node.js'
-import { markPending, registerMinted, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, resolveNodeRef, unregisterMinted } from './registry.js'
+import { markPending, registerMinted, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, resolveNodeRef, unregisterMinted, scopeOf } from './registry.js'
+import type { GraphScope } from './registry.js'
 import { Link } from './link.js'
 
 export interface OpContext {
   hub: LinkConfigNameHub
   nodes: Map<NodeId, Node>
+  /** MULTI-GRAPH (D1-D8) — the graph scope the ops mint into; the hub-less
+   *  target's scope (or the shared default) when the supervisor is unopt. */
+  graphScope?: GraphScope
 }
 
 function toNode(value: unknown): Node {
@@ -168,6 +172,9 @@ export function layerApply(op: LayerApplyOp, ctx: OpContext): { minted: NodeId[]
   if (target.layers.some(l => l.id === op.layerId)) return { minted: [], doorways: [target.id] }
   const minted: NodeId[] = []
   const link = target.familyLinkFor()
+  // MULTI-GRAPH — mint into the target's own scope (isolated graphs stay
+  // disjoint: minted nodes register against the target's graph, D3/D5).
+  const scope = ctx.graphScope ?? scopeOf(target)
   let priority = link.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
   for (const nd of op.nodes ?? []) {
     // A5 seed-anchor veto: v1 mints family children ONLY — a NodeData
@@ -176,9 +183,9 @@ export function layerApply(op: LayerApplyOp, ctx: OpContext): { minted: NodeId[]
     if (anchors !== undefined) {
       console.warn(`layer-apply-anchors-rejected at ${target.id}: seed anchors are not minted by layer-apply (v1 mints family children only)`)
     }
-    const node = new Node(data, target.hubFor ?? ctx.hub ?? undefined)
+    const node = new Node(data, target.hubFor ?? ctx.hub ?? undefined, undefined, false, scope)
     node.originLayer = op.layerId
-    registerMinted(node.id, op.layerId)
+    registerMinted(node.id, op.layerId, scope)
     minted.push(node.id)
     node.addAnchor('child', node, { priority }, link)
     priority += 1
@@ -244,6 +251,8 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
   const target = toNode(op.target)
   const layerId = `hook-${target.id}-${op.hookName}-rows`
   const hub = target.hubFor ?? ctx.hub ?? undefined
+  // MULTI-GRAPH — mint into the target's own scope (D3/D5).
+  const scope = ctx.graphScope ?? scopeOf(target)
   // ADVERSARIAL-S15 (2026-08-24) — a placement-kind mint REQUIRES the target
   // zone: without `placementName` the rows would mint with zero content
   // anchors (silent no-placement). Reject, never a silent no-op.
@@ -270,12 +279,12 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
   // def-children) supplies the row shape from the def-ROOT registry — the
   // resolution is no longer children-only.
   const protoLink = hub.linkFor(op.prototypeName, 'component')
-  const protos = defPrototypesFor(protoLink)
+  const protos = defPrototypesFor(protoLink, scope)
   let shape: Node | undefined
   if (protos.length > 0) {
     shape = protos[0]!
   } else {
-    shape = defRootPrototypeFor(protoLink)
+    shape = defRootPrototypeFor(protoLink, scope)
   }
   if (shape === undefined) {
     console.warn(`rows-prototype-unresolved at ${target.id}: prototype "${op.prototypeName}" has no def prototypes; rows-mint rejected`)
@@ -338,7 +347,7 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
     const fam = target.familyLinkFor()
     let priority = fam.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
     for (const row of rowList) {
-      const mintedNode = mintRowNode(row as unknown as Record<string, unknown>, shape, hub, fam, layerId, priority, target, op)
+      const mintedNode = mintRowNode(row as unknown as Record<string, unknown>, shape, hub, fam, layerId, priority, target, op, scope)
       priority += 1
       minted.push(mintedNode.id)
     }
@@ -371,8 +380,8 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
   // other graph is NEVER reused, only mint-new (its own graph reuses it).
   const existingNodes = new Map<unknown, Node>()
   const unmatchable: Node[] = []
-  for (const id of mintedByOrigin(layerId)) {
-    const n = resolveNodeRef(id)
+  for (const id of mintedByOrigin(layerId, scope)) {
+    const n = scope.byId.get(id)
     if (!n) continue
     if (n.parent !== target) continue // another graph's row (same-id process)
     const keyAnchor = n.anchors.find((a) => a.role === 'source' && a.target === kf)
@@ -404,13 +413,13 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
   }
   for (const node of unmatchable) removed.push({ key: undefined, nodeId: node.id })
   for (const { nodeId } of removed) {
-    const node = resolveNodeRef(nodeId)
+    const node = scope.byId.get(nodeId)
     if (!node) continue
     // the per-id no-promotion teardown (the rowsTeardown body for a subset —
     // never removeLayer, whose teardownMinted would PROMOTE)
     detachNodeSafe(node)
     node.originLayer = undefined
-    unregisterMinted(node.id)
+    unregisterMinted(node.id, scope)
   }
   const fam = target.familyLinkFor()
   let priority = fam.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
@@ -428,7 +437,7 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): {
       // NEW fields on reuse (the mint path uses the same source).
       if (reconcileRowFields(node, row, kf, target, hub)) reused.push(node.id)
     } else {
-      const mintedNode = mintRowNode(row, shape, hub, fam, layerId, priority, target, op)
+      const mintedNode = mintRowNode(row, shape, hub, fam, layerId, priority, target, op, scope)
       priority += 1
       minted.push(mintedNode.id)
     }
@@ -475,6 +484,7 @@ function mintRowNode(
   priority: number,
   target: Node,
   op: RowsMintOp,
+  scope: GraphScope,
 ): Node {
   // ADVERSARIAL-S13 — a row's `id` NEVER hijacks the minted node id: strip
   // it from the construction data (the node gets a FRESH mint-generated
@@ -486,9 +496,9 @@ function mintRowNode(
   if (_rowAnchors !== undefined) {
     console.warn(`rows-mint-anchors-rejected at ${target.id}: row anchors are not admitted by rows-mint (smuggled edges never materialize); ignored`)
   }
-  const node = new Node({ ...fields, type: (fields.type as string) ?? shape.type, css: (fields.css as Record<string, unknown>) ?? shape.css } as NodeBaseData, hub)
+  const node = new Node({ ...fields, type: (fields.type as string) ?? shape.type, css: (fields.css as Record<string, unknown>) ?? shape.css } as NodeBaseData, hub, undefined, false, scope)
   node.originLayer = layerId
-  registerMinted(node.id, layerId)
+  registerMinted(node.id, layerId, scope)
   node.addAnchor('child', node, { priority }, fam)
   // the row's fields as VALUE-BEARING source anchors (per-row provider
   // anchors — consumers resolving a field name fan out per row, §9.2 pin 6).
@@ -578,7 +588,8 @@ export function rowsClear(op: RowsClearOp, ctx: OpContext): { doorways: NodeId[]
   // ADVERSARIAL-S5 — capture the minted set BEFORE the teardown so the
   // supervisor can walk the field-name consumers (the mint-side cascade) and
   // refresh their pass-2 states — no stale fan-out arms after a clear.
-  const minted = mintedByOrigin(record.layerId)
+  const scope = ctx.graphScope ?? scopeOf(target)
+  const minted = mintedByOrigin(record.layerId, scope)
   delete batches[op.hookName]
   target.rowsTeardown(record.layerId)
   target.removeLayer(record.layerId)

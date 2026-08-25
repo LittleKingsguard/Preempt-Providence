@@ -1,6 +1,15 @@
 // src/core/registry.ts — process-wide node registry + the post-op sweep
-// (cascade-destroy + coalesced pass-2). Owns the module-level sets so the
-// Node class stays free of global-state bookkeeping.
+// (cascade-destroy + coalesced pass-2). Owns the per-graph sets so the Node
+// class stays free of global-state bookkeeping.
+//
+// MULTI-GRAPH / REGISTRY ISOLATION (D1-D8, docs/specs/multi-graph-isolation-
+// spec.md): every set lives on a `GraphScope`. The DEFAULT scope IS the
+// current module singleton (D8 — non-breaking: no opt-in is byte-identical
+// to today). An ISOLATED scope is created ONLY on explicit host opt-in
+// (createIsolatedScope) and is threaded through translateLegacy / Supervisor /
+// loadState / renderProducingProcess so a multi-graph host can guarantee two
+// graphs in one process cannot address each other. The opt-in, NOT hub
+// presence, decides isolation.
 //
 // Imports Node and Link only as TYPES (erased at runtime), so there is no
 // import cycle with node.ts / link.ts.
@@ -8,7 +17,56 @@ import type { Node } from './node.js'
 import type { Link } from './link.js'
 import type { NodeId } from './types.js'
 
-export const registered = new Set<Node>()
+/** A per-graph registry scope: the isolated partition of every registry set
+ *  + sweep state. An isolated scope is created only on explicit opt-in; the
+ *  default scope IS the module singleton (D8). */
+export interface GraphScope {
+  registered: Set<Node>
+  byId: Map<NodeId, Node>
+  handlerDefs: Map<string, HandlerDefRecord>
+  translateUserData: unknown
+  contentNodes: Set<Node>
+  defPrototypes: Map<Link, Node[]>
+  defRootPrototypes: Map<Link, Node>
+  mintedByLayer: Map<NodeId, string>
+  cascadeFlags: Map<Node, { prototypeRooted: boolean }>
+  pendingDestroy: Node[]
+}
+
+function createScope(): GraphScope {
+  return {
+    registered: new Set<Node>(),
+    byId: new Map<NodeId, Node>(),
+    handlerDefs: new Map<string, HandlerDefRecord>(),
+    translateUserData: undefined,
+    contentNodes: new Set<Node>(),
+    defPrototypes: new Map<Link, Node[]>(),
+    defRootPrototypes: new Map<Link, Node>(),
+    mintedByLayer: new Map<NodeId, string>(),
+    cascadeFlags: new Map<Node, { prototypeRooted: boolean }>(),
+    pendingDestroy: [],
+  }
+}
+
+/** The default scope IS the module singleton (D8) — back-compat for every
+ *  accessor that takes no scope. */
+export const DEFAULT_SCOPE: GraphScope = createScope()
+
+/** Every live scope, for the single coalesced sweep timer (D6). */
+const allScopes = new Set<GraphScope>([DEFAULT_SCOPE])
+
+/** Create an isolated scope (the explicit opt-in — D1). A graph rendered
+ *  under this scope is fully disjoint from every other scope: it never
+ *  resolves, compiles, or destroys another graph's handler defs, nodes, or
+ *  userData. */
+export function createIsolatedScope(): GraphScope {
+  const s = createScope()
+  allScopes.add(s)
+  return s
+}
+
+/** The module-level `registered` export — the DEFAULT scope's set (D8). */
+export const registered: Set<Node> = DEFAULT_SCOPE.registered
 
 // HANDLER-SEAM (2026-08-15, D6 un-park) — the legacy handler-def registry:
 // def-shaped bindings (`{reference, value: {name, body}}`) register by name at
@@ -25,34 +83,33 @@ export interface HandlerDefRecord {
   format: 'legacy' | 'modern'
 }
 
-const handlerDefs = new Map<string, HandlerDefRecord>()
-
-export function registerHandlerDef(name: string, def: { name: string; body: string; format?: 'legacy' | 'modern' }): void {
-  handlerDefs.set(name, { ...def, format: def.format ?? 'legacy' })
+export function registerHandlerDef(name: string, def: { name: string; body: string; format?: 'legacy' | 'modern' }, scope: GraphScope = DEFAULT_SCOPE): void {
+  scope.handlerDefs.set(name, { ...def, format: def.format ?? 'legacy' })
 }
 
-export function handlerDef(name: string): HandlerDefRecord | undefined {
-  return handlerDefs.get(name)
+export function handlerDef(name: string, scope: GraphScope = DEFAULT_SCOPE): HandlerDefRecord | undefined {
+  return scope.handlerDefs.get(name)
 }
 
 // USERDATA passthrough (decision 6, 2026-08-15) — the legacy bridge's
 // read-only `supervisor.userData` member is captured from
 // `TranslatedTree.userData` (the first content payload's userData) at
-// translate into this small module slot. Read at dispatch by the bridge
+// translate into this per-scope slot. Read at dispatch by the bridge
 // context; writes are contained no-ops (no session channel exists).
-let translateUserData: unknown
-
-export function setTranslateUserData(value: unknown): void {
-  translateUserData = value
+// D4 — an isolated graph carries its own slot (no single-slot clobber).
+export function setTranslateUserData(value: unknown, scope: GraphScope = DEFAULT_SCOPE): void {
+  scope.translateUserData = value
 }
 
-export function getTranslateUserData(): unknown {
-  return translateUserData
+export function getTranslateUserData(scope: GraphScope = DEFAULT_SCOPE): unknown {
+  return scope.translateUserData
 }
 
 /** Shared legacy-body compiler (the translate-time `new Function` gate —
  *  admin/trusted-developer bodies only). The seam materialization compiles
- *  def bodies when it layers them onto a consumer. */
+ *  def bodies when it layers them onto a consumer. D2 — an isolated scope
+ *  never compiles a body it cannot resolve (resolution is scope-local, so
+ *  compilation cannot be reached cross-scope). */
 export function compileHandlerBody(src: string): (...args: unknown[]) => unknown {
   const fn = new Function(`return (${src})`)()
   if (typeof fn !== 'function') {
@@ -60,7 +117,6 @@ export function compileHandlerBody(src: string): (...args: unknown[]) => unknown
   }
   return fn
 }
-const pendingDestroy: Node[] = []
 let sweepScheduled = false
 
 /** REQ-GAP-12 (handoffs-review-2 §REQ-GAP-12, user ruling 1, 2026-08-21) —
@@ -74,12 +130,11 @@ let sweepScheduled = false
  *  prototype subtree (never renders). The token edge is dissolved by
  *  destroyLinks before the sweep runs, so the sweep cannot re-derive this
  *  from the node's state — the op captures it. */
-const cascadeFlags = new Map<Node, { prototypeRooted: boolean }>()
-
 export function markCascadeExplicit(node: Node): void {
   // `prototypeRooted` is captured HERE (op time): the token edge is dissolved
   // by destroyLinks before the sweep runs, so the sweep cannot re-derive it.
-  cascadeFlags.set(node, { prototypeRooted: chainTerminatesAtComponent(node) })
+  // Scoped on the node's OWN graph scope (D6).
+  scopeOf(node).cascadeFlags.set(node, { prototypeRooted: chainTerminatesAtComponent(node) })
 }
 
 /** REQ-GAP-12 — the placement-owned gate: a node carrying `content` anchors
@@ -111,22 +166,24 @@ function chainTerminatesAtComponent(node: Node): boolean {
 // source of truth for graph accessibility (besides the root + template).
 // They PERSIST in the background while unplaced (placement may return);
 // handler-created nodes (no basis in root/payload arrays) are discarded once
-// they lose root visibility.
-const contentNodes = new Set<Node>()
+// they lose root visibility. Scoped per graph (D6) via scopeOf(node).
+
+/** The scope a node belongs to (its isolated graph, else the shared default). */
+export function scopeOf(node: Node): GraphScope {
+  return node.graphScope ?? DEFAULT_SCOPE
+}
 
 /** D8/F16 (B2) — the def-children prototype registry: per component LINK, the
  *  pre-minted out-of-tree `'component'`-token prototype nodes minted at
  *  translate for a value-carrying def binding (mint order = def.children
  *  order). The D7 seam materialization (ops.md §2.7 ALS-1) and the emit-side
  *  seam fill read it to wire the def's children onto the seam consumer. */
-const defPrototypes = new Map<Link, Node[]>()
-
-export function registerDefPrototypes(link: Link, protos: Node[]): void {
-  defPrototypes.set(link, protos)
+export function registerDefPrototypes(link: Link, protos: Node[], scope: GraphScope = DEFAULT_SCOPE): void {
+  scope.defPrototypes.set(link, protos)
 }
 
-export function defPrototypesFor(link: Link): Node[] {
-  return defPrototypes.get(link) ?? []
+export function defPrototypesFor(link: Link, scope: GraphScope = DEFAULT_SCOPE): Node[] {
+  return scope.defPrototypes.get(link) ?? []
 }
 
 /** D8/ALS-1b (B3) — the def-ROOT prototype registry: per component LINK, the
@@ -135,26 +192,24 @@ export function defPrototypesFor(link: Link): Node[] {
  *  def-children prototypes. The element-level carrier of the def's css —
  *  wired as the seam consumer's child for `children`-targets (SED-2) and
  *  merged into the consumer's element for `type`-targets (SED-1). */
-const defRootPrototypes = new Map<Link, Node>()
-
-export function registerDefRootPrototype(link: Link, root: Node): void {
-  defRootPrototypes.set(link, root)
+export function registerDefRootPrototype(link: Link, root: Node, scope: GraphScope = DEFAULT_SCOPE): void {
+  scope.defRootPrototypes.set(link, root)
 }
 
-export function defRootPrototypeFor(link: Link): Node | undefined {
-  return defRootPrototypes.get(link)
+export function defRootPrototypeFor(link: Link, scope: GraphScope = DEFAULT_SCOPE): Node | undefined {
+  return scope.defRootPrototypes.get(link)
 }
 
 /** Feature 1a (handoffs-review-5.md — the census emit): READ-ONLY enumerator
  *  over the def-children registry (REQ-GAP-11 discipline — the maps stay
  *  write-private; only reads are exposed). */
-export function defPrototypeEntries(): [Link, Node[]][] {
-  return [...defPrototypes.entries()]
+export function defPrototypeEntries(scope: GraphScope = DEFAULT_SCOPE): [Link, Node[]][] {
+  return [...scope.defPrototypes.entries()]
 }
 
 /** Feature 1a — READ-ONLY enumerator over the def-ROOT registry. */
-export function defRootPrototypeEntries(): [Link, Node][] {
-  return [...defRootPrototypes.entries()]
+export function defRootPrototypeEntries(scope: GraphScope = DEFAULT_SCOPE): [Link, Node][] {
+  return [...scope.defRootPrototypes.entries()]
 }
 
 /** Feature 1a (handoffs-review-5.md G2) — recover the registration NAME of a
@@ -171,57 +226,56 @@ export function defNameForLink(link: Link): string | undefined {
 }
 
 // Origin tracking (the ORIGIN-OWNER element, archive/reviews/2026-08-16/
-// 2026-08-16-legacy-handler-reuse-review §12.4.3/4 — A1): the module-level
+// 2026-08-16-legacy-handler-reuse-review §12.4.3/4 — A1): the per-scope
 // minted-set record — minted node id →
 // origin layer id. It SURVIVES creator death (a moved minted node under a
 // non-origin permanent parent is promoted by the teardown, never left
 // permanently reverse-excluded) and is the rollback handle (one layer id →
 // its whole minted set). Per-node marker split: Node.originLayer carries the
-// same id (the reverse-exclusion read).
-const mintedByLayer = new Map<NodeId, string>()
-
-export function registerMinted(nodeId: NodeId, origin: string): void {
-  mintedByLayer.set(nodeId, origin)
+// same id (the reverse-exclusion read). Scoped per graph (D5/D6).
+export function registerMinted(nodeId: NodeId, origin: string, scope: GraphScope = DEFAULT_SCOPE): void {
+  scope.mintedByLayer.set(nodeId, origin)
 }
 
-export function unregisterMinted(nodeId: NodeId): void {
-  mintedByLayer.delete(nodeId)
+export function unregisterMinted(nodeId: NodeId, scope: GraphScope = DEFAULT_SCOPE): void {
+  scope.mintedByLayer.delete(nodeId)
 }
 
-export function mintedByOrigin(origin: string): NodeId[] {
+export function mintedByOrigin(origin: string, scope: GraphScope = DEFAULT_SCOPE): NodeId[] {
   const out: NodeId[] = []
-  for (const [id, o] of mintedByLayer) {
+  for (const [id, o] of scope.mintedByLayer) {
     if (o === origin) out.push(id)
   }
   return out
 }
 
 export function registerContentNode(node: Node): void {
-  contentNodes.add(node)
+  scopeOf(node).contentNodes.add(node)
 }
 
 export function unregisterContentNode(node: Node): void {
-  contentNodes.delete(node)
+  scopeOf(node).contentNodes.delete(node)
 }
 
 export function isContentNode(node: Node): boolean {
-  return contentNodes.has(node)
+  return scopeOf(node).contentNodes.has(node)
 }
 
-// id -> most recently constructed node; used to resolve serialized parent refs
-const byId = new Map<NodeId, Node>()
-
-export function resolveNodeRef(id: string): Node | undefined {
-  return byId.get(id)
+// id -> most recently constructed node; used to resolve serialized parent refs.
+// Scoped per graph (D3): an isolated graph resolves only its OWN nodes.
+export function resolveNodeRef(id: string, scope: GraphScope = DEFAULT_SCOPE): Node | undefined {
+  return scope.byId.get(id)
 }
 
 /** Register a constructed node for sweep participation and id resolution. */
 export function registerNode(node: Node): void {
-  registered.add(node)
-  byId.set(node.id, node)
+  const scope = scopeOf(node)
+  scope.registered.add(node)
+  scope.byId.set(node.id, node)
 }
 
-/** Schedule a sweep run. Pass force=true to guarantee a run even if already scheduled. */
+/** Schedule a sweep run. Pass force=true to guarantee a run even if already scheduled.
+ *  D6 — ONE module timer; the run partitions per-scope pendingDestroy/dirty sets. */
 export function scheduleSweep(force = false): void {
   if (sweepScheduled && !force) return
   sweepScheduled = true
@@ -232,49 +286,52 @@ export function scheduleSweep(force = false): void {
 }
 
 function runSweep(): void {
-  const batch = pendingDestroy.splice(0)
-  for (const node of batch) {
-    const flag = cascadeFlags.get(node)
-    cascadeFlags.delete(node)
-    if (node.destroyed) continue
-    if (node.state === 'in-tree' || node.state === 'prototype') continue
-    if (isContentNode(node)) continue // payload-owned content persists (placement may return)
-    finalizeDestroyed(node, flag)
-  }
-  // pass-2: coalesced compileRemote over the union of 'remote'-dirty nodes.
-  // Topmost ancestors first, sharing one visited set so recursion covers
-  // descendants and no node is compiled twice (no whole-tree recompile).
-  const visited = new Set<NodeId>()
-  const dirty = [...registered].filter(n => !n.destroyed && n.dirty.has('remote'))
-  const depthOf = (n: Node): number => {
-    let d = 0
-    let cur = n.parent
-    while (cur) {
-      d++
-      cur = cur.parent
+  for (const scope of allScopes) {
+    const batch = scope.pendingDestroy.splice(0)
+    for (const node of batch) {
+      const flag = scope.cascadeFlags.get(node)
+      scope.cascadeFlags.delete(node)
+      if (node.destroyed) continue
+      if (node.state === 'in-tree' || node.state === 'prototype') continue
+      if (isContentNode(node)) continue // payload-owned content persists (placement may return)
+      finalizeDestroyed(node, flag)
     }
-    return d
   }
-  dirty.sort((x, y) => depthOf(x) - depthOf(y))
-  for (const node of dirty) {
-    if (visited.has(node.id)) continue
-    node.compileRemote(visited)
-    node.dirty.delete('remote')
-  }
-  for (const node of registered) {
-    if (node.destroyed) continue
-    if (node.dirty.has('anchor-populate')) {
-      node.reconcileAnchors()
-      node.dirty.delete('anchor-populate')
+  // pass-2: coalesced compileRemote over the union of 'remote'-dirty nodes,
+  // per scope (an isolated graph compiles only its own nodes).
+  for (const scope of allScopes) {
+    const visited = new Set<NodeId>()
+    const dirty = [...scope.registered].filter(n => !n.destroyed && n.dirty.has('remote'))
+    const depthOf = (n: Node): number => {
+      let d = 0
+      let cur = n.parent
+      while (cur) {
+        d++
+        cur = cur.parent
+      }
+      return d
     }
-    if (node.dirty.has('remote')) node.dirty.delete('remote')
-    if (node.dirty.has('sweep-candidate')) node.dirty.delete('sweep-candidate')
+    dirty.sort((x, y) => depthOf(x) - depthOf(y))
+    for (const node of dirty) {
+      if (visited.has(node.id)) continue
+      node.compileRemote(visited)
+      node.dirty.delete('remote')
+    }
+    for (const node of scope.registered) {
+      if (node.destroyed) continue
+      if (node.dirty.has('anchor-populate')) {
+        node.reconcileAnchors()
+        node.dirty.delete('anchor-populate')
+      }
+      if (node.dirty.has('remote')) node.dirty.delete('remote')
+      if (node.dirty.has('sweep-candidate')) node.dirty.delete('sweep-candidate')
+    }
   }
 }
 
 /** REQ-GAP-11 (handoffs-review-2 §REQ-GAP-11 + the 2026-08-21 amendment) —
  *  the internal eviction primitive (NOT host-facing surface; reset/prune/
- *  unregisterNode stay REJECTED): drops a destroyed node from the module-level
+ *  unregisterNode stay REJECTED): drops a destroyed node from its scope's
  *  `registered`/`byId` sets + the content/minted ownership registries. Destroy
  *  is terminal — deletion is safe and completes the lifecycle the sweep owns.
  *  Called from `finalizeDestroyed` AND from the supervisor destroy op on BOTH
@@ -282,14 +339,14 @@ function runSweep(): void {
  *  sweep — it never calls markPending — so finalize-only eviction would miss
  *  the clone-built workload). */
 export function evictDestroyedNode(node: Node): void {
-  registered.delete(node)
-  // INSTANCE-GUARDED byId eviction (the smoke shares one module-level byId
-  // across pages whose loadState-re-seeded graphs carry the SAME node ids —
-  // an unconditional id-keyed delete would remove ANOTHER page's live entry
-  // for the same id when a deferred sweep fires mid-run).
-  if (byId.get(node.id) === node) byId.delete(node.id)
+  const scope = scopeOf(node)
+  scope.registered.delete(node)
+  // INSTANCE-GUARDED byId eviction (isolated + shared graphs with re-seeded
+  // SAME node ids — an unconditional id-keyed delete would remove ANOTHER
+  // graph's live entry for the same id when a deferred sweep fires mid-run).
+  if (scope.byId.get(node.id) === node) scope.byId.delete(node.id)
   unregisterContentNode(node)
-  unregisterMinted(node.id)
+  unregisterMinted(node.id, scope)
 }
 
 /** Journal-condensing (D4, handoffs-review-8.md) — the SYNCHRONOUS
@@ -297,16 +354,19 @@ export function evictDestroyedNode(node: Node): void {
  *  `_restoreBase` graph-REPLACE critical section can run without an async
  *  sweep interleaving (a deferred sweep must never finalize a NEW seed).
  *  Mirrors the async runSweep's per-node handling; the pass-2 compile half
- *  is NOT run here (the restore schedules its own full pass-2 refresh). */
+ *  is NOT run here (the restore schedules its own full pass-2 refresh).
+ *  Drains every scope's pending queue (scope-local per node). */
 export function drainPendingDestroy(): void {
-  const batch = pendingDestroy.splice(0)
-  for (const node of batch) {
-    const flag = cascadeFlags.get(node)
-    cascadeFlags.delete(node)
-    if (node.destroyed) continue
-    if (node.state === 'in-tree' || node.state === 'prototype') continue
-    if (isContentNode(node)) continue
-    finalizeDestroyed(node, flag)
+  for (const scope of allScopes) {
+    const batch = scope.pendingDestroy.splice(0)
+    for (const node of batch) {
+      const flag = scope.cascadeFlags.get(node)
+      scope.cascadeFlags.delete(node)
+      if (node.destroyed) continue
+      if (node.state === 'in-tree' || node.state === 'prototype') continue
+      if (isContentNode(node)) continue
+      finalizeDestroyed(node, flag)
+    }
   }
 }
 
@@ -361,10 +421,11 @@ function finalizeDestroyed(node: Node, flag?: { prototypeRooted: boolean }): voi
   for (const hook of finalizeHooks) hook(node)
 }
 
-/** Queue a node for the async cascade-destroy sweep. */
+/** Queue a node for the async cascade-destroy sweep (scope-partitioned, D6). */
 export function markPending(node: Node): void {
-  if (!pendingDestroy.includes(node)) {
-    pendingDestroy.push(node)
+  const scope = scopeOf(node)
+  if (!scope.pendingDestroy.includes(node)) {
+    scope.pendingDestroy.push(node)
     scheduleSweep()
   }
 }
