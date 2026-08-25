@@ -60,13 +60,23 @@ afterEach(() => {
   delete (globalThis as Record<string, unknown>)['__bridge_seen']
 })
 
-/** The 6 corpus handler defs, verbatim from the live-prod envelope. */
-const corpus = JSON.parse(
-  readFileSync(new URL('../../live-prod/placeholderLanding/placeholderLanding.json', import.meta.url), 'utf8'),
-) as {
+/** The 6 corpus handler defs, verbatim from the live-prod envelope.
+ *  The fixture is GITIGNORED (live-prod stays local — .gitignore), so in a
+ *  clean CI checkout (publish workflow) it is ABSENT. The corpus-dependent
+ *  suites below are `describe.skip`'d when it is missing (the full battery
+ *  still runs locally where the file exists). */
+let corpus: {
   template: { root: { component: Array<{ reference: string; value: { name: string; body: string } }> } }
+} | null = null
+try {
+  corpus = JSON.parse(
+    readFileSync(new URL('../../live-prod/placeholderLanding/placeholderLanding.json', import.meta.url), 'utf8'),
+  )
+} catch {
+  corpus = null
 }
-const corpusDefs = new Map(corpus.template.root.component.map((c) => [c.reference, c.value]))
+const corpusDefs = new Map((corpus?.template.root.component ?? []).map((c) => [c.reference, c.value]))
+const corpusDescribe = corpus ? describe : describe.skip
 
 const defs = (names: string[]): Array<{ reference: string; value: { name: string; body: string } }> =>
   names.map((n) => ({ reference: n, value: corpusDefs.get(n)! }))
@@ -454,7 +464,7 @@ describe('BRIDGE — userData passthrough (decision 6)', () => {
   })
 })
 
-describe('BRIDGE — the 6 corpus defs compile + dispatch (decision-7 corpus, event-only reuse)', () => {
+corpusDescribe('BRIDGE — the 6 corpus defs compile + dispatch (decision-7 corpus, event-only reuse)', () => {
   it('[B8a] AuthInitHandler — userData READ: signed-in → receiveNextState({content}) on the first child', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const t = authEnv({ session: 's1' })
@@ -641,7 +651,7 @@ describe('ROUND-5 DEFECTS — #16 merge / #17 seed leak / #18 seam-install conta
   })
 })
 
-describe('AUTH-SEAM — the def handler copies to the TYPE-target consumer (2026-08-15)', () => {
+corpusDescribe('AUTH-SEAM — the def handler copies to the TYPE-target consumer (2026-08-15)', () => {
   // The legacy auth pattern: the userAuthComponent def carries
   // `handlers.afterAssembly` → AuthInitHandler. Per the design: the handler
   // COPIES with the def's data onto the TYPE-target consumer (the assembled
