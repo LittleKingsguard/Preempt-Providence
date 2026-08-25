@@ -204,3 +204,24 @@ Context management guidelines for agents working in this repository:
     changed for a specific sub-agent (the delegation mechanism exposes no
     model override), PAUSE and wait for the user to manually switch the
     model before running the loop — never run it with a different model.
+
+12. **CI / pre-release publish constraints (learned 2026-08-25 — the publish
+    workflow `.github/workflows/publish-prerelease.yml`)**: the publish runs in
+    a CLEAN checkout, so three things that work locally will fail in CI if
+    changed. Keep them pinned:
+    a. **`dist/` is gitignored.** The demo-driven tests
+       (`tests/unit/fork-stress-data.test.ts` → `demo/fork-stress-data.js`)
+       import `../dist/core/*`. The workflow MUST run `npm run build` before
+       `npm test` — never remove that step. Symptom: `Failed to load url
+       ../dist/core/translate.js … Does the file exist?`.
+    b. **`live-prod/` is gitignored** (stays local). `legacy-bridge.test.ts`
+       reads `live-prod/placeholderLanding/placeholderLanding.json`; it is
+       loaded defensively and the corpus-dependent suites `describe.skip` when
+       absent. Never commit a live-prod payload; never `npm test` against a
+       state that requires the gitignored file.
+    c. **npm auth to GitHub Packages** uses `${NODE_AUTH_TOKEN}` (set by
+       `setup-node` + the workflow) in the committed `.npmrc` — NOT `${NPM_TOKEN}`
+       (a mismatch → `401 Unauthorized` on `npm publish`).
+    Any new CI test failure referencing a gitignored path is fixed by
+    skip-when-absent (fixture) or build-first (dist) — never by committing the
+    gitignored file. See README §"CI / publish troubleshooting".

@@ -72,6 +72,14 @@ following must be done (in order):
 release must ship as `provident-ssr` (the name the Electron consumer and the
 published 0.1.x line already use).
 
+**CI constraints (2026-08-25, pinned in AGENTS.md item 12 + README §"CI /
+publish troubleshooting"):** the publish workflow runs in a CLEAN checkout —
+`dist/` is gitignored (build before `npm test`), `live-prod/` is gitignored
+(the corpus-dependent suites `describe.skip` when absent), and the npm auth to
+GitHub Packages uses `${NODE_AUTH_TOKEN}` (not `${NPM_TOKEN}`). Any future CI
+failure referencing a gitignored path is fixed by skip-when-absent or
+build-first, never by committing the gitignored file.
+
 ## PENDING (awaiting the user gate — bookmark, do NOT auto-proceed)
 
 | Item | Gate |
