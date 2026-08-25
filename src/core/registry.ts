@@ -355,13 +355,18 @@ export function evictDestroyedNode(node: Node): void {
  *  sweep interleaving (a deferred sweep must never finalize a NEW seed).
  *  Mirrors the async runSweep's per-node handling; the pass-2 compile half
  *  is NOT run here (the restore schedules its own full pass-2 refresh).
- *  Drains every scope's pending queue (scope-local per node). */
-export function drainPendingDestroy(): void {
-  for (const scope of allScopes) {
-    const batch = scope.pendingDestroy.splice(0)
+ *  Drains a scope's pending queue (scope-local per node). DEFECT-A fix
+ *  (2026-08-25 adversarial pass, X19/X20): pass a scope to drain ONLY that
+ *  scope's queue — a graph-A condense/replay must never finalize graph-B's
+ *  pending nodes. `undefined` drains every scope (the pre-fix / shared-default
+ *  behavior — a default host has one scope anyway). */
+export function drainPendingDestroy(scope?: GraphScope): void {
+  const scopes = scope ? [scope] : [...allScopes]
+  for (const s of scopes) {
+    const batch = s.pendingDestroy.splice(0)
     for (const node of batch) {
-      const flag = scope.cascadeFlags.get(node)
-      scope.cascadeFlags.delete(node)
+      const flag = s.cascadeFlags.get(node)
+      s.cascadeFlags.delete(node)
       if (node.destroyed) continue
       if (node.state === 'in-tree' || node.state === 'prototype') continue
       if (isContentNode(node)) continue

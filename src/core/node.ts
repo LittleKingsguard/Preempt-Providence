@@ -787,9 +787,12 @@ export class Node {
     }
   }
 
-  clone(actor?: string, opts: { ignore?: string[] } = {}): Node {
+  clone(actor?: string, opts: { ignore?: string[] } = {}, graphScope?: GraphScope): Node {
     if (this.destroyed) throw new Error('cannot clone a destroyed node')
-    const copy = new Node({ ...this.base }, this.hub ?? undefined, mintNodeId(), true)
+    // DEFECT-C fix (2026-08-25 adversarial pass, X12): thread a graphScope into
+    // the copy so a clone-instance lands in the SUPERVISOR's scope (not the
+    // source's, and never silently DEFAULT). Defaults to the source's scope.
+    const copy = new Node({ ...this.base }, this.hub ?? undefined, mintNodeId(), true, graphScope ?? this.graphScope ?? undefined)
     const ignore = new Set(opts.ignore ?? [])
     for (const l of this.layers) {
       if (l.id.startsWith('seed-')) continue

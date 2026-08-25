@@ -14,7 +14,7 @@ import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
 import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
-import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin, drainPendingDestroy, defRootPrototypeEntries, defPrototypeEntries } from './registry.js'
+import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin, drainPendingDestroy, defRootPrototypeEntries, defPrototypeEntries, scopeOf } from './registry.js'
 import type { GraphScope } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
@@ -698,8 +698,11 @@ export class Supervisor {
    *  cannot interleave (the drain ran synchronously). Re-runnable: a second
    *  restore drains the first restore's nodes the same way. */
   private _restoreBase(snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown }): void {
-    // step 1 — drain + evict every pre-base node (synchronous critical section)
-    drainPendingDestroy()
+    // step 1 — drain + evict every pre-base node (synchronous critical section).
+    // DEFECT-A fix (2026-08-25, X19/X20): drain only THIS scope's pending
+    // queue — an isolated graph's restore must never finalize another graph's
+    // nodes (a shared/default supervisor has one scope, so no behavior change).
+    drainPendingDestroy(this.graphScope ?? undefined)
     for (const n of [...this.nodes.values()]) {
       evictDestroyedNode(n)
       this.nodes.delete(n.id)
@@ -796,6 +799,22 @@ export class Supervisor {
       if (t.destroyed) {
         this.suppressJournal = prevSuppress
         return { status: 'no-usable-state', nodeState: 'destroyed' }
+      }
+    }
+    // DEFECT-B fix (2026-08-25 adversarial pass, X10/X11): a cross-graph
+    // target guard. When THIS supervisor is ISOLATED (has a graphScope), its
+    // ops must only act on nodes of ITS graph — a graph-A node passed as a
+    // rows-mint/layer-apply/rows-clear target on a B supervisor would mint into
+    // B while hanging the minted set off the graph-A node (a cross-graph family
+    // link). Reject it. The DEFAULT path (no graphScope) keeps the shared
+    // permissive contract.
+    if (this.graphScope) {
+      const guardTarget = op.kind === 'rows-mint' || op.kind === 'rows-clear' || op.kind === 'layer-apply'
+        ? (op.target as Node | undefined)
+        : node
+      if (guardTarget && scopeOf(guardTarget) !== this.graphScope) {
+        this.suppressJournal = prevSuppress
+        return { status: 'rejected', error: { code: 'cross-graph-target' } }
       }
     }
 
@@ -1018,7 +1037,13 @@ export class Supervisor {
         // source may arrive as `source` (wire contract) or `node` (internal)
         const source = (op.source as Node | undefined) ?? node
         if (!source) return { status: 'rejected', error: { code: 'unknown-node' } }
-        const copy = source.clone('actor')
+        // DEFECT-B/C fix (2026-08-25 adversarial pass, X12): a clone must land
+        // in THIS supervisor's scope. An ISOLATED supervisor rejects a
+        // cross-scope source (a graph-A node cloned into B).
+        if (this.graphScope && scopeOf(source) !== this.graphScope) {
+          return { status: 'rejected', error: { code: 'cross-graph-target' } }
+        }
+        const copy = source.clone('actor', {}, this.graphScope ?? undefined)
         this.registerNode(copy)
         const slot = op.slot as Node | undefined
         if (slot) {

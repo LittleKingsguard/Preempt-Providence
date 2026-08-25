@@ -65,6 +65,30 @@ translate + supervisor + render agree on one scope.
 - The two-package-instances fallback stays captured in the review but is NOT
   built here (a single instance is required).
 
+## Host-authoring traps (DOCUMENTED 2026-08-25 adversarial pass — the engine
+honors D1/D7/D8 but offers NO guard for these)
+
+- **D1 half-coverage**: a scope passed to translate-but-not-Supervisor (or
+  nodes constructed without the scope) silently falls back to the DEFAULT
+  singleton; a `{graphScope}` Supervisor still applies a live `op.node` ref and
+  reads DEFAULT userData/byId. Per the opt-in contract this is the HOST's
+  responsibility — the fall-through is to DEFAULT, never to another isolated
+  scope.
+- **D7 shared EventBridge**: one bridge across two isolated Supervisors is a
+  shared bus (graph-A events reach graph-B subscribers). Pass a distinct bridge
+  per isolated graph.
+- **Render scope**: `emitElements`/`renderProducingProcess` def-fill keys on
+  `renderOptions.graphScope`; the actionable list carries no scope. A host
+  rendering a graph with the wrong scope arg silently fills defs from an
+  unrelated scope. The render scope and node scope must agree.
+- **ADVERSARIAL FIX (2026-08-25, X10/X11/X12/X19/X20):** the isolated path now
+  GUARDS three engine leaks found by the adversarial pass — `drainPendingDestroy`
+  is scope-partitioned (a graph-A restore never finalizes graph-B's nodes), a
+  cross-graph `rows-mint`/`layer-apply`/`rows-clear`/`clone-instance` target is
+  rejected (`cross-graph-target`), and `clone()` threads the supervisor's scope
+  (a same-scope clone lands in the isolated scope, never DEFAULT). Tests:
+  multi-graph-isolation ADV-X10/X12/X19.
+
 ## Validation
 
 Red→green→verify (AGENTS.md item 8): TDD set encodes D1-D8 — the isolation

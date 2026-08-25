@@ -34,6 +34,10 @@ import {
   mintedByOrigin,
   registered,
   DEFAULT_SCOPE,
+  markPending,
+  drainPendingDestroy,
+  scopeOf,
+  registerDefPrototypes,
 } from '../../src/core/registry.js'
 import { hub, childOf } from '../helpers/fixtures.js'
 
@@ -155,5 +159,61 @@ describe('D8 — the default (no opt-in) stays the shared module singleton', () 
     expect(resolveNodeRef('shared-default')).toBe(b)
     expect(registered.has(a)).toBe(true)
     expect(registered.has(b)).toBe(true)
+  })
+})
+
+describe('ADVERSARIAL (2026-08-25 adversarial pass — DEFECT-A/B/C, isolation leaks)', () => {
+  it('ADV-X19 — a scoped drainPendingDestroy(scope) does NOT finalize another scope\'s pending nodes', async () => {
+    const sA = createIsolatedScope()
+    const sB = createIsolatedScope()
+    const nodeB = new Node({ type: 'div' }, hub(), 'b-live', false, sB)
+    // destroy queues nodeB into sB.pendingDestroy (no scope arg = would drain ALL scopes today)
+    nodeB.destroy()
+    drainPendingDestroy(sA)
+    // graph-A's condense drain must NOT finalize graph-B's pending node
+    expect(nodeB.destroyed).toBe(false)
+    expect(sB.registered.has(nodeB)).toBe(true)
+  })
+
+  it('ADV-X10 — a supervisor rejects a rows-mint target from a DIFFERENT isolated scope', () => {
+    const scopeA = createIsolatedScope()
+    const scopeB = createIsolatedScope()
+    const hubA = hub()
+    // a def prototype registered in B's scope (on the creator's hub link) so
+    // the mint resolves in B and would APPLY — the leak we must reject
+    const proto = new Node({ type: 'li', props: { cls: 'row' } }, hubA, 'proto-1', false, scopeB)
+    registerDefPrototypes(hubA.linkFor('item', 'component'), [proto], scopeB)
+    const creatorA = new Node({ type: 'section' }, hubA, 'creator-a', false, scopeA)
+    const supB = new Supervisor({ graphScope: scopeB, events: new EventBridge() })
+    supB.registerNode(creatorA)
+    // a graph-A node as rows-mint target on a B supervisor must be rejected
+    const res = supB.apply({ kind: 'rows-mint', target: creatorA, hookName: 'items', mintKind: 'component', prototypeName: 'item', rows: [{ name: 'x' }] } as never)
+    expect(res.status).not.toBe('applied')
+    // no minted row may hang off a cross-graph family link
+    expect(scopeB.byId.has('node-1')).toBe(false)
+  })
+
+  it('ADV-X12 — a clone-instance from a DIFFERENT isolated scope is REJECTED (cross-graph-target)', () => {
+    const scopeA = createIsolatedScope()
+    const scopeB = createIsolatedScope()
+    const nodeA = new Node({ type: 'div', props: { x: 1 } }, hub(), 'src', false, scopeA)
+    const supB = new Supervisor({ graphScope: scopeB, events: new EventBridge() })
+    supB.registerNode(nodeA)
+    const res = supB.apply({ kind: 'clone-instance', node: nodeA } as never)
+    // a graph-A source cloned into a B supervisor is a cross-graph clone — reject
+    expect(res.status).toBe('rejected')
+  })
+
+  it('ADV-X12 — a SAME-scope clone-instance copy lands in the SUPERVISOR\'s isolated scope (not DEFAULT)', () => {
+    const scopeB = createIsolatedScope()
+    const nodeB = new Node({ type: 'div', props: { x: 1 } }, hub(), 'src-b', false, scopeB)
+    const supB = new Supervisor({ graphScope: scopeB, events: new EventBridge() })
+    supB.registerNode(nodeB)
+    const res = supB.apply({ kind: 'clone-instance', node: nodeB } as never)
+    // the copy must be resolvable in scope B (never silently in DEFAULT)
+    const copiedId = (res as { minted?: string[] })?.minted?.[0]
+    expect(copiedId).toBeDefined()
+    const copy = scopeB.byId.get(copiedId as string)
+    expect(copy).toBeDefined()
   })
 })
