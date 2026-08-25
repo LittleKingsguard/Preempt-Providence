@@ -14,7 +14,7 @@ import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
 import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
-import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit } from './registry.js'
+import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
 import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
@@ -575,7 +575,7 @@ export class Supervisor {
    *  entry's `result` in place instead). The public `apply` signature is
    *  unchanged; `opts` is underscored-internal. */
   private suppressJournal = false
-  apply(op: { kind: string; node?: Node; [key: string]: unknown }, opts?: { journal?: boolean }): {
+  apply(op: { kind: string; node?: Node; [key: string]: unknown }, opts?: { journal?: boolean; skipKindGate?: boolean }): {
     status: 'applied' | 'no-usable-state' | 'rejected'
     journalId?: string
     dirtied?: NodeId[]
@@ -584,6 +584,9 @@ export class Supervisor {
     minted?: NodeId[]
     sliceLayers?: string[]
     hookUndo?: { name: string; preValue: unknown; created: boolean; cleared: boolean }[]
+    reused?: NodeId[]
+    removed?: { key: unknown; nodeId: string }[]
+    preRecord?: { prototypeName: string; rows: unknown[]; layerId: string; mintKind: string; placementName?: string; keyField?: string } | null
   } {
     const node = op.node as Node | undefined
     const prevSuppress = this.suppressJournal
@@ -591,6 +594,25 @@ export class Supervisor {
     if (!node && op.kind !== 'clone-instance' && op.kind !== 'layer-apply' && op.kind !== 'rows-mint' && op.kind !== 'rows-clear') {
       this.suppressJournal = prevSuppress
       return { status: 'rejected', error: { code: 'unknown-node' } }
+    }
+
+    // ADVERSARIAL-S1/S2 (2026-08-24) — the rows ops carry `op.target` (not
+    // `op.node`) and BYPASS id-resolution (the `!node && ...` skip above):
+    // validate it here so a malformed (string / absent) target is a CONTAINED
+    // `unknown-node` rejection (never an uncaught TypeError escaping apply,
+    // never a silent `applied` no-op) and a DESTROYED target is a contained
+    // `no-usable-state` (never an uncaught destroyed-write throw, never a
+    // mint under a dead parent).
+    if (op.kind === 'rows-mint' || op.kind === 'rows-clear') {
+      const t = op.target as Node | undefined
+      if (!t || typeof t !== 'object' || typeof (t as { id?: unknown }).id !== 'string') {
+        this.suppressJournal = prevSuppress
+        return { status: 'rejected', error: { code: 'unknown-node' } }
+      }
+      if (t.destroyed) {
+        this.suppressJournal = prevSuppress
+        return { status: 'no-usable-state', nodeState: 'destroyed' }
+      }
     }
 
     // before-compile: phase handlers run before the op executes (and its
@@ -876,23 +898,45 @@ export class Supervisor {
         const target = op.target as Node | undefined
         if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
         const rowsOp = op as unknown as RowsMintOp
-        const declared = (target.base.hooksKind ?? {})[rowsOp.hookName]
-        if (declared !== undefined && declared !== rowsOp.mintKind) {
-          return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: declared kind "${declared}" ≠ op kind "${rowsOp.mintKind}"` } }
-        }
-        if (declared === undefined && rowsOp.mintKind !== 'component') {
-          return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: undeclared hook — only 'component' is implied; declare hooksKind` } }
+        // ADVERSARIAL-KEYED-S22 — the D8 undo re-apply passes `skipKindGate`
+        // (an inverse restores a previously-VALID state; a hooksKind change
+        // after the op must not block the undo). The forward path keeps the gate.
+        if (!(opts as { skipKindGate?: boolean } | undefined)?.skipKindGate) {
+          const declared = (target.base.hooksKind ?? {})[rowsOp.hookName]
+          if (declared !== undefined && declared !== rowsOp.mintKind) {
+            return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: declared kind "${declared}" ≠ op kind "${rowsOp.mintKind}"` } }
+          }
+          if (declared === undefined && rowsOp.mintKind !== 'component') {
+            return { status: 'rejected', error: { code: 'hook-kind-mismatch', detail: `rows-mint ${rowsOp.hookName}: undeclared hook — only 'component' is implied; declare hooksKind` } }
+          }
         }
         const res = rowsMint(rowsOp as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes })
         for (const id of res.minted) {
           const n = resolveNodeRef(id)
           if (n) this.registerNode(n)
         }
-        const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways, minted: res.minted })
-        // MINT-SIDE consumer walk: consumers of any minted row's source/duplex
-        // field names are dirtied + pass-2'ed (the cascade the amendment pins)
+        const entry = this.journalIfApplied(op, {
+          status: 'applied',
+          dirtied: res.doorways,
+          minted: res.minted,
+          // Feature 1b (D10) — additive observability + the undo fact-set:
+          // `reused` = in-place-updated (changed) ids, `removed` = the
+          // per-id-teardown rows, `preRecord` = the pre-op batch record
+          // (null when the op created the batch) — the D8 exact-inverse undo.
+          reused: res.reused ?? [],
+          removed: res.removed ?? [],
+          preRecord: res.preRecord ?? null,
+        })
+        // MINT-SIDE consumer walk: consumers of any changed row's source/duplex
+        // field names are dirtied + pass-2'ed (the cascade the amendment pins).
+        // Feature 1b — the walk covers the REUSED (changed) rows + the
+        // REMOVE-MISSING set (captured by the executor before teardown) too,
+        // so a value-only keyed update dirties the changed field-name
+        // consumers (the silent-abort: an unchanged row is NOT in `reused`,
+        // so its consumers are not marked). The unchanged-row no-op yields an
+        // empty walk → target-only dirtied (replay-churn bound).
         const consumed = new Set<string>()
-        for (const id of res.minted) {
+        for (const id of [...(res.minted ?? []), ...(res.reused ?? []), ...(res.removed ?? []).map((r) => r.nodeId)]) {
           const n = resolveNodeRef(id)
           if (!n) continue
           for (const a of n.anchors) {
@@ -915,7 +959,7 @@ export class Supervisor {
         // set with a single-provider result (the pin-6 fan-out must survive
         // the flush). The consumers marked below compile last and win.
         const dirtied = [...new Set([...res.doorways, ...consumed])]
-        return { status: 'applied', journalId: entry!.id, dirtied, minted: res.minted }
+        return { status: 'applied', journalId: entry!.id, dirtied, minted: res.minted, reused: res.reused ?? [], removed: res.removed ?? [], preRecord: res.preRecord ?? null }
       }
       if (op.kind === 'rows-clear') {
         // HOOKS-ARRAY (§9.4 item 6) — the PAYLOAD-CONTROLLED teardown: the
@@ -926,11 +970,30 @@ export class Supervisor {
         if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
         const res = rowsClear(op as never, { hub: target.hubFor ?? this.hub ?? (null as never), nodes: this.nodes })
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: res.doorways })
+        // ADVERSARIAL-S5 (2026-08-24) — the mint-side consumer walk on
+        // teardown too: rows-clear marks the field-name consumers pass-2 so
+        // their stale fan-out arms refresh (the apply-time walk covers the
+        // mint only; a clear/undo must not leave ghost arms in the store).
+        const consumed = new Set<string>()
+        for (const id of res.minted ?? []) {
+          const n = resolveNodeRef(id)
+          if (!n) continue
+          for (const a of n.anchors) {
+            if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+            for (const ta of a.link.anchorsOf('target')) {
+              const consumer = ta.owner
+              if (!consumer || consumed.has(consumer.id)) continue
+              consumed.add(consumer.id)
+              this.markPass2(consumer.id)
+            }
+          }
+        }
         this.emitStructure('rows-clear', target.id)
         this.markPass2(target.id)
+        const dirtied = [...new Set([...res.doorways, ...consumed])]
         return entry
-          ? { status: 'applied', journalId: entry.id, dirtied: res.doorways }
-          : { status: 'applied', dirtied: res.doorways }
+          ? { status: 'applied', journalId: entry.id, dirtied }
+          : { status: 'applied', dirtied }
       }
 
       return { status: 'no-usable-state', nodeState: (node as Node)?.state ?? 'unplaced' }
@@ -985,7 +1048,16 @@ export class Supervisor {
         // fresh slice layer ids — the recorded ones would go stale).
         const res = this.apply(op, { journal: false })
         if (res.status === 'applied') {
-          entry.result = res as unknown as { status: string; [key: string]: unknown }
+          // Feature 1b (D9) — PRESERVE the ORIGINAL `preRecord` across the
+          // refresh: replay re-runs a keyed op against the CURRENT (post-op)
+          // state, so the re-apply's preRecord is the post-op record — the
+          // undo fact-set must stay the first-applied pre-op record (a
+          // subsequent undo must restore the PRE-op values, never the
+          // post-op ones). `'preRecord' in` keeps an explicit null (an op
+          // that CREATED the batch → payload-teardown undo) intact.
+          const merged = { ...res } as { status: string; [key: string]: unknown }
+          if ('preRecord' in (entry.result as object)) merged.preRecord = (entry.result as { preRecord?: unknown }).preRecord
+          entry.result = merged
         }
       } catch {
         // replay reproduces same rejections silently
@@ -1032,18 +1104,58 @@ export class Supervisor {
       } else if (kind === 'destroy') {
         // destroy is terminal; undo is a no-op for destroyed nodes
       } else if (kind === 'rows-mint') {
-        // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
-        // CONTROLLED teardown: clear the batch record + rowsTeardown via the
-        // record's layerId (the record is the undo handle; the operation is
-        // redoable by re-applying the journaled mint op).
-        const hookName = (entry.op as { hookName?: string }).hookName
-        if (hookName !== undefined) {
-          const batches = (resolved as unknown as { batches?: Record<string, { layerId: string }> }).batches ?? {}
-          const record = batches[hookName]
-          if (record) {
-            delete batches[hookName]
-            resolved.rowsTeardown(record.layerId)
-            resolved.removeLayer(record.layerId)
+        // Feature 1b (D8) — the keyed-reuse EXACT inverse: when the entry
+        // carried a `preRecord` (a non-null pre-op BatchRecord), undo RE-APPLIES
+        // the pre-op rows through the SAME keyed executor (journal:false) —
+        // this restores the record + every reused node's values, destroys the
+        // mint-new half (remove-missing), and re-mints the removed half (fresh
+        // ids — identity across undo is not a promise, D8). An entry with
+        // `preRecord === null` (the op CREATED the batch) keeps the plain
+        // payload-controlled teardown below.
+        const mResult = entry.result as { preRecord?: { keyField?: string; prototypeName: string; mintKind: string; placementName?: string; rows: unknown[] } | null } | undefined
+        const preRecord = mResult?.preRecord
+        if (preRecord) {
+          this.apply({
+            kind: 'rows-mint',
+            target: resolved,
+            hookName: (entry.op as { hookName?: string }).hookName,
+            mintKind: preRecord.mintKind,
+            prototypeName: preRecord.prototypeName,
+            ...(preRecord.placementName !== undefined ? { placementName: preRecord.placementName } : {}),
+            ...(preRecord.keyField !== undefined ? { keyField: preRecord.keyField } : {}),
+            rows: preRecord.rows,
+            sourceName: 'rows-undo',
+          }, { journal: false, skipKindGate: true })
+        } else {
+          // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
+          // CONTROLLED teardown: clear the batch record + rowsTeardown via the
+          // record's layerId (the record is the undo handle; the operation is
+          // redoable by re-applying the journaled mint op).
+          const hookName = (entry.op as { hookName?: string }).hookName
+          if (hookName !== undefined) {
+            const batches = (resolved as unknown as { batches?: Record<string, { layerId: string }> }).batches ?? {}
+            const record = batches[hookName]
+            if (record) {
+              // ADVERSARIAL-S5 (2026-08-24) — capture the minted set before the
+              // teardown + walk the field-name consumers (the undo path must
+              // refresh their pass-2 states — no stale fan-out arms after undo).
+              const minted = mintedByOrigin(record.layerId)
+              delete batches[hookName]
+              resolved.rowsTeardown(record.layerId)
+              resolved.removeLayer(record.layerId)
+              for (const id of minted) {
+                const n = resolveNodeRef(id)
+                if (!n) continue
+                for (const a of n.anchors) {
+                  if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
+                  for (const ta of a.link.anchorsOf('target')) {
+                    const consumer = ta.owner
+                    if (!consumer) continue
+                    this.markPass2(consumer.id)
+                  }
+                }
+              }
+            }
           }
         }
       } else if (kind === 'state-slice') {
@@ -1131,7 +1243,11 @@ export class Supervisor {
       // the redoStack beyond the pop (redo-chains stay possible).
       const res = this.apply(op, { journal: false })
       if (res.status === 'applied') {
-        entry.result = res as unknown as { status: string; [key: string]: unknown }
+        // Feature 1b (D9) — preserve the original `preRecord` (same rationale
+        // as replay: a redo's re-apply reads the CURRENT post-op state).
+        const merged = { ...res } as { status: string; [key: string]: unknown }
+        if ('preRecord' in (entry.result as object)) merged.preRecord = (entry.result as { preRecord?: unknown }).preRecord
+        entry.result = merged
       }
       this.undoStack.push(entry)
     } catch {

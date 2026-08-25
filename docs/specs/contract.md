@@ -21,7 +21,7 @@ Imports in tests take the form `import { Link } from '../src/core/link.js'`. Mod
 | `src/core/pipeline.ts` | `PhaseRegistry`, `PhaseWorker`, `PipelineStage`, `SliceLock`, `MicrotaskQueue`, `RenderMicrotaskQueue` |
 | `src/core/validation.ts` | `TAG_SCHEMAS`, `registerTagSchema`, `validateNode`, `TagSchema` |
 | `src/core/render.ts` | `RenderAdapter`, `MinimalElement`, `diffMinimal`, `RenderOp`, mock adapter |
-| `src/core/adapters.ts` | `DomAdapter`, `SSRFragmentAdapter`, `FragmentDescriptor`, `VOID_TAGS`, `DomAdapterOptions` — requires tsconfig `lib` to include `"DOM"` (DECIDED, adapters.md §5) |
+| `src/core/adapters.ts` | `DomAdapter`, `SSRFragmentAdapter`, `MarkdownAdapter`, `FragmentDescriptor`, `VOID_TAGS`, `DomAdapterOptions` — requires tsconfig `lib` to include `"DOM"` (DECIDED, adapters.md §5); the MarkdownAdapter (Feature 2) is a text-only member of the SSR family (adapters.md §4.7) |
 | `src/core/render-helpers.ts` | `minimalFromState`, `applyOps`, `treeFromOps`, `treeSig`, `jsonClone`, `wireKey`, `MinimalElementSource`, `RenderTree` |
 | `src/core/serialize.ts` | JSON round-trip: `serializeNode`, `serializeSlice`, `SerializedAnchor`, `RenderNodeState`, `reResolve` |
 | `src/core/client.ts` | `ClientAPI`, `createClient`, `ExposedState`, `CompileStatus` |
@@ -374,7 +374,7 @@ distinct at the adapter boundary (adapters.md §2/R2).
 
 ## `src/core/adapters.ts`
 
-Behavior contract: `docs/specs/adapters.md` §3 (`DomAdapter`), §4 (`SSRFragmentAdapter`).
+Behavior contract: `docs/specs/adapters.md` §3 (`DomAdapter`), §4 (`SSRFragmentAdapter`), §4.7 (`MarkdownAdapter`).
 Requires `tsconfig` `"lib": ["ES2022", "DOM"]` (DECIDED, adapters.md §5 — the implementer
 applies the tsconfig diff in the commit that introduces this module).
 

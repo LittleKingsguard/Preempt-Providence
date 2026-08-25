@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — rows-scenarios: the rows-mint demo gate (Feature 1/1.5) + the def-prototype round trip (1a)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .consumers-section, .consumer, .rows-list {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .consumer { background: #fff8e7; }
+    .rows-list { background: #eef4ff; }
+    .product-row { border: 1px solid #2a7; background: #e6f7ec; padding: 2px 8px; margin: 3px 0; }
+    .mint-btn { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="rows-scenarios">
+  <!--
+    ============================================================================
+    ROWS-SCENARIOS — the hooks-array rows demo gate (docs/next-feature-batch-
+    0.2.0.md §Feature 1.5) + the Feature 1a def-prototype round-trip arm.
+
+    The page input is ONE legacy JSON envelope (translate.md §1
+    LegacyInitialData): a root + a consumers section, the `hooksKind`
+    declaration (`product-list: 'component'`), the registered def prototype
+    (a def-shaped `template.component` value consumed by rows-mint BY NAME),
+    and CROSS-ROW consumers whose component bindings reference the row field
+    names. The page module (demo/rows-scenarios.js) is CORE ONLY (dist/core/*)
+    + the envelope data + the harness; the rows-mint DRIVE is a control whose
+    function-STRING body calls clientAPI.apply with the rows-mint op (the
+    rows data embedded in the body at authoring time) — a use case needing an
+    outside script/function is a data-authoring mistake.
+
+    The harness mirrors the handlers-scenarios pipeline (translate -> register
+    -> bootstrap compile -> recordResolved -> emit); the runner checks click
+    the mint control (dispatching the REAL function-STRING body), then assert:
+    the 8 rendered rows, the per-row source anchors, the fan-out census
+    (states-per-consumer = 8, asserted <= 2 x 8 — the Feature 1.4 linearity
+    pin, tripwire `fan-out-blowup` silent), the per-row source values in the
+    DOM (one consumer arm per row), the node-scoped layer + Option-C batch
+    record (DEFECT #23), the re-mint no-accumulation, and the Feature 1a
+    ROUND TRIP (serialize -> loadState -> seed -> reconcile ->
+    reRegisterDefPrototypes -> the host re-mint per the batches record -> the
+    row count unchanged, replace-in-place via the round-tripping layerId).
+
+    SECTION MAP
+    ---------------------------------------------------------------------------
+    S1  Mint drive           #mint-btn        -- the function-STRING control
+                                               body mints the 8 product rows
+    S2  Row list             #rows-list       -- hooks + hooksKind; the
+                                               rows-mint target; 8 minted rows
+    S3  Cross-row consumers  #consumer-name / #consumer-price / #consumer-stock
+                                               -- resolve the multi-provider
+                                               fan-out (N states each)
+    S4  Fan-out census       -- states-per-consumer = rows (ratio 1.0);
+                                               fanoutStates <= 2 x fanoutRows;
+                                               no fan-out-blowup warn
+    S5  Node-scoped layer    -- hook-<id>-product-list-rows (DEFECT #23) +
+                               the Option-C batches record
+    S6  Round trip (1a)      -- serialize -> loadState -> seed -> reconcile ->
+                               reRegisterDefPrototypes -> host re-mint per
+                               record -> row count unchanged
+    ============================================================================
+  -->
+
+  <main>
+    <h1>rows-scenarios — the rows-mint demo gate + the def-prototype round trip</h1>
+    <p class="goals">
+      The hooks-array rows machinery in action
+      (<code>docs/specs/hooks-array-injection-review.md</code> §9): a
+      <code>rows-mint</code> op driven by a <b>function-STRING control body</b>
+      (the handlers-scenarios pattern), a registered def prototype resolved
+      BY NAME, N=8 product rows with natural fields
+      (<code>name</code>/<code>price</code>/<code>stock</code> — no
+      <code>id</code>/<code>key</code>), and CROSS-ROW consumers resolving
+      the multi-provider compile fan-out (§9.2 pin 6): states-per-consumer =
+      8 rows (ratio 1.0), asserted against the 2× linearity bound (Feature
+      1.4) with the <code>fan-out-blowup</code> tripwire silent. The round
+      trip (Feature 1a — <code>docs/specs/serialize.md</code> §3 recipe) then
+      proves rows-are-data: the minted rows never serialize as nodes; the
+      <code>batches</code> record round-trips and the host re-mints per it
+      (steps 1.5/4.5) — the row count stays 8, replace-in-place via the
+      round-tripping layerId. The banner is <code>rows-scenarios</code>; the
+      profile line is <code>[rows:profile]</code>.
+    </p>
+
+    <!-- Framework input: the ONE legacy envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <div class="card-mount" id="mount-main"></div>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="rows-scenarios.js"></script>
+</body>
+</html>

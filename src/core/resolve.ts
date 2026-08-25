@@ -235,6 +235,17 @@ export function kindDropReason(kind: ChainKind | undefined): 'prototype-terminat
   return 'owner-terminated'
 }
 
+/** Feature 1.4 (next-feature-batch-0.2.0.md §1.4, ruling a ADOPTED) — the
+ *  LINEARITY tripwire predicate: a name's resolution is a blow-up when the
+ *  produced arms exceed 2× the designed fork product (arms × provider hits —
+ *  the measured rows fan-out is 1:1, ratio 1.0; the 2× headroom is the
+ *  asserted bound). Structurally unreachable in the current resolve (each
+ *  hit forks exactly one arm); it is the DEFECT #22-class REGRESSION guard
+ *  for a future change that re-forks arms per hit. */
+export function isFanOutBlowup(nextArms: number, hits: number, prevArms: number): boolean {
+  return nextArms > 2 * Math.max(hits, 1) * Math.max(prevArms, 1)
+}
+
 /**
  * P3 §2.5/Q8 — per-path component-target resolution for a path-state. The
  * state's OWN node is resolved first (depth-0), then ITS PATH's ancestors —
@@ -342,6 +353,17 @@ function resolveNames(
       for (const branch of continueArm(node, name, fit, arm, slice, viable, kinds, path, depth)) {
         next.push(branch)
       }
+    }
+    // Feature 1.4 (next-feature-batch-0.2.0.md §1.4, ruling a) — the
+    // LINEARITY tripwire: the designed fork product is next = arms × hits
+    // (one branch per hit, measured ratio 1.0 for the rows fan-out); a
+    // regression that forks an arm >2× per hit (the DEFECT #22-class shape —
+    // structurally unreachable today) warns `fan-out-blowup` at compile.
+    const hits = fit.kind === 'hits' ? fit.hits.length : 1
+    if (isFanOutBlowup(next.length, hits, arms.length)) {
+      console.warn(
+        `fan-out-blowup at ${node.id}: "${name}" resolved ${next.length} arms from ${hits} provider(s) across ${arms.length} arm(s) — the 2× linear bound is breached (the DEFECT #22-class shape)`,
+      )
     }
     arms = next
   }

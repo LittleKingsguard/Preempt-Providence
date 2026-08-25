@@ -443,6 +443,58 @@ live descriptor only — the dead one stays gone. The dup-create-without-remove
 clobber surface is untouched (FRG-F3/DOM-F4 parity: the clobbered old descriptor
 stays in the root subtree AND the new one floats top-level, mirroring the DOM).
 
+### 4.7 `MarkdownAdapter` — the text-only family member (Feature 2, 2026-08-24 — handoffs-review-7.md, rulings 12-16 + D1-D15)
+
+A `RenderAdapter` in the SSR text family: it consumes the SAME `RenderOp[]`
+stream (`applyOps`) and emits **markdown text** via `toString()`. The output is
+non-interactive (ruling 15) and carries no element→node mapping (ruling 16);
+the host chooses it at emit (`renderProducingProcess(…, adapter)`, the D14
+seam) — never embed-everything. The adapter is a **pure op-stream consumer**
+(NVA-1/2/4) and is therefore carrier-agnostic by construction (D15: the
+legacy-envelope / translated-graph / serialized-doc distinction is entirely
+upstream — the adapter never observes a carrier).
+
+| Method | Behavior | Ref |
+| --- | --- | --- |
+| `createEl(type, wire, forkKey?)` | mint a retained `MdNode` (type/wire/text/attrs/children/parent); the `fragments` map (D2) is the sole `toString` source. The `createEl` **type is authoritative** over any `prop:type` (D3) | D1-D3 |
+| `setProp(wire, name, val, forkKey?)` | `text` → the node's text; `prop:<k>` → an attr (`href`/`title`/`src`/`alt`); **`on:*` AND `data:*` DROPPED** (D7 — incl. the opt-in `data:node-id` even when `renderOptions.nodeIdAttribute` was passed to the shared emit layer); **`css:*` DROPPED** (D5 — emphasis comes from the element TYPE, never css classes/style; no CSS parsing at the adapter) | D5, D7 |
+| `appendChild(owner, child)` | **SPLICE-BY-IDENTITY move semantics (D8)** — detach the child from its current parent before appending, so a D5 reorder never duplicates the child's text in the markdown output. The string overload is a TEST-HELPER convenience for BARE wires; a FORK-ARM wire MUST be passed as a NODE OBJECT (a bare string resolves to the bare key and would drop the arm — the pipeline via applyOps→findEl always passes node objects; MD-S8 disposition) | D8 |
+| `removeEl(wire, forkKey?)` | **DETACH shape (D8, the DEFECT-SSR-REMOVE pin)** — splice the node out of its parent (its subtree text vanishes from `toString`), null the parent, purge from `created`, `fragments.delete`; silent no-op on unknown keys | D8 |
+| `hydrate(rootWire, vdom)` | **required no-op** — markdown has no DOM to hydrate, never reads a serialized doc (NVA-4) | D1 |
+| `toString()` | walk the retained tree → markdown text; empty doc → `''` (D11); created-but-unappended nodes render after the root (the SSR floating convention, text-adapted) | D11 |
+| `styles` | **NOT implemented** — `applyOps` auto-skips the styles op (CSS rules have no text value) | D3 |
+
+**Type→marker table (D3, D4):** `h1..h6` → `#`-level heading; `ul`/`ol` → list
+containers; `li` → `- ` (ul) / sibling-index `1. ` (ol), 2-space nesting for a
+nested list inside a list item; `strong`/`b` → `**text**`, `em`/`i` → `*text*`
+(element type ONLY, D5); `a` → `[text](href)` / `[text](href "title")` / bare
+text when no href (never a dangling `[]()`); `blockquote` → `> `; `code`/`pre`
+→ backtick; `hr` → `---`; `br` → newline; `img` → `![alt](src)`.
+`div`/`span`/`section`/`article`/`p`/unknown = **transparent block/container**
+(D3) — render their text + inline children, no marker.
+
+**Escaping (D9):** adapter-emitted markers are unescaped; CONTENT
+metacharacters are escaped at line-leading (`#`, `>`, `-`, `N. `) and
+inline-pairing (`*`, `_`, backtick, `[`, `]`, `(`, `)`) positions — so a
+literal `# heading` in text stays literal, never a false structural marker.
+
+**Parity (D12):** the markdown adapter is a **NEW parity family, NOT a PAR-5
+extension** — the lossy text output (attrs/handlers/node-ids dropped by ruling
+15/16) cannot satisfy cross-surface HTML equality. The pin is a markdown↔
+markdown round-trip/identity invariant: **same input op stream → same markdown
+string on re-render** (the retained `fragments` tree is the single source, so a
+set-only re-render folds onto the existing nodes, never accumulates — D2/D10).
+`renderProducingProcess`'s `prevMap` is the host's; an **adapter switch
+requires a fresh/null prevMap** (D10) — reusing a DomAdapter-produced prevMap
+with a MarkdownAdapter would emit only set/append ops targeting absent wires →
+silent empty output (never a silent-empty: the host owns the baseline).
+
+**Landing (D13/D14):** `MarkdownAdapter` is barrel-exported from `src/index.ts`
++ listed in contract.md §8; it lives in `src/core/adapters.ts`, so it compiles
+under the existing `lib: ["ES2022","DOM"]` (no new tsconfig implication). The
+demo page + smoke wiring + the AGENTS.md item-10 blind-test loop (Mimo-2.5)
+are the D14 landing duties.
+
 ---
 
 ## 5. TypeScript `lib` decision (DECIDED)
@@ -672,9 +724,30 @@ and `render-helpers.ts` need no DOM.
 > compile `adapters.ts` under **both** `["ES2022"]` and `["ES2022","DOM"]`, verified once
 > by the implementer, not by the unit suite.
 
+### 10.6 `MarkdownAdapter` (MD-*) — Feature 2 (2026-08-24, handoffs-review-7.md)
+
+| ID | State / fail-state | Expected |
+| --- | --- | --- |
+| MD-H1 | `createEl('h1', w)` + `setProp(w,'text','Title')` | `toString() === '# Title'` |
+| MD-H2 | `strong` / `em` | `**text**` / `*text*` (element type only) |
+| MD-H3 | `ul` + `li` items; `ol` + `li` items | `- One\n- Two` / `1. A\n2. B` (sibling index); 2-space nesting |
+| MD-H4 | `a` with `prop:href` / +`prop:title` / no href | `[text](href)` / `[text](href "title")` / bare text (never `[]()`) |
+| MD-H5 | `setProp(w,'on:click',…)` / `setProp(w,'data:node-id',…)` | dropped — output is non-interactive + no element→node mapping (ruling 15/16, incl. the opt-in data-node-id) |
+| MD-H6 | `setProp(w,'css:style',…)` / `css:classes` | dropped — emphasis from element TYPE only (D5) |
+| MD-H7 | `div`/`span`/`section`/unknown | transparent container — render text + inline children, no marker |
+| MD-H8 | `blockquote` / `code`/`pre` / `hr` / `br` / `img` | `> quote` / backtick / `---` / newline / `![alt](src)` |
+| MD-H9 | content text with markdown metacharacters | escaped at line-leading + inline-pairing (D9); adapter markers unescaped |
+| MD-H10 | `removeEl` a child; `appendChild` a reorder | subtree text vanishes; reorder splices by identity (no duplicate text — D8) |
+| MD-H11 | empty doc / empty container | `''` / nothing (D11) |
+| MD-H12 | set-only re-render (`setProp` after create) | folds onto the retained tree (D2/D10 — `fragments` is the sole source) |
+| MD-H13 | `hydrate` / `styles` | no-op / not implemented (styles op auto-skipped by applyOps — D1/D3) |
+| MD-H14 | same op stream rendered twice (markdown↔markdown) | identical markdown string (D12 — the family's identity pin; NOT PAR-5 equality) |
+| MD-F1 | `createEl` then `removeEl` then re-`createEl` the same wire | the live node only (D8 detach purge — the DEFECT-SSR-REMOVE shape) |
+| MD-F2 | a `create` for a wire the adapter never created (adapter-switch baseline) | silent no-op — host owns the prevMap; an adapter switch requires a fresh/null prevMap (D10, never a silent-empty) |
+
 ---
 
 Spec: concrete render-adapter layer — `src/core/adapters.ts` (DomAdapter /
-SSRFragmentAdapter / FragmentDescriptor) + `src/core/render-helpers.ts` (minimalFromState
-/ applyOps / treeFromOps / treeSig / jsonClone) and the `tsconfig` `lib: ["DOM"]`
-decision.
+SSRFragmentAdapter / MarkdownAdapter / FragmentDescriptor) + `src/core/render-helpers.ts`
+(minimalFromState / applyOps / treeFromOps / treeSig / jsonClone) and the `tsconfig`
+`lib: ["DOM"]` decision.

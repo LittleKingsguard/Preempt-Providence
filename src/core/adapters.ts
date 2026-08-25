@@ -463,3 +463,274 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
     return child.isVoid ? child.openTag : child.openTag + child.contentText + child.closeTag
   }
 }
+
+// ============================================================================
+// MARKDOWN ADAPTER — Feature 2 (handoffs-review-7.md PROCEED-AS-RESHAPED,
+// 2026-08-24; rulings 12-16 + decisions D1-D15). A text-only render adapter in
+// the SSRFragmentAdapter family: it consumes the SAME RenderOp stream and emits
+// markdown text via toString(). Contract:
+//  - toString() is a concrete-FAMILY method (the markdown + SSR text family);
+//    hydrate() is a required no-op; `styles` is NOT implemented (applyOps
+//    auto-skips the styles op — CSS rules have no text value).
+//  - `fragments` is the sole toString source (a retained per-wire MdNode tree,
+//    D2/D10) — set-only re-renders fold onto the existing nodes, never
+//    accumulate.
+//  - Type→marker table (D3): h1-6/#, ul/ol/lists, li, strong/em (element type
+//    ONLY — css:classes/css:style are DROPPED, D5), a, blockquote, code/pre,
+//    hr, br, img; div/span/section/article/unknown = transparent containers.
+//  - List markers are parent-based (D4): ul→'- ', ol→sibling-index '1. ';
+//    2-space nesting for a list inside a list item.
+//  - on:* AND data:* (incl. the opt-in data:node-id) are DROPPED (D7) — the
+//    output is non-interactive + carries no element→node mapping (ruling 15/16).
+//  - appendChild splices-by-identity (D8 move semantics — a D5 reorder never
+//    duplicates text); removeEl DETACHES the subtree (the DEFECT-SSR-REMOVE
+//    shape).
+//  - Escaping (D9): adapter-emitted markers are unescaped; CONTENT
+//    metacharacters are escaped at line-leading + inline-pairing positions.
+//  - Empty doc → ''; empty node → nothing (D11).
+//  - NEW parity family (D12) — NOT PAR-5 (the lossy text output can't satisfy
+//    cross-surface HTML equality); the pin is same-input → same-markdown on
+//    re-render.
+// ============================================================================
+const MD_BLOCK_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li', 'blockquote', 'hr', 'pre', 'div', 'section', 'article'])
+const MD_LIST_TYPES = new Set(['ul', 'ol'])
+const MD_HEADING_LEVEL: Record<string, number> = { h1: 1, h2: 2, h3: 3, h4: 4, h5: 5, h6: 6 }
+
+/** D9 — escape markdown-significant characters in CONTENT text only. Adapter-
+ *  emitted markers are added by the renderer, never passed through this. */
+function escapeMarkdown(text: string): string {
+  let s = text.replace(/\\/g, '\\\\')
+  // inline emphasis pairing (* and _) — escape everywhere
+  s = s.replace(/([*_])/g, '\\$1')
+  // link/code pairing brackets + backticks
+  s = s.replace(/([[\]()`])/g, '\\$1')
+  // line-leading structural markers (#, -, >, "1. ")
+  s = s.split('\n').map((line) => {
+    let l = line
+    l = l.replace(/^([#>\-])/, '\\$1')
+    l = l.replace(/^(\d+)\.\s/, '$1\\. ')
+    return l
+  }).join('\n')
+  return s
+}
+
+interface MdNode {
+  type: string
+  wire: string
+  text: string
+  attrs: Map<string, unknown>
+  children: MdNode[]
+  parent: MdNode | null
+}
+
+export class MarkdownAdapter implements RenderAdapter<MdNode> {
+  readonly fragments: Map<string, MdNode> = new Map()
+  private readonly created: MdNode[] = []
+  private rootKey: string | undefined
+
+  createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): MdNode {
+    const key = wireKey(wire, forkKey)
+    const node: MdNode = { type, wire, text: '', attrs: new Map(), children: [], parent: null }
+    this.fragments.set(key, node)
+    this.created.push(node)
+    if (this.rootKey === undefined) this.rootKey = key
+    return node
+  }
+
+  setProp(wire: NodeRef, name: string, val: unknown, forkKey?: ForkPathKey): void {
+    const node = this.fragments.get(wireKey(wire, forkKey))
+    if (!node) return
+    if (name === 'text') {
+      node.text = val === undefined ? '' : bakeValue(val)
+    } else if (name.startsWith('on:') || name.startsWith('data:')) {
+      // D7 — dropped: non-interactive + no element→node mapping (ruling 15/16)
+    } else if (name.startsWith('css:')) {
+      // D5 — dropped: emphasis comes from the element TYPE, never css classes/
+      // style (no CSS parsing at the adapter)
+    } else if (name.startsWith('prop:')) {
+      node.attrs.set(name.slice(5), val)
+    } else {
+      node.attrs.set(name, val)
+    }
+  }
+
+  appendChild(owner: MdNode | string, child: MdNode | string): void {
+    // D8 move semantics — splice the child out of its current parent so a D5
+    // reorder never duplicates the child's text in the markdown output.
+    // ADVERSARIAL-MD-S8 (disposition): the string overload is a TEST-helper
+    // convenience for BARE wires (no forkKey). The RenderAdapter interface and
+    // the real pipeline (applyOps → findEl) pass NODE OBJECTS — a fork-arm wire
+    // MUST be passed as a node object (a bare string resolves to the bare key
+    // and would miss the fork arm; the pipeline never passes strings).
+    const o = typeof owner === 'string' ? this.fragments.get(wireKey(owner)) : owner
+    const c = typeof child === 'string' ? this.fragments.get(wireKey(child)) : child
+    if (!o || !c) return
+    if (c.parent) {
+      const p = c.parent
+      const i = p.children.indexOf(c)
+      if (i !== -1) p.children.splice(i, 1)
+    }
+    o.children.push(c)
+    c.parent = o
+  }
+
+  removeEl(wire: NodeRef, forkKey?: ForkPathKey): void {
+    const key = wireKey(wire, forkKey)
+    const node = this.fragments.get(key)
+    if (!node) return
+    // D8 — DETACH shape (the DEFECT-SSR-REMOVE pin): splice the node out of
+    // its parent so its subtree text vanishes from toString; then drop it.
+    if (node.parent) {
+      const p = node.parent
+      const i = p.children.indexOf(node)
+      if (i !== -1) p.children.splice(i, 1)
+    }
+    node.parent = null
+    const ci = this.created.indexOf(node)
+    if (ci !== -1) this.created.splice(ci, 1)
+    this.fragments.delete(key)
+  }
+
+  hydrate(_rootWire: NodeRef, _vdom: unknown): void {}
+
+  toString(): string {
+    if (this.rootKey === undefined) return ''
+    const root = this.fragments.get(this.rootKey)
+    if (!root) return ''
+    const rootLines = this.renderTree(root)
+    // created-but-never-appended nodes render after the root (the SSR family's
+    // floating-top-level convention, adapted to text).
+    const floating = this.created
+      .filter((n) => n !== root && n.parent === null && this.fragments.has(wireKey(n.wire)))
+      .flatMap((n) => this.renderTree(n))
+    return [...rootLines, ...floating].join('\n')
+  }
+
+  private renderTree(node: MdNode): string[] {
+    const kind = this.classify(node.type)
+    if (kind === 'list') {
+      const out: string[] = []
+      let idx = 1
+      for (const child of node.children) {
+        if (child.type !== 'li') continue
+        // ADVERSARIAL-MD-S5 — an empty li STILL renders a bare bullet and
+        // ALWAYS consumes the ol index.
+        out.push(...this.renderListItem(child, node.type === 'ol' ? idx : null))
+        idx += 1
+      }
+      return out
+    }
+    if (kind === 'heading') {
+      // ADVERSARIAL-MD-S2 — a heading recurses its block children (a `p` child's
+      // body is NOT lost); the inline line first, then the block-child lines.
+      const lines = [`${'#'.repeat(MD_HEADING_LEVEL[node.type] ?? 1)} ${this.inlineContent(node)}`]
+      for (const c of node.children) {
+        if (this.classify(c.type) !== 'inline') lines.push(...this.renderTree(c))
+      }
+      return lines
+    }
+    if (kind === 'quote') {
+      // ADVERSARIAL-MD-S1 — a blockquote recurses its block children (a `p`
+      // child's text is NOT lost), `> `-prefixed per line. An empty own-inline
+      // emits no stray `> ` line (the block children carry the body).
+      const own = this.inlineContent(node)
+      const lines = own ? own.split('\n').map((l) => '> ' + l) : []
+      for (const c of node.children) {
+        if (this.classify(c.type) !== 'inline') lines.push(...this.renderTree(c).map((l) => '> ' + l))
+      }
+      return lines
+    }
+    if (kind === 'pre') {
+      // ADVERSARIAL-MD-S3 — `pre` is a triple-backtick FENCED block (the D3/M7
+      // contract); `code` stays inline-backtick (renderInline).
+      return ['```', this.inlineContent(node), '```']
+    }
+    if (kind === 'hr') return ['---']
+    if (kind === 'block') {
+      const inline = this.inlineContent(node)
+      const lines = inline ? [inline] : []
+      for (const c of node.children) {
+        // ADVERSARIAL-MD-S17 — a transparent container must recurse ALL
+        // non-inline children, INCLUDING lists (a `div > ul` is never dropped).
+        if (this.classify(c.type) !== 'inline') lines.push(...this.renderTree(c))
+      }
+      return lines
+    }
+    // inline
+    return [this.renderInline(node)]
+  }
+
+  private renderListItem(li: MdNode, index: number | null): string[] {
+    const marker = index === null ? '- ' : `${index}. `
+    const content = this.inlineContent(li)
+    // ADVERSARIAL-MD-S5 — ALWAYS emit a line (an empty li is a bare bullet);
+    // ADVERSARIAL-MD-S6 — a non-list block child indents by 2 (does not break
+    // the list).
+    const lines = [marker + content]
+    for (const c of li.children) {
+      if (MD_LIST_TYPES.has(c.type)) {
+        // nested list — indent each line by 2
+        lines.push(...this.renderTree(c).map((l) => '  ' + l))
+      } else if (this.classify(c.type) !== 'inline') {
+        lines.push(...this.renderTree(c).map((l) => '  ' + l))
+      }
+    }
+    return lines
+  }
+
+  private inlineContent(node: MdNode): string {
+    const text = node.text ? escapeMarkdown(node.text) : ''
+    const inlineKids = node.children
+      .filter((c) => this.classify(c.type) !== 'block')
+      .map((c) => this.renderInline(c))
+      .join('')
+    return text + inlineKids
+  }
+
+  private renderInline(node: MdNode): string {
+    switch (node.type) {
+      case 'strong':
+      case 'b':
+        return '**' + this.inlineContent(node) + '**'
+      case 'em':
+      case 'i':
+        return '*' + this.inlineContent(node) + '*'
+      case 'code':
+        return '`' + this.inlineContent(node) + '`'
+      case 'a': {
+        const text = this.inlineContent(node)
+        const href = node.attrs.get('href')
+        if (typeof href === 'string' && href.length > 0) {
+          const title = node.attrs.get('title')
+          // ADVERSARIAL-MD-S4 — the title's `"` is escaped (a bare quote would
+          // break the `(href "…")` delimiter).
+          return typeof title === 'string' && title.length > 0
+            ? `[${text}](${escapeMarkdown(href)} "${escapeMarkdown(title).replace(/"/g, '\\"')}")`
+            : `[${text}](${escapeMarkdown(href)})`
+        }
+        return text // bare text — never a dangling [](url)
+      }
+      case 'img': {
+        const src = node.attrs.get('src')
+        const alt = (node.attrs.get('alt') ?? node.text) as string
+        return typeof src === 'string' ? `![${escapeMarkdown(alt)}](${escapeMarkdown(src)})` : ''
+      }
+      case 'br':
+        return '\n'
+      case 'span':
+      default:
+        return this.inlineContent(node)
+    }
+  }
+
+  private classify(type: string): 'list' | 'heading' | 'quote' | 'hr' | 'pre' | 'block' | 'inline' {
+    if (MD_LIST_TYPES.has(type)) return 'list'
+    if (type === 'li') return 'block'
+    if (MD_HEADING_LEVEL[type] !== undefined) return 'heading'
+    if (type === 'blockquote') return 'quote'
+    if (type === 'hr') return 'hr'
+    if (type === 'pre') return 'pre'
+    if (type === 'strong' || type === 'em' || type === 'b' || type === 'i' || type === 'a' || type === 'code' || type === 'img' || type === 'br' || type === 'span') return 'inline'
+    return 'block' // div/section/article/p/unknown = transparent block container
+  }
+}

@@ -379,9 +379,14 @@ describe('pin 4/5 — per-batch journaling, replay idempotency, node-scoped laye
     const minted = (entries[0]!.result as { minted?: string[] }).minted
     expect(minted).toHaveLength(2)
     expect((entries[0]!.op as { layerId?: string }).layerId).toBeUndefined()
-    // the NODE-SCOPED layerId is derived INSIDE the executor (DEFECT #23)
+    // the NODE-SCOPED layerId is derived INSIDE the executor (DEFECT #23).
+    // ADVERSARIAL-S13 fix (2026-08-24): minted rows carry FRESH ids — the
+    // module registry accumulates every DISTINCT minted node (the pre-fix
+    // row-id hijack deduped the registry by the row's `id` field). The pin
+    // here is that THIS mint's rows are registered; the per-batch
+    // no-accumulation pin is the live children set below.
     const layerId = 'hook-creator-items-rows'
-    expect(mintedByOrigin(layerId).sort()).toEqual([...minted!].sort())
+    expect(mintedByOrigin(layerId)).toEqual(expect.arrayContaining(minted!))
 
     // replay re-applies the journal: the batch is REPLACED (same layerId =
     // replace pin), never accumulated; the no-journal mode (handoffs-review-4
@@ -390,7 +395,10 @@ describe('pin 4/5 — per-batch journaling, replay idempotency, node-scoped laye
     sup.replay()
     const mintEntries = sup.journal.filter((e) => e.op.kind === 'rows-mint')
     expect(creator.children.length).toBe(before)
-    expect(mintedByOrigin(layerId).length).toBe(2)
+    // the per-batch no-accumulation pin: the creator's OWN live minted set
+    // stays at 2 (fresh-id rows accumulate in the module registry across
+    // mints — the live set is the replace-in-place truth)
+    expect(creator.children.filter((c) => c.originLayer === layerId).length).toBe(2)
     expect(mintEntries.length).toBe(1)
   })
 

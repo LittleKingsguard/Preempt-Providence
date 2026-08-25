@@ -37,8 +37,11 @@ export function createClient(supervisor: Supervisor): ClientAPI {
         }
         // resolve string refs to Node objects (P3 §3.3: placement-attach's
         // `container` joins the family-op refs; the op spread above already
-        // carried the trigger-identity fields through untouched)
-        for (const refKey of ['to', 'source', 'container'] as const) {
+        // carried the trigger-identity fields through untouched).
+        // ADVERSARIAL-S1a (2026-08-24): `target` joins the list — the rows
+        // ops (rows-mint/rows-clear) carry their subject on `op.target`, so
+        // the wire path must resolve a string target to the live node too.
+        for (const refKey of ['to', 'source', 'container', 'target'] as const) {
           if (typeof op[refKey] === 'string') {
             const resolved = supervisor.getNode(op[refKey] as NodeId)
             if (resolved) op[refKey] = resolved

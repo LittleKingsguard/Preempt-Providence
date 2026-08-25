@@ -734,6 +734,75 @@ await new Promise((r) => setTimeout(r, 250))
   }
 }
 
+// ---- rows-scenarios page: the rows demo gate (Feature 1/1.5) + the 1a -------
+// round-trip arm. ONE legacy envelope (root + consumers section, the
+// hooksKind declaration, the registered def prototype, the cross-row
+// consumers); the module translates it, mirrors the handlers-scenarios
+// pipeline, and the runner clicks the mint CONTROL — dispatching the REAL
+// function-STRING body that drives rows-mint through clientAPI.apply — then
+// asserts the 8 rendered rows, the per-row source values in the DOM (one
+// consumer arm per row), the fan-out census (states-per-consumer = 8, the
+// Feature 1.4 linearity pin fanoutStates <= 2 x fanoutRows), the node-scoped
+// layer + Option-C record (DEFECT #23), the re-mint no-accumulation, and the
+// Feature 1a round trip (serialize -> loadState -> seed -> reconcile ->
+// reRegisterDefPrototypes -> host re-mint per the batches record -> the row
+// count unchanged). Census + fan-out pin guards: the page publishes
+// registered/inTree/unplaced/destroyed/prototypes/cloneOps + rowsMinted +
+// fanoutStates/fanoutRows on the profile; the builder ran the IDENTICAL
+// pipeline (incl. the click-driven mint) and embedded the expected in
+// server-data — the smoke pins equality.
+{
+  const pageHtml = await readFile(`${base}demo/rows-scenarios.html`, 'utf8')
+  seedPage(pageHtml)
+  await import(`${base}demo/rows-scenarios.js`).catch((e) => {
+    console.error('rows-scenarios failed:', e)
+    process.exit(1)
+  })
+  await Promise.race([
+    globalThis.__rowsScenariosDone,
+    new Promise((r) => setTimeout(r, 30000)),
+  ]).catch(() => {})
+  const prof = globalThis.__rowsScenariosProfile
+  if (!prof) {
+    console.error('rows-scenarios profile missing — page did not finish profiling')
+    process.exit(1)
+  }
+  // performance guard (same contract as the other pages): the timed sections
+  // (load/compile/flush/emit/diff/apply/checks) must cover ~all of the total,
+  // so "total" can never hide an untimed pipeline (RCA:
+  // archive/reviews/2026-08-15/2026-08-15-session-defect-review.md).
+  const covered = prof.coveredMs ?? 0
+  const residual = prof.totalMs - covered
+  if (residual > Math.max(prof.totalMs * 0.15, 25)) {
+    console.error(`rows-scenarios profile residual too large: ${residual.toFixed(1)}ms unmeasured of total=${prof.totalMs.toFixed(1)}ms (${(100 * covered / prof.totalMs).toFixed(1)}% covered)`)
+    process.exit(1)
+  }
+  const serverData = JSON.parse(byId.get('server-data').textContent)
+  const exp = serverData.expected
+  // census equality vs the builder's identical pipeline
+  for (const f of ['registered', 'inTree', 'unplaced', 'destroyed', 'prototypes', 'cloneOps']) {
+    if (typeof prof[f] !== 'number' || prof[f] !== exp.census[f]) {
+      console.error(`rows-scenarios census mismatch on "${f}": page=${prof[f]} expected=${exp.census[f]}`)
+      process.exit(1)
+    }
+  }
+  // USER CONTRACT — the rows-mint mints exactly 8 rows
+  if (prof.rowsMinted !== exp.rowsMinted || exp.rowsMinted !== 8) {
+    console.error(`rows-scenarios USER CONTRACT violation: rowsMinted=${prof.rowsMinted}, expected ${exp.rowsMinted} (8)`)
+    process.exit(1)
+  }
+  // the fan-out census equality + the Feature 1.4 LINEARITY guard
+  // (states-per-consumer <= 2 x rows — the tripwire's own pricing bound)
+  if (prof.fanoutRows !== exp.fanoutRows || prof.fanoutStates !== exp.fanoutStates) {
+    console.error(`rows-scenarios fan-out census mismatch: page fanoutStates=${prof.fanoutStates}/${prof.fanoutRows} expected ${exp.fanoutStates}/${exp.fanoutRows}`)
+    process.exit(1)
+  }
+  if (prof.fanoutStates > 2 * prof.fanoutRows) {
+    console.error(`rows-scenarios fan-out linearity guard breached: fanoutStates=${prof.fanoutStates} > 2 × fanoutRows=${prof.fanoutRows}`)
+    process.exit(1)
+  }
+}
+
 // Give microtasks a chance (Supervisor event flushes + async page checks).
 await new Promise((r) => setTimeout(r, 250))
 
@@ -820,6 +889,10 @@ if (!banners.some((b) => b.includes('session-features') && /0 failed/.test(b))) 
 }
 if (!banners.some((b) => b.includes('hooks-scenarios') && /0 failed/.test(b))) {
   console.error('hooks-scenarios page did not complete its checks (banner missing)')
+  process.exit(1)
+}
+if (!banners.some((b) => b.includes('rows-scenarios') && /0 failed/.test(b))) {
+  console.error('rows-scenarios page did not complete its checks (banner missing)')
   process.exit(1)
 }
 

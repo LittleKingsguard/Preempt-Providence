@@ -1,7 +1,7 @@
 import type { AnchorDecl, BatchRecord, LayerApplyOp, LayerMutationList, LinkConfigNameHub, MutationOp, NodeBaseData, NodeId, PlacementAttachOp, PlacementTrigger, RowsClearOp, RowsMintOp, StateSliceOp } from './types.js'
 import { SingleParentError, CycleError, ApplyError } from './errors.js'
 import { Node, findCycle, ancestorConsumesZone } from './node.js'
-import { markPending, registerMinted, defPrototypesFor } from './registry.js'
+import { markPending, registerMinted, defPrototypesFor, defRootPrototypeFor, mintedByOrigin, resolveNodeRef, unregisterMinted } from './registry.js'
 import { Link } from './link.js'
 
 export interface OpContext {
@@ -208,77 +208,359 @@ export function layerApply(op: LayerApplyOp, ctx: OpContext): { minted: NodeId[]
  *  batch (the same-layerId replace pin — distinct from layer-apply's no-op);
  *  payload-control teardown lives in the supervisor (a `rows-clear` op / the
  *  `batches` record removal). */
-export function rowsMint(op: RowsMintOp, ctx: OpContext): { minted: NodeId[]; doorways: NodeId[]; layerId: string } {
+/** HOOKS-ARRAY (CONTRACT AMENDMENT C §9.2 pins 3/5 — options C) — the
+ *  rows-mint executor: ONE atomic mint op. Resolves the prototype BY NAME
+ *  (the `prototypeName` → the per-name component Link's translate-minted def
+ *  prototypes), then mints ONE family node per raw data row (each row's
+ *  fields become VALUE-BEARING source anchors on the minted node), marks
+ *  each minted node's `originLayer` + registers it, applies the batch layer
+ *  on the target, and records the PAYLOAD (the `batches[hookName]` record —
+ *  Option C, the single control handle). The layerId is NODE-SCOPED
+ *  (`hook-${target.id}-${hookName}-rows` — DEFECT #23: the module-level
+ *  mintedByLayer/mintedByOrigin registry keys by origin string, so an
+ *  unscoped id would let one node's teardown cross-destroy another's set).
+ *  FAIL-WITH-WARNING: a `prototypeName` with no prototypes throws
+ *  `rows-prototype-unresolved` (the supervisor rejects the op + warns) —
+ *  never a silent zero-row mint. Re-applying the SAME hookName REPLACES the
+ *  batch (the same-layerId replace pin — distinct from layer-apply's no-op);
+ *  payload-control teardown lives in the supervisor (a `rows-clear` op / the
+ *  `batches` record removal).
+ *  KEYED BATCH-REUSE (Feature 1b — handoffs-review-6.md D1-D8): with
+ *  `op.keyField` the replace is a REUSE — the O(N) existing-set match (key =
+ *  the minted node's `keyField` source-anchor VALUE, strict `===`), remove-
+ *  missing (per-id no-promotion teardown), in-place field reconcile (prune +
+ *  set + add; the keyField anchor is the identity — never pruned), deep-
+ *  equality no-op (unchanged rows skip the rewrite), mint-new for unmatched
+ *  keys (fresh ids, appended at max+1 — reused nodes keep their priority
+ *  slots, the positional arm identity), the layer decls REWRITTEN via
+ *  addLayer (never removeLayer — the promoting teardownMinted would promote
+ *  the reused rows), and `result.preRecord` captured for the D8 EXACT
+ *  inverse undo. The D2 predicate decides keyed vs plain UP FRONT (atomic):
+ *  any failure → the status-quo whole-batch replace, record WITHOUT keyField. */
+export function rowsMint(op: RowsMintOp, ctx: OpContext): {
+  minted: NodeId[]; doorways: NodeId[]; layerId: string
+  reused?: NodeId[]; removed?: { key: unknown; nodeId: string }[]; preRecord?: BatchRecord | null
+} {
   const target = toNode(op.target)
   const layerId = `hook-${target.id}-${op.hookName}-rows`
   const hub = target.hubFor ?? ctx.hub ?? undefined
+  // ADVERSARIAL-S15 (2026-08-24) — a placement-kind mint REQUIRES the target
+  // zone: without `placementName` the rows would mint with zero content
+  // anchors (silent no-placement). Reject, never a silent no-op.
+  if (op.mintKind === 'placement' && op.placementName === undefined) {
+    throw new ApplyError('rows-placement-name-missing' as never, { hookName: op.hookName })
+  }
+  // ADVERSARIAL-S3 (2026-08-24) — row-shape validation UP-FRONT: a non-array
+  // `rows` or a non-object member rejects BEFORE any node is minted — the
+  // mint is ATOMIC (a bad row never leaves a half-minted orphan set, no
+  // record, no layer).
+  const rows = op.rows
+  if (rows !== undefined && !Array.isArray(rows)) {
+    throw new ApplyError('rows-shape-invalid' as never, { hookName: op.hookName, reason: 'non-array rows' })
+  }
+  const rowList = rows ?? []
+  for (const row of rowList) {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) {
+      throw new ApplyError('rows-shape-invalid' as never, { hookName: op.hookName, reason: 'non-object row' })
+    }
+  }
   // prototype-by-name resolution — the per-name component Link's def
-  // prototypes (registry.js:78-86); FAIL-WITH-WARNING on empty.
+  // prototypes (registry.js:78-86); FAIL-WITH-WARNING when the name has no
+  // def at all. ADVERSARIAL-S7: a SINGLE-ELEMENT def (def-root only, no
+  // def-children) supplies the row shape from the def-ROOT registry — the
+  // resolution is no longer children-only.
   const protoLink = hub.linkFor(op.prototypeName, 'component')
   const protos = defPrototypesFor(protoLink)
-  if (protos.length === 0) {
+  let shape: Node | undefined
+  if (protos.length > 0) {
+    shape = protos[0]!
+  } else {
+    shape = defRootPrototypeFor(protoLink)
+  }
+  if (shape === undefined) {
     console.warn(`rows-prototype-unresolved at ${target.id}: prototype "${op.prototypeName}" has no def prototypes; rows-mint rejected`)
     throw new ApplyError('rows-prototype-unresolved' as never, { prototypeName: op.prototypeName })
   }
-  const shape = protos[0]!
-  // PAYLOAD-CONTROLLED replace: a re-mint on the SAME hookName first tears
-  // down the prior batch (the control record + layer removal) so the minted
-  // set never accumulates (the single-source constraint).
+  const batches = (target as unknown as { batches?: Record<string, BatchRecord> }).batches ?? {}
+  // D8 — the pre-op record capture (the undo fact-set for the keyed path).
+  const preRecord = batches[op.hookName] ?? null
   const existing = target.layers.find((l) => l.id === layerId)
-  if (existing !== undefined) {
-    target.removeLayer(layerId)
-  }
-  // §9.4 item 7 — the `rows: []` CLEAR contract: an empty batch is a CLEAR,
-  // NOT a sticky empty record (distinct from the B5 `{children: []}` no-op).
-  // After the prior-batch teardown above, nothing mints and no record is
-  // written — the hook is simply absent.
-  if ((op.rows ?? []).length === 0) {
-    const batches = (target as unknown as { batches?: Record<string, BatchRecord> }).batches ?? {}
+  // §9.4 item 7 / D7 — the `rows: []` CLEAR contract (keyed or not): an
+  // empty batch is a CLEAR, never a sticky empty record. Undo stays the
+  // documented no-op (preRecord is NOT carried — the payload teardown finds
+  // no record and no-ops).
+  if (rowList.length === 0) {
+    if (existing !== undefined) {
+      target.rowsTeardown(layerId)
+      target.removeLayer(layerId)
+    }
     delete batches[op.hookName]
-    return { minted: [], doorways: [target.id], layerId }
+    return { minted: [], doorways: [target.id], layerId, reused: [], removed: [], preRecord: null }
   }
-  const minted: NodeId[] = []
+  // D2/D3 — the KEYED-PATH predicate (decided UP FRONT — atomic). The keyed
+  // path runs IFF the keyField is a legal declared column, every row carries
+  // a primitive key value, and the existing record (if any) is consistent.
+  // **ADVERSARIAL-KEYED-S5/S10 (re-arm reshape):** a record with NO keyField
+  // does NOT degrade a keyed op — it is a "never-keyed" record, and a keyed
+  // op whose rows are all key-valid RE-ARMS keyed (the record gains keyField).
+  // Only a record whose keyField DIFFERS from the op's (or a prototype/zone
+  // change) forces the plain replace. ANY failure → the plain whole-batch
+  // replace, record WITHOUT keyField.
+  const keyField = op.keyField
+  let keyed = false
+  if (keyField !== undefined) {
+    const reserved = new Set(['anchors', 'type', 'css', 'children', 'props', 'content', 'handlers'])
+    const invalid = (reason: string): void => {
+      console.warn(`batch-keyfield-invalid at ${target.id}: ${reason}; rows-mint degraded to the plain whole-batch path`)
+    }
+    if (typeof keyField !== 'string' || keyField.length === 0 || reserved.has(keyField)) {
+      invalid(`keyField "${String(keyField)}" is not a legal declared column`)
+    } else if (!rowList.every((r) => {
+      const v = (r as Record<string, unknown>)[keyField]
+      return v !== undefined && v !== null && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+    })) {
+      invalid(`a row lacks a primitive "${keyField}" value`)
+    } else if (preRecord !== null && preRecord.keyField !== undefined && preRecord.keyField !== keyField) {
+      invalid(`the batch record's keyField ("${preRecord.keyField}") differs from the op's ("${keyField}")`)
+    } else if (preRecord !== null && (preRecord.prototypeName !== op.prototypeName || (preRecord.placementName ?? undefined) !== op.placementName)) {
+      invalid(`the batch record's prototype/zone mismatch the op`)
+    } else {
+      keyed = true
+    }
+  }
+  // the plain path (status quo — ADVERSARIAL-S8b/S9 no-promotion replace)
+  if (!keyed) {
+    if (existing !== undefined) {
+      target.rowsTeardown(layerId)
+      target.removeLayer(layerId)
+    }
+    const minted: NodeId[] = []
+    const fam = target.familyLinkFor()
+    let priority = fam.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
+    for (const row of rowList) {
+      const mintedNode = mintRowNode(row as unknown as Record<string, unknown>, shape, hub, fam, layerId, priority, target, op)
+      priority += 1
+      minted.push(mintedNode.id)
+    }
+    const decls = minted.map((_, i) => ({ role: 'child', target, options: { priority: i, origin: layerId } } as AnchorDecl))
+    target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls })
+    // OPTION C — the payload record (the single control handle)
+    const batch: BatchRecord = {
+      prototypeName: op.prototypeName,
+      rows: op.rows,
+      layerId,
+      mintKind: op.mintKind,
+      ...(op.placementName !== undefined ? { placementName: op.placementName } : {}),
+    }
+    batches[op.hookName] = batch
+    return { minted, doorways: [target.id, ...minted], layerId, reused: [], removed: [], preRecord: null }
+  }
+  // ==========================================================================
+  // the KEYED path (Feature 1b — D1/D4/D5/D6/D10)
+  // ==========================================================================
+  // the D2 predicate guaranteed `keyField` is a legal non-empty string here
+  const kf = keyField as string
+  // D1 — the O(N) existing-set map: key = the minted node's `keyField`
+  // source-anchor VALUE (strict ===). A minted node lacking the key anchor
+  // is unmatchable → remove-missing.
+  // **ADVERSARIAL-KEYED-S15 (cross-graph guard):** the layerId is node-id-
+  // scoped only (DEFECT #23), so in a process where TWO graphs share a creator
+  // node id + hookName, `mintedByOrigin(layerId)` returns BOTH graphs' minted
+  // rows. The reuse-match + remove-missing must therefore require the node to
+  // be a CHILD OF THIS TARGET (`parent === target`) — a row belonging to the
+  // other graph is NEVER reused, only mint-new (its own graph reuses it).
+  const existingNodes = new Map<unknown, Node>()
+  const unmatchable: Node[] = []
+  for (const id of mintedByOrigin(layerId)) {
+    const n = resolveNodeRef(id)
+    if (!n) continue
+    if (n.parent !== target) continue // another graph's row (same-id process)
+    const keyAnchor = n.anchors.find((a) => a.role === 'source' && a.target === kf)
+    if (!keyAnchor) {
+      unmatchable.push(n)
+      continue
+    }
+    existingNodes.set(keyAnchor.value, n)
+  }
+  // D5 — within-input duplicate keys: warn + keep-FIRST (the duplicate row is
+  // dropped, never minted twice).
+  const seen = new Set<unknown>()
+  const rowsToApply: Record<string, unknown>[] = []
+  for (const row of rowList) {
+    const key = (row as unknown as Record<string, unknown>)[kf]
+    if (seen.has(key)) {
+      console.warn(`duplicate-identifier at ${target.id}: rows-mint keyed on "${kf}" saw the identifier ${JSON.stringify(key)} twice; keep-first`)
+      continue
+    }
+    seen.add(key)
+    rowsToApply.push(row as unknown as Record<string, unknown>)
+  }
+  // remove-missing — existing keys absent from the input (1b.11(ii): destroy
+  // via the batch teardown — per-id, NO-PROMOTION).
+  const inputKeys = new Set(rowsToApply.map((r) => r[kf]))
+  const removed: { key: unknown; nodeId: string }[] = []
+  for (const [key, node] of existingNodes) {
+    if (!inputKeys.has(key)) removed.push({ key, nodeId: node.id })
+  }
+  for (const node of unmatchable) removed.push({ key: undefined, nodeId: node.id })
+  for (const { nodeId } of removed) {
+    const node = resolveNodeRef(nodeId)
+    if (!node) continue
+    // the per-id no-promotion teardown (the rowsTeardown body for a subset —
+    // never removeLayer, whose teardownMinted would PROMOTE)
+    detachNodeSafe(node)
+    node.originLayer = undefined
+    unregisterMinted(node.id)
+  }
   const fam = target.familyLinkFor()
   let priority = fam.anchorsOf('child').reduce((m, a) => Math.max(m, a.options.priority ?? 0), -1) + 1
-  for (const row of op.rows ?? []) {
-    const node = new Node({ ...row, type: row.type ?? shape.type, css: row.css ?? shape.css } as NodeBaseData, hub)
-    node.originLayer = layerId
-    registerMinted(node.id, layerId)
-    minted.push(node.id)
-    node.addAnchor('child', node, { priority }, fam)
-    priority += 1
-    // the row's fields as VALUE-BEARING source anchors (per-row provider
-    // anchors — consumers resolving a field name fan out per row, §9.2 pin 6)
-    for (const key of Object.keys(row)) {
-      if (key === 'type' || key === 'css' || key === 'children' || key === 'props' || key === 'content' || key === 'handlers') continue
-      const fieldLink = hub.linkFor(key, 'component')
-      const anchor = node.addAnchor('source', key, {}, fieldLink)
-      if (anchor !== null) anchor.value = (row as unknown as Record<string, unknown>)[key]
-    }
-    // §9.4 item 8 — the 'placement' kind: each minted row requests the
-    // SPECIFIED target placement (a `content` anchor on the shared per-name
-    // placement Link — the consumer side of the zone registry, P3 §1.1). The
-    // zone itself rides the EXISTING placement-attach/content-anchor surface
-    // (a container node offering the zone via its `container` anchor on the
-    // same per-name placement Link); this op only mints the rows' REQUEST
-    // side — no placement-path machinery, no F3-veto interplay here.
-    if (op.mintKind === 'placement' && op.placementName !== undefined) {
-      node.addAnchor('content', op.placementName, {}, hub.linkFor(op.placementName, 'placement'))
+  const minted: NodeId[] = []
+  const reused: NodeId[] = []
+  for (const row of rowsToApply) {
+    const key = row[kf]
+    const node = existingNodes.get(key)
+    if (node) {
+      // D4 — reconcile the row's flat fields onto the reused node; the
+      // deep-equality no-op (D1) returns false → the node is NOT in the
+      // changed set → its consumers are not marked (the silent-abort, D11).
+      // ADVERSARIAL-KEYED-S17 — pass the MINT-PATH hub (target.hubFor ??
+      // ctx.hub), never `node.hubFor`: a hub-less reused node must still gain
+      // NEW fields on reuse (the mint path uses the same source).
+      if (reconcileRowFields(node, row, kf, target, hub)) reused.push(node.id)
+    } else {
+      const mintedNode = mintRowNode(row, shape, hub, fam, layerId, priority, target, op)
+      priority += 1
+      minted.push(mintedNode.id)
     }
   }
-  const decls = minted.map((_, i) => ({ role: 'child', target, options: { priority: i, origin: layerId } } as AnchorDecl))
+  // D1 — the layer decls REWRITTEN via addLayer (replaces same-id in place;
+  // materializeAnchors is decl-path idempotent). Reused nodes keep their
+  // priority slots (the positional arm identity); mint-new appended above.
+  // **ADVERSARIAL-KEYED-S18:** the decls must cover ONLY this batch's rows
+  // (originLayer === layerId) — a non-batch family child of the owner (e.g. an
+  // authored sibling) is never part of the batch layer.
+  const decls = [...fam.anchorsOf('child')]
+    .filter((a) => {
+      const owner = typeof a.target === 'object' && a.target !== null ? (a.target as Node) : undefined
+      return owner !== undefined && owner.originLayer === layerId
+    })
+    .sort((x, y) => (x.options.priority ?? 0) - (y.options.priority ?? 0))
+    .map((a, i) => ({ role: 'child', target, options: { priority: a.options.priority ?? i, origin: layerId } } as AnchorDecl))
   target.addLayer({ id: layerId, sourceName: op.sourceName ?? 'rows-mint', anchors: decls })
-  // OPTION C — the payload record (the single control handle)
+  // the record — keyField written ONLY on the keyed path (D2)
   const batch: BatchRecord = {
     prototypeName: op.prototypeName,
     rows: op.rows,
     layerId,
     mintKind: op.mintKind,
     ...(op.placementName !== undefined ? { placementName: op.placementName } : {}),
+    keyField: kf,
   }
-  ;(target as unknown as { batches?: Record<string, BatchRecord> }).batches ??= {}
-  ;(target as unknown as { batches: Record<string, BatchRecord> }).batches[op.hookName] = batch
-  return { minted, doorways: [target.id, ...minted], layerId }
+  batches[op.hookName] = batch
+  return { minted, reused, removed, layerId, preRecord, doorways: [target.id, ...minted] }
+}
+
+/** The reserved construction keys — never source anchors (they are stripped
+ *  in the constructor/field loop), so a keyField naming one could never be
+ *  read back off a minted node (D3). */
+const RESERVED_CONSTRUCTION_KEYS = new Set(['anchors', 'type', 'css', 'children', 'props', 'content', 'handlers'])
+
+/** Feature 1b — mint ONE row node (shared by the plain + keyed paths). */
+function mintRowNode(
+  rowObj: Record<string, unknown>,
+  shape: Node,
+  hub: LinkConfigNameHub,
+  fam: Link,
+  layerId: string,
+  priority: number,
+  target: Node,
+  op: RowsMintOp,
+): Node {
+  // ADVERSARIAL-S13 — a row's `id` NEVER hijacks the minted node id: strip
+  // it from the construction data (the node gets a FRESH mint-generated
+  // id); the row's id stays a PROVIDER value (consumers can read it).
+  // ADVERSARIAL-S14 — a row's `anchors` array is REJECTED (the layer-apply
+  // OO-3 veto mirror): the constructor seed path must never materialize
+  // smuggled graph edges (fabricated providers / leaked children).
+  const { id: _rowId, anchors: _rowAnchors, ...fields } = rowObj
+  if (_rowAnchors !== undefined) {
+    console.warn(`rows-mint-anchors-rejected at ${target.id}: row anchors are not admitted by rows-mint (smuggled edges never materialize); ignored`)
+  }
+  const node = new Node({ ...fields, type: (fields.type as string) ?? shape.type, css: (fields.css as Record<string, unknown>) ?? shape.css } as NodeBaseData, hub)
+  node.originLayer = layerId
+  registerMinted(node.id, layerId)
+  node.addAnchor('child', node, { priority }, fam)
+  // the row's fields as VALUE-BEARING source anchors (per-row provider
+  // anchors — consumers resolving a field name fan out per row, §9.2 pin 6).
+  // `id` stays a PROVIDER value (a consumer may read a row's natural id);
+  // `anchors` is never a field (the OO-3 veto above).
+  for (const key of Object.keys(rowObj)) {
+    if (RESERVED_CONSTRUCTION_KEYS.has(key)) continue
+    const fieldLink = hub.linkFor(key, 'component')
+    const anchor = node.addAnchor('source', key, {}, fieldLink)
+    if (anchor !== null) anchor.value = rowObj[key]
+  }
+  // §9.4 item 8 — the 'placement' kind: each minted row requests the
+  // SPECIFIED target placement (a `content` anchor on the shared per-name
+  // placement Link — the consumer side of the zone registry, P3 §1.1).
+  if (op.mintKind === 'placement' && op.placementName !== undefined) {
+    node.addAnchor('content', op.placementName, {}, hub.linkFor(op.placementName, 'placement'))
+  }
+  return node
+}
+
+/** Feature 1b — D4: reconcile the row's flat fields onto a REUSED node.
+ *  Source anchors are reconciled to the row's field set exactly (new fields
+ *  added, shared values set, absent fields PRUNED — the keyField anchor is
+ *  the identity anchor, never pruned). Shape fields are FROZEN (a differing
+ *  type/css/props/content/children/handlers warns `rows-reuse-shape-ignored`
+ *  and stays — the reused node's base is immutable). Returns TRUE when any
+ *  source value actually changed (the deep-equality no-op → false). */
+function reconcileRowFields(node: Node, row: Record<string, unknown>, keyField: string, target: Node, hub?: LinkConfigNameHub): boolean {
+  for (const k of ['type', 'css', 'props', 'content', 'children', 'handlers']) {
+    if (row[k] === undefined) continue
+    const current = k === 'type' ? node.type : (node.base as Record<string, unknown>)[k]
+    const differs = k === 'css' || k === 'props'
+      ? JSON.stringify(row[k]) !== JSON.stringify(current)
+      : row[k] !== current
+    if (differs) {
+      console.warn(`rows-reuse-shape-ignored at ${target.id}: row field "${k}" differs from the reused node's frozen shape; the shape stays (drop keyField for a whole-op replace)`)
+    }
+  }
+  let changed = false
+  const rowFields = new Set<string>()
+  for (const key of Object.keys(row)) {
+    if (key === keyField || RESERVED_CONSTRUCTION_KEYS.has(key)) continue
+    rowFields.add(key)
+    const existingAnchor = node.anchors.find((a) => a.role === 'source' && a.target === key)
+    if (existingAnchor) {
+      if (existingAnchor.value !== row[key]) {
+        existingAnchor.value = row[key]
+        changed = true
+      }
+    } else {
+      // ADVERSARIAL-KEYED-S17 — use the MINT-PATH hub (`target.hubFor ??
+      // ctx.hub`) so a hub-LESS reused node still gains new field anchors;
+      // `node.hubFor` may be null even when the batch hub is live.
+      const fieldLink = hub?.linkFor(key, 'component')
+      if (fieldLink) {
+        const anchor = node.addAnchor('source', key, {}, fieldLink)
+        if (anchor !== null) {
+          anchor.value = row[key]
+          changed = true
+        }
+      }
+    }
+  }
+  for (const a of [...node.anchors]) {
+    if (a.role !== 'source' || typeof a.target !== 'string') continue
+    if (a.target === keyField) continue
+    if (!rowFields.has(a.target)) {
+      node.removeAnchor(a)
+      changed = true
+    }
+  }
+  return changed
 }
 
 /** HOOKS-ARRAY (§9.4 item 6 — the PAYLOAD-CONTROLLED teardown). Operates on
@@ -288,15 +570,19 @@ export function rowsMint(op: RowsMintOp, ctx: OpContext): { minted: NodeId[]; do
  *  (`removeLayer`/`teardownMinted`/the registry) is internal, never invoked
  *  directly by external code. An unknown hookName (no record) is a contained
  *  no-op (applied, nothing to clear). */
-export function rowsClear(op: RowsClearOp, ctx: OpContext): { doorways: NodeId[]; layerId?: string } {
+export function rowsClear(op: RowsClearOp, ctx: OpContext): { doorways: NodeId[]; layerId?: string; minted?: NodeId[] } {
   const target = toNode(op.target)
   const batches = (target as unknown as { batches?: Record<string, BatchRecord> }).batches ?? {}
   const record = batches[op.hookName]
   if (record === undefined) return { doorways: [target.id] }
+  // ADVERSARIAL-S5 — capture the minted set BEFORE the teardown so the
+  // supervisor can walk the field-name consumers (the mint-side cascade) and
+  // refresh their pass-2 states — no stale fan-out arms after a clear.
+  const minted = mintedByOrigin(record.layerId)
   delete batches[op.hookName]
   target.rowsTeardown(record.layerId)
   target.removeLayer(record.layerId)
-  return { doorways: [target.id], layerId: record.layerId }
+  return { doorways: [target.id], layerId: record.layerId, minted }
 }
 
 export function execute(op: MutationOp, ctx: OpContext): { doorways: NodeId[] } {

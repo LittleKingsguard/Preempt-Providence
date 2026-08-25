@@ -177,6 +177,16 @@ export interface RowsMintOp {
   placementName?: string
   rows: NodeBaseData[]
   sourceName?: string
+  /** KEYED BATCH-REUSE (Feature 1b, 2026-08-24 — handoffs-review-6.md D1-D6):
+   *  the OPTIONAL DECLARED identifier column. When present (and valid), a
+   *  re-mint on the same hookName REUSES the minted node whose `keyField`
+   *  source-anchor value === the row's keyField value (in-place value
+   *  re-apply), mints-new for unmatched keys, and removes rows absent from
+   *  the input. Any inconsistency (non-string/empty keyField, a reserved
+   *  construction key, a row lacking a primitive key value, or a record
+   *  mismatch on keyField/prototypeName/placementName) DEGRADES the WHOLE op
+   *  to the plain whole-batch replace (batch-keyfield-invalid warn). */
+  keyField?: string
 }
 /** HOOKS-ARRAY (§9.4 item 6 — the payload-controlled teardown). The op is
  *  the PAYLOAD-CONTROL: it deletes the `batches[hookName]` record (the
@@ -205,6 +215,11 @@ export interface BatchRecord {
   layerId: string
   mintKind: 'component' | 'placement'
   placementName?: string
+  /** KEYED BATCH-REUSE (Feature 1b) — the declared identifier column; written
+   *  ONLY when the keyed path ran (a degraded op's record loses it). Rides
+   *  the round-trip (serialize §4) so a post-restore keyed update reuses the
+   *  re-minted nodes. */
+  keyField?: string
 }
 export type StructuralOp = AttachOp|DetachOp|MoveOp|CloneInstanceOp|DestroyOp|PlacementAttachOp|LayerApplyOp|RowsMintOp|RowsClearOp
 
@@ -301,7 +316,7 @@ export interface NodeLayer {
    *  the clear path (`value: undefined`) restores it to the anchor. */
   hookFallback?: unknown
 }
-export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind> }
+export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind>; batches?: Record<string, BatchRecord> }
 /** HOOKS-ARRAY (§9.4 item 1 — CONTRACT AMENDMENT C) — the closed kind union
  *  a `hooksKind` declaration may name: `'value'` (the shipped §7 scalar
  *  value-provider slot), `'component'` (the hook mints nodes with

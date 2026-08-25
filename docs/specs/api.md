@@ -107,6 +107,12 @@ caller bug — `state` reads `undefined` → `no-usable-state`, or a
 non-function `destroy`/`applySlice`). Page/harness code driving the engine
 directly MUST pass the live Node in `op.node` (find it via
 `supervisor.getNode(id)` / `tree.getNode(id)` first).
+**Rows ops are LIVE-NODE-TARGET ONLY (2026-08-24 adversarial pass, S1):**
+`rows-mint`/`rows-clear` carry `op.target` (not `op.node`) and the supervisor
+does NOT resolve string refs for it — a string `target` is a caller bug that
+currently escapes `supervisor.apply` as an uncaught TypeError (rows-mint) or a
+silent `applied` no-op (rows-clear). Hosts MUST pass the live `Node` from
+`supervisor.getNode(id)`. Tracked: defects.md ADVERSARIAL-S1.
 
 ### 1.1 `apply` semantics (S2.1, S-R3.11)
 

@@ -254,3 +254,15 @@ async function emitPage(templateName, outName, doc, serverData) {
 {
   await import('./producing-host-page.mjs')
 }
+
+// ---- page 25: rows-scenarios (the rows demo gate, Feature 1/1.5 + 1a) -------
+// The rows-mint drive (a function-STRING control body through the real
+// handler seam), the registered def prototype, N=8 product rows, the
+// cross-row consumers (fan-out census, 2× linearity pin), and the Feature 1a
+// round-trip arm (serialize → loadState → seed → reconcile →
+// reRegisterDefPrototypes → host re-mint per the batches record). The
+// builder writes demo/rows-scenarios.html (envelope + the expected census +
+// the fan-out pin) at import.
+{
+  await import('./rows-scenarios-page.mjs')
+}

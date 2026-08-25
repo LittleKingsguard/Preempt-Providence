@@ -38,11 +38,11 @@ export { diffMinimal, MockAdapter } from './core/render.js'
 export type { RenderAdapter, RenderOp, MinimalElement, ForkPathKey } from './core/render.js'
 export { emitElements, applyOps, minimalFromState, treeFromOps, treeSig, jsonClone, wireKey, renderProducingProcess } from './core/render-helpers.js'
 export type { MinimalElementSource, RenderTree, RenderOptions } from './core/render-helpers.js'
-export { DomAdapter, SSRFragmentAdapter, VOID_TAGS } from './core/adapters.js'
+export { DomAdapter, SSRFragmentAdapter, MarkdownAdapter, VOID_TAGS } from './core/adapters.js'
 export type { FragmentDescriptor, DomAdapterOptions } from './core/adapters.js'
 
 // ---- serialization / events / client / payload / validation -----------------
-export { serializeNode, serializeSlice, loadState } from './core/serialize.js'
+export { serializeNode, serializeSlice, loadState, reRegisterDefPrototypes } from './core/serialize.js'
 export type { SerializedRenderDoc, SerializedAnchor, RenderNodeState } from './core/serialize.js'
 export { EventBridge, coalesceByTick } from './core/events.js'
 export type { EventEnvelope, PreemptEvent } from './core/events.js'

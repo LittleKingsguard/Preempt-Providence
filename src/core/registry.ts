@@ -145,6 +145,31 @@ export function defRootPrototypeFor(link: Link): Node | undefined {
   return defRootPrototypes.get(link)
 }
 
+/** Feature 1a (handoffs-review-5.md — the census emit): READ-ONLY enumerator
+ *  over the def-children registry (REQ-GAP-11 discipline — the maps stay
+ *  write-private; only reads are exposed). */
+export function defPrototypeEntries(): [Link, Node[]][] {
+  return [...defPrototypes.entries()]
+}
+
+/** Feature 1a — READ-ONLY enumerator over the def-ROOT registry. */
+export function defRootPrototypeEntries(): [Link, Node][] {
+  return [...defRootPrototypes.entries()]
+}
+
+/** Feature 1a (handoffs-review-5.md G2) — recover the registration NAME of a
+ *  def Link: the per-name component Link carries the provider's source/duplex
+ *  anchors with `target` = the reference name (translate.ts:751). A link with
+ *  no such anchor is name-less → its prototypes are skipped (ruling 1). */
+export function defNameForLink(link: Link): string | undefined {
+  for (const role of ['source', 'duplex'] as const) {
+    for (const a of link.anchorsOf(role)) {
+      if (typeof a.target === 'string' && a.target.length > 0) return a.target
+    }
+  }
+  return undefined
+}
+
 // Origin tracking (the ORIGIN-OWNER element, archive/reviews/2026-08-16/
 // 2026-08-16-legacy-handler-reuse-review §12.4.3/4 — A1): the module-level
 // minted-set record — minted node id →

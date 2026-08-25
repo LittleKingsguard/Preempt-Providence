@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo — rows-blind-test: hooks array injection (Feature 1) + def-prototype round-trip (1a)</title>
+  <link rel="stylesheet" href="demo.css" />
+  <style>
+    .card-mount { border: 1px solid #bbb; border-radius: 6px; padding: 0.75rem; background: #fafafa; margin: 0.5rem 0; }
+    .consumers-section, .consumer, .rows-list {
+      border: 1px dashed #9db8c9; border-radius: 4px; padding: 6px; margin: 6px 0; background: #f2f7fa; }
+    .consumer { background: #fff8e7; }
+    .rows-list { background: #eef4ff; }
+    .product-row { border: 1px solid #2a7; background: #e6f7ec; padding: 2px 8px; margin: 3px 0; }
+    .mint-btn { border: 1px solid #678; border-radius: 4px; padding: 2px 8px; background: #fff; }
+    .expect { font-size: 13px; color: #456; }
+  </style>
+</head>
+<body data-page="rows-blind-test">
+  <!--
+    ============================================================================
+    ROWS-BLIND-TEST — hooks array injection (Feature 1) + def-prototype
+    round-trip (Feature 1a), produced by the blind-test WRITER (AGENTS.md
+    item 10a). No implementation reading — documentation only.
+
+    The page input is ONE legacy JSON envelope (translate.md §1): a root +
+    consumers section, the `hooksKind` declaration (`product-list:
+    'component'`), the registered def prototype (`product-card` — a
+    def-shaped template.component value), and CROSS-ROW consumers whose
+    component bindings reference the row field names.
+
+    The page module (demo/rows-blind-test.js) is CORE ONLY (dist/core/*) +
+    the envelope data + the shared runner. The census data is embedded in
+    server-data by the builder (the writer does NOT write the builder).
+
+    SECTION MAP
+    ---------------------------------------------------------------------------
+    S1  Mint drive           #mint-btn        -- the function-STRING control
+                                               body mints the 5 product rows
+    S2  Census               -- states-per-consumer = 5 (ratio 1.0);
+                                               fanoutStates <= 2 x fanoutRows
+    S3  DOM materialization  -- consumers render ONE per-row arm each
+    S4  Linearity pin        -- fanoutStates <= 2 x fanoutRows; no
+                                               fan-out-blowup warn
+    S5  Schema boundary      -- defPrototypes section present in serialized
+                                               doc (Feature 1a)
+    S6  Round trip (1a)      -- serialize -> loadState -> seed -> reconcile ->
+                                               reRegisterDefPrototypes -> host
+                                               re-mint -> row count unchanged
+    ============================================================================
+  -->
+
+  <main>
+    <h1>rows-blind-test — hooks array injection + def-prototype round trip</h1>
+    <p class="goals">
+      The hooks-array rows machinery in action
+      (<code>docs/specs/hooks-array-injection-review.md</code> §9): a
+      <code>rows-mint</code> op driven by a <b>function-STRING control body</b>,
+      a registered def prototype resolved BY NAME, N=5 product rows with
+      natural fields, and CROSS-ROW consumers resolving the multi-provider
+      compile fan-out (§9.2 pin 6): states-per-consumer = 5 rows (ratio 1.0),
+      asserted against the 2x linearity bound (Feature 1.4) with the
+      <code>fan-out-blowup</code> tripwire silent. The round trip (Feature
+      1a — <code>docs/specs/serialize.md</code> §3 recipe) proves
+      rows-are-data: the minted rows never serialize as nodes; the
+      <code>batches</code> record round-trips and the host re-mints per it.
+      The banner is <code>rows-blind-test</code>; the profile line is
+      <code>[rows-blind-test:profile]</code>.
+    </p>
+
+    <!-- Framework input: the ONE legacy envelope (translateLegacy input). -->
+    <script id="preempt-initial-data" type="application/json">__PREEMPT_INITIAL_DATA__</script>
+    <script id="server-data" type="application/json">__SERVER_DATA__</script>
+
+    <div class="card-mount" id="mount-main"></div>
+
+    <section id="results"></section>
+  </main>
+
+  <script type="module" src="rows-blind-test.js"></script>
+</body>
+</html>

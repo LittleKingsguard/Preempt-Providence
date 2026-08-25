@@ -3,8 +3,9 @@
 // node → JSON → parse → recompile must round-trip equal render-relevant state (SER-R1).
 // Anchors serialize as typed refs — never live objects (notes §10.6, D4).
 import type { Node } from './node.js'
-import type { AnchorTarget, DerivedDecl, NodeBaseData, NodeRef, Role } from './types.js'
+import type { AnchorTarget, DerivedDecl, LinkConfigNameHub, NodeBaseData, NodeRef, Role } from './types.js'
 import { validateDerived } from './derived.js'
+import { defPrototypeEntries, defRootPrototypeEntries, defNameForLink, registerDefPrototypes, registerDefRootPrototype } from './registry.js'
 
 export type SerializedAnchor = {
   role: Role
@@ -37,8 +38,12 @@ export interface RenderNodeState {
    *  schema boundary (SER-R1). */
   hooksKind?: Record<string, string>
   /** HOOKS-ARRAY (OPTION C — §9.2 pin 5) — the batch PAYLOAD records keyed
-   *  by hook name. Rows are DATA (ship once); the minted nodes are DERIVED
-   *  (serialize-excluded via the origin-layer filter). loadState re-seeds
+   *  by hook name. Rows are DATA (ship once); the minted nodes are DERIVED.
+   *  NOTE (2026-08-24 adversarial pass, S4a): there is NO origin-layer
+   *  filter in serializeNode — minted rows ship if the CALLER includes them
+   *  in the slice; the §3 recipe's slice (authored nodes only) is what keeps
+   *  rows-are-data true. A post-mint full-node-list slice + re-mint DOUBLES
+   *  the rows (open defect, defects.md ADVERSARIAL-S4). loadState re-seeds
    *  them so a re-mint can reproduce the batch. */
   batches?: Record<string, unknown>
 }
@@ -47,6 +52,16 @@ export type SerializedRenderDoc = {
   template: unknown
   content: unknown[]
   clientConfig: { adapter: string; persistence: boolean }
+  /** Feature 1a (handoffs-review-5.md — the CENSUS): the def-prototype
+   *  registry, as a name + instance-id census. The prototype STATE rides
+   *  `content` (status quo — prototypes already ship there); this section
+   *  carries the ONE datum content cannot (the registration NAME — recovered
+   *  from the registry Link's anchors at serialize; a name-less link is
+   *  skipped). Entries ship ONLY for instances present in the serialized
+   *  slice (instance-membership reachability — never another graph's
+   *  prototypes). `isRoot` per entry (a node can be root of one name and
+   *  child of another — nested defs). */
+  defPrototypes?: { name: string; nodeId: string; isRoot: boolean }[]
 }
 
 function targetKey(target: AnchorTarget): SerializedAnchor['target'] {
@@ -98,8 +113,14 @@ export function serializeNode(node: Node): RenderNodeState {
     type: node.type,
     props: shipped,
     css: cssState(node.css),
-    children: node.children.map((child) => child.id),
+    // ADVERSARIAL-S4 — the children REFS never include derived (minted)
+    // nodes either: the serialized doc is self-consistent (no dangling
+    // refs to excluded row states).
+    children: node.children.filter((c) => c.originLayer === undefined && !c.runtimeMinted).map((child) => child.id),
     anchors: node.anchors.map((a) => {
+      // ADVERSARIAL-S16 — anchor values ride the JSON-safety boundary (a
+      // function-valued anchor would silently drop on stringify otherwise)
+      if (a.value !== undefined) assertJsonSafe(a.value)
       let parent: string | undefined
       // encode the parent side of a child anchor so the family edge round-trips,
       // while keeping the anchor's own target self-referencing (S3.1)
@@ -127,7 +148,13 @@ export function serializeNode(node: Node): RenderNodeState {
   if (node.derived !== undefined) state.derived = node.derived
   if (node.base.hooks !== undefined && node.base.hooks.length > 0) state.hooks = [...node.base.hooks]
   if (node.base.hooksKind !== undefined && Object.keys(node.base.hooksKind).length > 0) state.hooksKind = { ...node.base.hooksKind }
-  if (node.batches && Object.keys(node.batches).length > 0) state.batches = { ...node.batches }
+  if (node.batches && Object.keys(node.batches).length > 0) {
+    // ADVERSARIAL-S16 — the batch RECORD (the rows payload) rides the
+    // JSON-safety boundary: a function/circular row is a serialization-error,
+    // never silent data loss on stringify.
+    assertJsonSafe(node.batches)
+    state.batches = { ...node.batches }
+  }
   // deterministic anchor order for stable round-trips
   state.anchors.sort((x, y) => {
     const roleOrder: Record<string, number> = { child: 0, parent: 1, source: 2, duplex: 3, target: 4, container: 5, content: 6, component: 7 }
@@ -145,11 +172,57 @@ export function serializeNode(node: Node): RenderNodeState {
 }
 
 export function serializeSlice(node: Node, kids: Node[], clientConfig?: { adapter: string; persistence: boolean }): SerializedRenderDoc {
-  return {
+  // ADVERSARIAL-S4 (2026-08-24) — the pin-4 serialize-exclude: minted nodes
+  // (originLayer / runtimeMinted) are DERIVED state, never authored — they
+  // are excluded here regardless of what the CALLER passes (a post-mint full
+  // node list no longer ships the rows; the round-trip re-mint per the
+  // batches record reproduces them exactly, never doubling). The batch
+  // RECORD (rows-as-data) still ships on its owner.
+  const isDerived = (n: Node): boolean => n.originLayer !== undefined || n.runtimeMinted
+  const contentKids = kids.filter((k) => !isDerived(k))
+  const content = contentKids.map(serializeNode)
+  // Feature 1a — the CENSUS emit + the C2 strip:
+  // - iterate the registry (roots first — a def-root precedes its def-children
+  //   per name; children in registry mint order), skip name-less links
+  //   (ruling 1), ship ONLY instances present in THIS slice (R3' —
+  //   instance-membership; graph B's prototypes are never in graph A's slice).
+  // - the C2 strip: seam child anchors ({role:'child', options.seam}) on
+  //   prototype-state content entries are dropped (the seed's one-child limit
+  //   would drop them anyway; the strip removes the dangling parent refs).
+  const sliceSet = new Set<Node>([node, ...contentKids])
+  const census: { name: string; nodeId: string; isRoot: boolean }[] = []
+  const prototypeInstances = new Set<Node>()
+  for (const [link, root] of defRootPrototypeEntries()) {
+    const name = defNameForLink(link)
+    if (name === undefined) continue
+    if (!sliceSet.has(root)) continue
+    census.push({ name, nodeId: root.id, isRoot: true })
+    prototypeInstances.add(root)
+  }
+  for (const [link, protos] of defPrototypeEntries()) {
+    const name = defNameForLink(link)
+    if (name === undefined) continue
+    for (const p of protos) {
+      if (!sliceSet.has(p)) continue
+      census.push({ name, nodeId: p.id, isRoot: false })
+      prototypeInstances.add(p)
+    }
+  }
+  if (census.length > 0) {
+    for (let i = 0; i < content.length; i += 1) {
+      const kid = contentKids[i]!
+      if (!prototypeInstances.has(kid)) continue
+      const state = content[i]!
+      state.anchors = state.anchors.filter((a) => !(a.role === 'child' && (a.options as { seam?: boolean } | undefined)?.seam))
+    }
+  }
+  const doc: SerializedRenderDoc = {
     template: serializeNode(node),
-    content: kids.map(serializeNode),
+    content,
     clientConfig: clientConfig ?? { adapter: 'dom', persistence: false },
   }
+  if (census.length > 0) doc.defPrototypes = census
+  return doc
 }
 
 interface SeededNode {
@@ -253,6 +326,20 @@ function parseNodeState(v: unknown): SeededNode {
       if (r.placementName !== undefined && typeof r.placementName !== 'string') {
         throw new Error('NodeSchema-shape-mismatch')
       }
+      // Feature 1b (D13) — the record's optional `keyField` (when present) must
+      // be a non-empty string; the executor only ever writes a valid string,
+      // so a non-string/empty keyField in a doc is a crafted/malformed record
+      // → NodeSchema-shape-mismatch (SER-R1).
+      if (r.keyField !== undefined && (typeof r.keyField !== 'string' || r.keyField.length === 0)) {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+      // ADVERSARIAL-S3e (2026-08-24) — row MEMBERS ride the schema boundary:
+      // a crafted doc's `rows` with non-object members would crash the host's
+      // re-mint otherwise (rows-mint now rejects them contained too — this is
+      // the boundary defense-in-depth).
+      for (const row of r.rows) {
+        if (row === null || typeof row !== 'object' || Array.isArray(row)) throw new Error('NodeSchema-shape-mismatch')
+      }
     }
     seed.batches = o.batches as Record<string, unknown>
   }
@@ -274,6 +361,43 @@ export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
   if (typeof template !== 'object' || template === null || Array.isArray(template)) throw new Error('envelope-mismatch')
   if (!Array.isArray(doc.content)) throw new Error('envelope-mismatch')
   validateClientConfig(doc)
+  // Feature 1a — the defPrototypes census rides the schema boundary (SER-R1):
+  // a non-array section is an envelope mismatch; a malformed entry (name/
+  // nodeId non-string, isRoot non-boolean), a duplicate entry id, a duplicate
+  // name, or a nodeId absent from the doc is a NodeSchema-shape-mismatch.
+  const census = (doc as { defPrototypes?: unknown }).defPrototypes
+  if (census !== undefined) {
+    if (!Array.isArray(census)) throw new Error('envelope-mismatch')
+    const ids = new Set<string>()
+    const rootNames = new Set<string>()
+    const docIds = new Set<string>([(template as { id?: string }).id ?? '', ...(doc.content as { id?: string }[]).map((c) => c.id ?? '')])
+    for (const entry of census) {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error('NodeSchema-shape-mismatch')
+      const e = entry as Record<string, unknown>
+      if (typeof e.name !== 'string' || e.name.length === 0) throw new Error('NodeSchema-shape-mismatch')
+      if (typeof e.nodeId !== 'string' || e.nodeId.length === 0) throw new Error('NodeSchema-shape-mismatch')
+      if (typeof e.isRoot !== 'boolean') throw new Error('NodeSchema-shape-mismatch')
+      // an instance ships ONCE (duplicate entry ids reject). Duplicate NAMES
+      // are LEGAL — a def-root and its def-children share the registration
+      // name by construction (census entries are keyed by nodeId, not name).
+      if (ids.has(e.nodeId)) throw new Error('NodeSchema-shape-mismatch')
+      if (!docIds.has(e.nodeId)) throw new Error('NodeSchema-shape-mismatch')
+      if (e.isRoot) {
+        // ADVERSARIAL-S6a: TWO ROOTS of ONE name are a crafted doc (the
+        // re-registration would silently last-wins) — rejected here.
+        if (rootNames.has(e.name)) throw new Error('NodeSchema-shape-mismatch')
+        rootNames.add(e.name)
+      }
+      ids.add(e.nodeId)
+    }
+    // NOTE (2026-08-24 adversarial pass, S6b DISPOSITION): a def-child
+    // entry whose name has NO root entry is LEGAL — translate mints
+    // def-ROOTS only for css-carrying defs (translate.ts mintDefPrototypes:
+    // the root prototype is the element-level carrier of the def's css), so
+    // a css-less multi-child def ships a children-only census by
+    // construction. Children-only registration is the intended shape for
+    // such defs (rows-mint resolves protos[0] from the children registry).
+  }
   assertNoLiveTargets(template)
   // the template's derived rule is validated at the same schema boundary as
   // every content entry (derived-state.md §7)
@@ -308,6 +432,14 @@ export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
       }
       if (r.mintKind !== undefined && r.mintKind !== 'component' && r.mintKind !== 'placement') {
         throw new Error('NodeSchema-shape-mismatch')
+      }
+      // Feature 1b (D13) — the template record's optional keyField (string)
+      if (r.keyField !== undefined && (typeof r.keyField !== 'string' || r.keyField.length === 0)) {
+        throw new Error('NodeSchema-shape-mismatch')
+      }
+      // ADVERSARIAL-S3e — row-member validation at the template boundary too
+      for (const row of r.rows) {
+        if (row === null || typeof row !== 'object' || Array.isArray(row)) throw new Error('NodeSchema-shape-mismatch')
       }
     }
   }
@@ -344,3 +476,47 @@ export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
 }
 
 export const reResolve = loadState
+
+/** Feature 1a (handoffs-review-5.md §S1/C4 — the recipe helper): RE-REGISTER
+ *  the already-seeded def-prototype instances under the host hub's component
+ *  Links, per the doc's census. Zero construction — the single-instance rule
+ *  is structural (the seeded nodes ARE the instances; no second copies).
+ *  Called AFTER seeding (template first) + `reconcileParentTargets` (the
+ *  family edges populate defRoot.children). Validates every entry's post-seed
+ *  state === 'prototype' (a def-child seeded before its def-root derives
+ *  'unplaced' — sweep-vulnerable; a violation is a crafted/ill-ordered doc →
+ *  NodeSchema-shape-mismatch). Never touches rows (the host drives the
+ *  post-restore rows-mint per batches record itself). */
+export function reRegisterDefPrototypes(doc: SerializedRenderDoc, hub: LinkConfigNameHub, nodes: Node[]): void {
+  const census = doc.defPrototypes
+  if (census === undefined || census.length === 0) return
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const roots = new Map<string, Node>()
+  const children = new Map<string, Node[]>()
+  for (const entry of census) {
+    const node = byId.get(entry.nodeId)
+    if (node === undefined) throw new Error('NodeSchema-shape-mismatch')
+    if (entry.isRoot) {
+      roots.set(entry.name, node)
+    } else {
+      let list = children.get(entry.name)
+      if (!list) {
+        list = []
+        children.set(entry.name, list)
+      }
+      list.push(node)
+    }
+  }
+  for (const [name, root] of roots) {
+    registerDefRootPrototype(hub.linkFor(name, 'component'), root)
+  }
+  for (const [name, protos] of children) {
+    registerDefPrototypes(hub.linkFor(name, 'component'), protos)
+  }
+  for (const entry of census) {
+    const node = byId.get(entry.nodeId)!
+    // the post-seed state tripwire: token-terminated → 'prototype'; an
+    // ill-ordered doc leaves a def-child 'unplaced' (sweep-vulnerable).
+    if (node.state !== 'prototype') throw new Error('NodeSchema-shape-mismatch')
+  }
+}
