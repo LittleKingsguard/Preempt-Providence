@@ -33,4 +33,6 @@ jobs:
 
       - run: npm publish
         env:
+          # setup-node writes the registry auth; the committed .npmrc
+          # interpolates ${NODE_AUTH_TOKEN} for npm.pkg.github.com.
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
