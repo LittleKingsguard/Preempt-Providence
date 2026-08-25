@@ -107,6 +107,7 @@ caller bug — `state` reads `undefined` → `no-usable-state`, or a
 non-function `destroy`/`applySlice`). Page/harness code driving the engine
 directly MUST pass the live Node in `op.node` (find it via
 `supervisor.getNode(id)` / `tree.getNode(id)` first).
+
 **Rows ops are LIVE-NODE-TARGET ONLY (2026-08-24 adversarial pass, S1):**
 `rows-mint`/`rows-clear` carry `op.target` (not `op.node`) and the supervisor
 does NOT resolve string refs for it — a string `target` is a caller bug that
@@ -155,6 +156,44 @@ translate (P3 §10.ad F-13 contentNodes-ownership minting).
 | `Node.receiveNextState(partial)` | absorbed → `'state-slice'` MutationOp (S2.1) |
 | `fetchContent` / `addContentNodes` | structural ops; nodes owned by `'contentNodes'` (S-R2.2) |
 | `fetchHandlers` / `getHandler` / `compileHandler` | handler binding via layers; not re-specified here |
+
+### 1.4 Multi-graph isolation opt-in (`graphScope`) + host-authoring traps
+
+A multi-graph host (e.g. an Electron shell with an operator-only Security pane
+in graph B, isolated from an agent-visible app graph A) opts into per-graph
+isolation via a `GraphScope`:
+
+- `createIsolatedScope()` returns an isolated scope.
+- Thread the SAME scope object through `translateLegacy(doc, { graphScope })`,
+  `new Supervisor({ graphScope, ... })`, and `renderProducingProcess(..., {
+  graphScope })`. Every `Node` you construct under the graph must also carry it
+  (the 5th constructor arg). The DEFAULT (no `graphScope` anywhere) is the
+  module-level shared registry — zero-change, non-breaking (D8).
+- An isolated graph never resolves/compiles another graph's handler-def body,
+  never resolves another graph's `byId`/userData, never cross-destroys another
+  graph's minted set, and its restore/condense drain never finalizes another
+  graph's nodes.
+
+**Host-authoring traps (2026-08-25 adversarial pass — the engine offers NO
+guard for these; the fall-through is to DEFAULT, never another isolated scope):**
+
+1. **Half-coverage (X14/X22)** — pass the scope to translate AND the Supervisor
+   AND every Node. A scope passed to translate but not the Supervisor (or nodes
+   built without the scope) silently registers those nodes against the DEFAULT
+   singleton. Verify `supervisor.graphScope === scopeOf(node)` for your roots.
+2. **Shared EventBridge (X21)** — one `EventBridge` across two isolated
+   Supervisors is a shared bus (graph-A events reach graph-B). Pass a distinct
+   bridge per isolated graph.
+3. **Render scope (X23)** — the emit def-fill keys on `renderOptions.graphScope`,
+   not the nodes' own scopes. Rendering a graph under a different scope silently
+   fills defs from an unrelated scope. Always render under the graph's own scope.
+
+**Isolated-path guards (2026-08-25, X10/X11/X12/X19/X20):** an ISOLATED
+Supervisor rejects a `rows-mint`/`layer-apply`/`rows-clear`/`clone-instance`
+target whose `scopeOf(target) !== this.graphScope` (`cross-graph-target`),
+`clone()` lands in the supervisor's scope (never DEFAULT), and
+`drainPendingDestroy(scope)` only drains that scope. A DEFAULT host (no
+`graphScope`) shares one registry as before.
 
 ---
 

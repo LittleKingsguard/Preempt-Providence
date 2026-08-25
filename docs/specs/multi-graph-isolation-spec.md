@@ -66,28 +66,43 @@ translate + supervisor + render agree on one scope.
   built here (a single instance is required).
 
 ## Host-authoring traps (DOCUMENTED 2026-08-25 adversarial pass — the engine
-honors D1/D7/D8 but offers NO guard for these)
+honors D1/D7/D8 but offers NO guard for these; each is the HOST's responsibility)
 
-- **D1 half-coverage**: a scope passed to translate-but-not-Supervisor (or
-  nodes constructed without the scope) silently falls back to the DEFAULT
-  singleton; a `{graphScope}` Supervisor still applies a live `op.node` ref and
-  reads DEFAULT userData/byId. Per the opt-in contract this is the HOST's
-  responsibility — the fall-through is to DEFAULT, never to another isolated
-  scope.
-- **D7 shared EventBridge**: one bridge across two isolated Supervisors is a
-  shared bus (graph-A events reach graph-B subscribers). Pass a distinct bridge
-  per isolated graph.
-- **Render scope**: `emitElements`/`renderProducingProcess` def-fill keys on
-  `renderOptions.graphScope`; the actionable list carries no scope. A host
-  rendering a graph with the wrong scope arg silently fills defs from an
-  unrelated scope. The render scope and node scope must agree.
+These four are NOT engine-isolation breaks — the fall-through is always to the
+DEFAULT singleton or the passed scope, never to ANOTHER isolated scope. But a
+host that wires the opt-in wrong silently gets a NON-isolated graph. Concrete
+traps:
+
+- **D1 half-coverage (X14 / X22)**: the `graphScope` must be threaded to ALL of
+  translate, the Supervisor, AND the nodes. A scope passed to
+  `translateLegacy(doc, { graphScope })` but NOT to
+  `new Supervisor({ graphScope })` — or nodes constructed WITHOUT the scope — 
+  silently registers those nodes against the DEFAULT singleton. The
+  `{graphScope}` Supervisor still applies a live `op.node` ref and reads DEFAULT
+  userData/byId. **The engine has no scope-match guard on the default path** (it
+  does reject a cross-scope target only when the supervisor IS isolated). So:
+  pass the SAME scope object to translate, Supervisor, render, and every Node
+  you construct; verify `supervisor.graphScope === scopeOf(node)` for the roots
+  you mount.
+- **D7 shared EventBridge (X21)**: `EventBridge` is a shared bus keyed by
+  `nodeId`+`forkKey`. Passing ONE bridge to two isolated Supervisors means
+  graph-A's state/structure events reach graph-B's subscribers (and colliding
+  ids interleave). Pass a DISTINCT `EventBridge` instance per isolated graph.
+  This is pinned host responsibility — there is no engine guard.
+- **Render scope (X23)**: the def-fill during emit keys on
+  `renderOptions.graphScope` (not the nodes' own scopes — the actionable list
+  carries no scope). Rendering a graph with the WRONG scope arg silently fills
+  defs from an unrelated scope (a `brand` css reads another graph's color). Pass
+  the SAME scope you used to build the graph; never render a graph under a
+  different scope than the one its nodes live in.
 - **ADVERSARIAL FIX (2026-08-25, X10/X11/X12/X19/X20):** the isolated path now
   GUARDS three engine leaks found by the adversarial pass — `drainPendingDestroy`
   is scope-partitioned (a graph-A restore never finalizes graph-B's nodes), a
   cross-graph `rows-mint`/`layer-apply`/`rows-clear`/`clone-instance` target is
   rejected (`cross-graph-target`), and `clone()` threads the supervisor's scope
   (a same-scope clone lands in the isolated scope, never DEFAULT). Tests:
-  multi-graph-isolation ADV-X10/X12/X19.
+  multi-graph-isolation ADV-X10/X12/X19. These are the isolated-path
+  (supervisor-has-a-graphScope) guards — a DEFAULT host still shares one registry.
 
 ## Validation
 

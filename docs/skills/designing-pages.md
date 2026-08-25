@@ -1558,3 +1558,30 @@ handlers.md/payload.md/placement-path-spec §10.ag):
    ordering, parent-guard-across-restore, and clear-in-base — all interactions a
    single-feature suite could not exercise. The 2 root causes (undo flag
    symmetry + condense restore drop) both sit on the 3×4 seam.
+
+### 14.13 Multi-graph isolation host traps (the 2026-08-25 isolation adversarial pass)
+
+1. **An opt-in isolation surface has NO guard against the host wiring it wrong —
+   and the failure is silent.** The `graphScope` must be threaded to translate +
+   Supervisor + every Node + the render. A half-threaded scope (X14/X22) silently
+   registers those nodes against the DEFAULT singleton — no error, no isolation.
+   The engine cannot know the host half-applied. Always verify
+   `supervisor.graphScope === scopeOf(node)` for mounted roots.
+2. **A "per-graph" claim needs the SYNC drain scoped too, not just the async
+   sweep.** The multi-graph TDD set covered the async `runSweep` partition but
+   missed the synchronous `drainPendingDestroy` (the condense/`_restoreBase`
+   path) — a graph-A restore finalized graph-B's pending nodes. Lesson: any
+   "per-scope" partition must be applied to BOTH the async and the sync
+   bookkeeping paths; a scope-correct async path is no guarantee the sync twin
+   is scoped.
+3. **An op's target scope must be guarded, not overridden.** The ops used
+   `ctx.graphScope ?? scopeOf(target)`, so a `{graphScope:sB}` supervisor
+   accepted a graph-A node as a mint target (cross-graph family link). Lesson: a
+   supervisor with an explicit scope must REJECT a target from a different
+   scope (`cross-graph-target`), never silently mint across the boundary; the
+   default (no scope) keeps the shared permissive contract.
+4. **Host-facing API docs must name the traps, not just the internal spec.** The
+   four host traps (half-coverage, shared EventBridge, render-scope mismatch,
+   plus the isolated-path guards) now live in `docs/specs/api.md` §1.4 + the
+   isolation spec — a consumer reading only the public surface sees them.
+
