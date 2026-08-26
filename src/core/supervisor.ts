@@ -88,6 +88,21 @@ export interface JournalEntry {
   result: { status: string; [key: string]: unknown }
 }
 
+/** UNDO-REDO-REPORT (docs/specs/undo-redo-report.md — DECIDED 2026-08-26):
+ *  the host-report surface for undo()/redo()/replay(). `scheduledDirtied` is
+ *  the markPass2-SCHEDULED (pending-flush) set from pass2Dirty — NOT
+ *  re-rendered states; a host awaiting settled states must `await flush()` +
+ *  `takePass2States()`. `baseBoundary` is distinct from an empty stack: the
+ *  base marker is never in the undoStack (truncated at condense), so an empty
+ *  stack with a base present is the guarded boundary, not "nothing to undo". */
+export interface UndoRedoReport {
+  status: 'applied' | 'no-op' | 'base-boundary'
+  scheduledDirtied: NodeId[]
+  stackTopKind?: string
+  redoTopKind?: string
+  baseBoundary: boolean
+}
+
 /** Shared-host dispatch report (ssr-synthetic-event.md §3.1). */
 export interface DispatchReport {
   results: HandlerResult[]
@@ -192,6 +207,45 @@ export class Supervisor {
   get handlerContext(): HandlerContext {
     this.handlerCtx ??= makeHandlerContext(this, this.clientAPI)
     return this.handlerCtx
+  }
+
+  /** UNDO-REDO-REPORT — read-only stack accessors (depths/top-kinds only;
+   *  never raw `JournalEntry[]`, which hold live Node refs + snapshot
+   *  payloads). `undoBaseBoundary` is true when the undoStack is empty BECAUSE
+   *  it was truncated at the condensed base (further undo is a guarded no-op). */
+  get undoDepth(): number {
+    return this.undoStack.length
+  }
+
+  get redoDepth(): number {
+    return this.redoStack.length
+  }
+
+  get undoTopKind(): string | undefined {
+    return this.undoStack.at(-1)?.op.kind
+  }
+
+  get redoTopKind(): string | undefined {
+    return this.redoStack.at(-1)?.op.kind
+  }
+
+  get undoBaseBoundary(): boolean {
+    return this.undoStack.length === 0 && this.journal.some((e) => e.op.kind === 'base')
+  }
+
+  /** UNDO-REDO-REPORT — build the report from the post-op stacks, omitting the
+   *  optional top-kind keys when the stack is empty (exactOptionalPropertyTypes). */
+  private report(status: 'applied' | 'no-op' | 'base-boundary', dirtied: Set<NodeId>): UndoRedoReport {
+    const base: UndoRedoReport = {
+      status,
+      scheduledDirtied: [...dirtied],
+      baseBoundary: this.undoStack.length === 0 && this.journal.some((e) => e.op.kind === 'base'),
+    }
+    const undoTop = this.undoStack.at(-1)?.op.kind
+    const redoTop = this.redoStack.at(-1)?.op.kind
+    if (undoTop !== undefined) base.stackTopKind = undoTop
+    if (redoTop !== undefined) base.redoTopKind = redoTop
+    return base
   }
 
   /** Run a phase's handlers on one node (or all registered nodes if omitted). */
@@ -818,6 +872,27 @@ export class Supervisor {
       }
     }
 
+    // UNDO-REDO-ADV-MAL (2026-08-26) — node-bearing ops must act on a REAL
+    // Node (not a plain object), and attach/clone need a real target/source.
+    // Malformed shapes are CONTAINED `malformed-op` rejections — never an
+    // uncaught TypeError escaping the managed channel.
+    const isNodeObject = (v: unknown): v is Node => !!v && typeof v === 'object' && (v as { isNode?: boolean }).isNode === true
+    if (node !== undefined && !isNodeObject(node)) {
+      this.suppressJournal = prevSuppress
+      return { status: 'rejected', error: { code: 'malformed-op', detail: 'op.node must be a Node' } }
+    }
+    if ((op.kind === 'rows-mint' || op.kind === 'rows-clear' || op.kind === 'layer-apply') && op.target !== undefined && !isNodeObject(op.target)) {
+      this.suppressJournal = prevSuppress
+      return { status: 'rejected', error: { code: 'malformed-op', detail: 'op.target must be a Node' } }
+    }
+    if (op.kind === 'attach' && !isNodeObject(op.to)) {
+      this.suppressJournal = prevSuppress
+      return { status: 'rejected', error: { code: 'malformed-op', detail: 'attach requires a Node `to`' } }
+    }
+    // clone-instance's source may arrive as `op.source` (wire) or `op.node`
+    // (internal); both are resolved + guarded below (unknown-node /
+    // cross-scope) — no shape guard needed here.
+
     // before-compile: phase handlers run before the op executes (and its
     // compile/apply happens). Errors are contained by dispatchPhase. A QUIET
     // apply (the restore re-mint, ADV-S5) skips them — a restore is an
@@ -827,9 +902,19 @@ export class Supervisor {
 
     try {
       if (op.kind === 'state-slice') {
-        const mutation = op.mutation as { targetProp: string; mode: string; value: unknown }[]
-        // placement/children writes are hard-blocked regardless of tree state (FS-10)
+        // UNDO-REDO-ADV-MAL-1/MAL-2 (2026-08-26) — a malformed mutation
+        // (missing/non-array, or a member missing a string `targetProp`) must
+        // be a CONTAINED `malformed-op` rejection — never an uncaught TypeError
+        // escaping the managed channel.
+        const rawMutation = op.mutation
+        if (!Array.isArray(rawMutation)) {
+          return { status: 'rejected', error: { code: 'malformed-op', detail: 'state-slice mutation must be an array' } }
+        }
+        const mutation = rawMutation as { targetProp: string; mode: string; value: unknown }[]
         for (const m of mutation) {
+          if (!m || typeof m.targetProp !== 'string') {
+            return { status: 'rejected', error: { code: 'malformed-op', detail: 'state-slice mutation entry missing targetProp' } }
+          }
           if (m.targetProp.startsWith('placement') || m.targetProp === 'children') {
             return { status: 'rejected', error: { code: 'placement-target-blocked' } }
           }
@@ -1081,6 +1166,11 @@ export class Supervisor {
         // minted ids (A3 — replay resolves them to the existing nodes).
         const target = op.target as Node | undefined
         if (!target) return { status: 'rejected', error: { code: 'unknown-node' } }
+        // UNDO-REDO-ADV-MAL-3 (2026-08-26) — `nodes` must be an array; a
+        // non-array (object/string) would throw in layerApply's `for...of`.
+        if (!Array.isArray(op.nodes)) {
+          return { status: 'rejected', error: { code: 'malformed-op', detail: 'layer-apply nodes must be an array' } }
+        }
         const res = layerApply(op as never, { hub: target.hubFor ?? this.hub ?? null as never, nodes: this.nodes, ...(this.graphScope ? { graphScope: this.graphScope } : {}) })
         // supervisor visibility: every minted node is registered here so
         // getNode/allNodes/pass-2 resolve it (the minted-set registry tracks
@@ -1231,7 +1321,12 @@ export class Supervisor {
     }
   }
 
-  replay(): void {
+  replay(): UndoRedoReport {
+    // UNDO-REDO-REPORT — the scheduled (pending-flush) dirty set, captured
+    // from pass2Dirty AFTER the re-applies (the report reads the synchronous
+    // scheduled set, NOT a journal scan — the dispatchAndReport O(n) pattern
+    // is rejected; this is O(dirty-set)).
+    const dirtied = new Set<NodeId>()
     // Snapshot the stream: re-applies journaled ops, so iterating the LIVE
     // array would keep visiting appended entries — an infinite journal-growth
     // loop for any op that applies successfully on replay. The replayed ops
@@ -1242,7 +1337,16 @@ export class Supervisor {
       // post-base entries then re-apply with their existing gates below.
       if (entry.op.kind === 'base') {
         const snapshot = (entry.op as { snapshot?: { template: unknown; content: unknown[] } }).snapshot
-        if (snapshot) this._restoreBase(snapshot)
+        // UNDO-REDO-ADV-MAL-6 (2026-08-26) — the base branch must be failure-
+        // contained (mirror `condense`'s D5 containment at the journal point):
+        // a malformed/corrupted base snapshot would otherwise throw a bare
+        // TypeError OUT of replay (the try below wraps only the apply path).
+        try {
+          if (snapshot) this._restoreBase(snapshot)
+        } catch {
+          // a corrupted base degrades to a no-op graph-restore — replay never
+          // throws; the post-base re-applies below still run.
+        }
         continue
       }
       // DEFECT-JOURNAL-REPLAY-APPEND + DEFECT-CLONE-REPLAY-NONIDEMPOTENT
@@ -1271,6 +1375,8 @@ export class Supervisor {
         // fresh slice layer ids — the recorded ones would go stale).
         const res = this.apply(op, { journal: false })
         if (res.status === 'applied') {
+          // UNDO-REDO-REPORT — accumulate the re-applied dirtied ids.
+          if (Array.isArray(res.dirtied)) for (const id of res.dirtied) dirtied.add(id as NodeId)
           // Feature 1b (D9) — PRESERVE the ORIGINAL `preRecord` across the
           // refresh: replay re-runs a keyed op against the CURRENT (post-op)
           // state, so the re-apply's preRecord is the post-op record — the
@@ -1291,10 +1397,16 @@ export class Supervisor {
     // the condense (a host can replay a condensed journal) and must not leave
     // pre-replay undo entries in the redoStack — a subsequent redo would
     // re-apply an op already consumed by the replay/undo and double-apply it
-    // (worst for non-idempotent rows-mint/destroy). Clearing on the base
-    // branch makes replay a clean graph-REPLACE (the pre-replay undo/redo
-    // state is meaningless against the restored graph).
-    if (this.journal.some((e) => e.op.kind === 'base')) this.redoStack = []
+    // (worst for non-idempotent rows-mint/destroy). UNDO-REDO-ADV-UR7
+    // (2026-08-26) — the clear must ALSO fire on a NON-base replay: replay
+    // re-applies EVERY journaled op, so any pre-replay undone entry (already
+    // on the redoStack) is now re-applied in the journal — a later redo would
+    // double-apply it. The redoStack is only meaningful against a live op
+    // undone AFTER the replay; the pre-replay state is stale either way.
+    this.redoStack = []
+    // UNDO-REDO-REPORT — the report reflects the post-replay state.
+    for (const id of this.pass2Dirty) dirtied.add(id)
+    return this.report('applied', dirtied)
   }
 
   /** Feature 3 (D3, ADV-S11/S19) — id-resolve BOTH the live node ref and the
@@ -1343,7 +1455,11 @@ export class Supervisor {
     return (result.sliceLayers?.length ?? 0) > 0 || (result.hookUndo?.length ?? 0) > 0
   }
 
-  undo(): void {
+  undo(): UndoRedoReport {
+    // UNDO-REDO-REPORT — the scheduled (pending-flush) dirty set, captured
+    // from pass2Dirty AFTER the inverse runs (the report reads the synchronous
+    // scheduled set, NOT a journal scan).
+    const dirtied = new Set<NodeId>()
     // Feature 3 (ruling 19) — the base-boundary guard: an undo with no
     // post-base entries left (the undoStack was truncated at condense) would
     // have to cross the base marker — warn + fail, never a silent no-op,
@@ -1351,26 +1467,32 @@ export class Supervisor {
     if (this.undoStack.length === 0) {
       if (this.journal.some((e) => e.op.kind === 'base')) {
         console.warn('base-boundary: undo cannot cross the condensed base marker (undoStack truncated at condense)')
+        return this.report('base-boundary', new Set())
       }
-      return
+      return this.report('no-op', new Set())
     }
     const entry = this.undoStack.pop()!
     this.redoStack.push(entry)
     const kind = entry.op.kind
     const rawNode = entry.op.node ?? entry.op.target
     const node = rawNode as Node
-    if (!node) return
+    if (!node) return this.report('no-op', new Set())
     // Feature 3 (D3) — the id-fallback: after a replay-from-base the pre-base
     // node OBJECTS are replaced by fresh seeds with the SAME ids; undo() must
     // re-resolve an evicted/destroyed live ref by id (mirror of replay's
     // resolution — prefer the live ref only when it is STILL this supervisor's
     // registered node; the wrong-node hazard note handoffs-review-4 §5).
     const resolved = !node.destroyed && this.nodes.get(node.id) === node ? node : (this.nodes.get(node.id) ?? null)
-    if (!resolved) return
+    if (!resolved) return this.report('no-op', new Set())
     try {
       if (kind === 'attach') {
-        // DEFECT #12 — attach-undo uses the safe per-node detach too
+        // DEFECT #12 — attach-undo uses the safe per-node detach too.
+        // UNDO-REDO-ADV-UR4 (2026-08-26) — the detached node's state is stale
+        // after the detach (detachNodeSafe only markPending → the sweep, never
+        // pass-2); mark it pass2 so the report's `scheduledDirtied` + a host's
+        // flush()+takePass2States() reflect the detached node.
         detachNodeSafe(resolved)
+        this.markPass2(resolved.id)
       } else if (kind === 'destroy') {
         // destroy is terminal; undo is a no-op for destroyed nodes
       } else if (kind === 'rows-mint') {
@@ -1385,7 +1507,7 @@ export class Supervisor {
         const mResult = entry.result as { preRecord?: { keyField?: string; prototypeName: string; mintKind: string; placementName?: string; rows: unknown[] } | null } | undefined
         const preRecord = mResult?.preRecord
         if (preRecord) {
-          this.apply({
+          const res = this.apply({
             kind: 'rows-mint',
             target: resolved,
             hookName: (entry.op as { hookName?: string }).hookName,
@@ -1399,6 +1521,13 @@ export class Supervisor {
               ? { preserveByReversal: (entry.op as { preserveByReversal?: boolean }).preserveByReversal }
               : {}),
           }, { journal: false, skipKindGate: true })
+          if (Array.isArray(res.dirtied)) for (const id of res.dirtied) dirtied.add(id as NodeId)
+          // UNDO-REDO-ADV-UR2 (2026-08-26) — the preRecord inverse restores the
+          // REUSED rows' values, but `res.dirtied` = doorways ∪ consumed (the
+          // reused node is neither target nor minted) → the reused ids are
+          // absent from the report. Accumulate them explicitly so a host's
+          // flush()+takePass2States() refreshes the reused rows.
+          if (Array.isArray(res.reused)) for (const id of res.reused) dirtied.add(id as NodeId)
         } else {
           // HOOKS-ARRAY (§9.4 item 6) — undo of a rows-mint is the PAYLOAD-
           // CONTROLLED teardown: clear the batch record + rowsTeardown via the
@@ -1416,6 +1545,10 @@ export class Supervisor {
               delete batches[hookName]
               resolved.rowsTeardown(record.layerId)
               resolved.removeLayer(record.layerId)
+              // UNDO-REDO-ADV-UR3 (2026-08-26) — the teardown destroyed the
+              // creator's batch + rows; the creator itself must be dirty (the
+              // report's `scheduledDirtied` + a host's flush must reflect it).
+              this.markPass2(resolved.id)
               for (const id of minted) {
                 const n = this.graphScope ? this.graphScope.byId.get(id) : resolveNodeRef(id)
                 if (!n) continue
@@ -1446,6 +1579,9 @@ export class Supervisor {
     } catch {
       // a failed inverse degrades to a no-op — undo never throws
     }
+    // UNDO-REDO-REPORT — the report reflects the post-undo state.
+    for (const id of this.pass2Dirty) dirtied.add(id)
+    return this.report('applied', dirtied)
   }
 
   private undoStateSlice(entry: JournalEntry, node: Node): void {
@@ -1493,36 +1629,56 @@ export class Supervisor {
       if ((a.role !== 'source' && a.role !== 'duplex') || typeof a.target !== 'string') continue
       for (const ta of a.link.anchorsOf('target')) {
         const consumer = ta.owner
+        // UNDO-REDO-ADV-ISO-1 (2026-08-26) — the consumer walk must not leak a
+        // CROSS-GRAPH consumer id into this graph's report: when two isolated
+        // scopes share one hub + the same per-name Link, a foreign-graph target
+        // owner would otherwise be marked pass2 on THIS supervisor and appear
+        // in the host-visible `scheduledDirtied`. Scope-filter the walk.
         if (!consumer || consumer === node || consumer.destroyed) continue
+        if (this.graphScope && scopeOf(consumer) !== this.graphScope) continue
         consumer.markDirty('remote')
         this.markPass2(consumer.id)
       }
     }
   }
 
-  redo(): void {
-    if (this.redoStack.length === 0) return
+  redo(): UndoRedoReport {
+    if (this.redoStack.length === 0) return this.report('no-op', new Set())
     const entry = this.redoStack.pop()!
     const op = { ...entry.op } as { kind: string; node?: Node; [key: string]: unknown }
     // Feature 3 (D3, ADV-S19) — id-resolve BOTH op.node AND op.target (the
     // rows ops carry their subject on op.target; a _restoreBase-evicted ref
     // must resolve to the restored seed).
     this._resolveOpRefs(op, entry.op)
+    const dirtied = new Set<NodeId>()
     try {
       // no-journal re-apply + in-place result refresh; push the SAME entry to
       // undoStack (one journal entry per op — no double-undo) and never clear
       // the redoStack beyond the pop (redo-chains stay possible).
       const res = this.apply(op, { journal: false })
       if (res.status === 'applied') {
+        // UNDO-REDO-REPORT — accumulate the re-applied dirtied ids.
+        if (Array.isArray(res.dirtied)) for (const id of res.dirtied) dirtied.add(id as NodeId)
         // Feature 1b (D9) — preserve the original `preRecord` (same rationale
         // as replay: a redo's re-apply reads the CURRENT post-op state).
         const merged = { ...res } as { status: string; [key: string]: unknown }
         if ('preRecord' in (entry.result as object)) merged.preRecord = (entry.result as { preRecord?: unknown }).preRecord
         entry.result = merged
+      } else {
+        // UNDO-REDO-ADV-UR6 (2026-08-26) — a FAILED re-apply (rejected /
+        // no-usable-state) must NOT be re-pushed onto the undoStack (it cannot
+        // re-apply; re-pushing corrupts the stack) and must NOT report
+        // `applied`. The entry stays popped off the redoStack; a later undo is
+        // impossible for a failed redo.
+        for (const id of this.pass2Dirty) dirtied.add(id as NodeId)
+        return this.report('no-op', dirtied)
       }
       this.undoStack.push(entry)
     } catch {
       // redo reproduces same behavior
     }
+    // UNDO-REDO-REPORT — the report reflects the post-redo state.
+    for (const id of this.pass2Dirty) dirtied.add(id)
+    return this.report('applied', dirtied)
   }
 }

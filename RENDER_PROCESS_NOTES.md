@@ -1394,3 +1394,41 @@ list (specs + skill + summary + migration citations) is recorded there.
     change) and **Phase C** (the MCP/Electron endpoint — parked spec-only:
     structured-clone args, idempotent `requestId`, flush-before-response,
     `{results, dirtied}`) are later user gates (docs/pending.md).
+
+### 10.10.10 Undo/redo/replay host-report — `UndoRedoReport` + stack accessors (DECIDED, 2026-08-26)
+
+- **DECIDED: `Supervisor.undo()/redo()/replay()` return an `UndoRedoReport`
+  (`{status: 'applied'|'no-op'|'base-boundary', scheduledDirtied,
+  stackTopKind?, redoTopKind?, baseBoundary}`) + read-only stack accessors
+  (`undoDepth`/`redoDepth`/`undoTopKind`/`redoTopKind`/`undoBaseBoundary`).**
+  A host can now faithfully report status / dirtied / stack-top-kind after
+  these ops (previously `void` + private stacks — docs/defects.md
+  UNDO-REDO-REPORT). **D1** — `scheduledDirtied` is the markPass2-SCHEDULED
+  (pending-flush) set from `pass2Dirty`, NOT re-rendered states (undo/redo/
+  replay never call `flush()`); a host awaiting settled states uses
+  `flush()`+`takePass2States()` (the dispatchAndReport precedent). **D2** —
+  `baseBoundary` is distinct from an empty stack: the base marker is never in
+  the undoStack (truncated at condense), so an empty stack with a base present
+  is the guarded boundary, not "nothing to undo". **D3** — a real
+  `applied|no-op|base-boundary` status distinguishes the silent no-op branches
+  (empty stack, `!node`, unresolved/destroyed target, terminal destroy).
+  **D4** — the accessors are read-only snapshots (depths/top-kinds as copies);
+  raw `JournalEntry[]` are NEVER exposed (they hold live Node refs + snapshot
+  payloads). **D5** — source-compatible: `void`→report breaks no caller (no
+  caller used the return). Three-agent gate PASS-WITH-CHANGES
+  (docs/specs/undo-redo-report-review.md); user go-ahead 2026-08-26. TDD:
+  tests/unit/undo-redo-report.test.ts (12, red→green); trio green 1219.
+  **ADVERSARIAL pass (2026-08-26 — archive/findings/2026-08-26/2026-08-26-undo-
+  redo-report-adversarial-findings.md) FIXED 13 genuine defects** via
+  tests/unit/undo-redo-report-adversarial.test.ts (12, red→green): ISO-1 (the
+  undo consumer walk is scope-filtered — a graph-B id never leaks into graph-A's
+  host-visible `scheduledDirtied`), UR-6 (redo of a FAILED re-apply reports
+  `no-op` + does not re-push the entry), UR-7 (replay clears the redoStack on
+  EVERY replay, not just base — a stale redo no longer double-applies), UR-2/3/4
+  (the report now includes the reused/creator/detached ids in `scheduledDirtied`),
+  MAL-1..6 (malformed state-slice/layer-apply/attach/destroy/replay ops are
+  CONTAINED `malformed-op` rejections — never an uncaught TypeError escaping the
+  managed channel). Trio green 1231 + smoke OK (derived-fork pins within 2.5×,
+  runtime within the 3× tripwire).
+  Encoding: `docs/decisions.md` UNDO-REDO-REPORT row, `docs/specs/ops.md` §6
+  Host report row, `docs/specs/undo-redo-report.md`.
