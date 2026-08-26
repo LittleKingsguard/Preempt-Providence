@@ -10,62 +10,6 @@ render adapters. ESM-only, zero runtime dependencies.
 npm install provident-ssr
 ```
 
-## Private pre-release (GitHub Packages)
-
-Before a public release, the engine is published to **GitHub Packages** under
-the scoped name `@littlekingsguard/provident-ssr` so it can be tested in the
-Electron project without exposing it publicly. A push of a pre-release tag
-(`v*-rc.*`, `v*-beta.*`, `v*-alpha.*`) triggers the publish workflow
-(`.github/workflows/publish-prerelease.yml`).
-
-To consume the private pre-release in the Electron project, add a `.npmrc`
-pointing the scope at GitHub Packages with a read token:
-
-```ini
-@littlekingsguard:registry=https://npm.pkg.github.com/
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-then install the scoped package:
-
-```sh
-npm install @littlekingsguard/provident-ssr@0.2.0-rc.1
-```
-
-The token must be a personal access token (classic, `read:packages` scope) or
-a fine-grained token with read access to the `Preempt-Providence` repository's
-packages. Use the canonical `NODE_AUTH_TOKEN` variable name — it is what
-`actions/setup-node` and the publish workflow set, and the committed `.npmrc`
-interpolates it. (Do not use `NPM_TOKEN`; npm does not set it, and a mismatch
-here caused the publish to fail with `401 Unauthorized`.) The public
-`provident-ssr` name is reserved for the actual public release.
-
-## CI / publish troubleshooting
-
-The pre-release publish runs in a **clean CI checkout** (`.github/workflows/
-publish-prerelease.yml`). Two gitignored paths and one token detail have each
-broken the pipeline once; they are now fixed and pinned:
-
-1. **`dist/` is gitignored** — a clean checkout has no `dist/`, but
-   `demo/fork-stress-data.js` (imported by `tests/unit/fork-stress-data.test.ts`)
-   pulls `../dist/core/*`. Symptom: `Error: Failed to load url
-   ../dist/core/translate.js … Does the file exist?`. Fix: the workflow runs
-   `npm run build` before `npm test`. Do not remove the build step.
-2. **`live-prod/` is gitignored** — `tests/unit/legacy-bridge.test.ts` reads
-   `live-prod/placeholderLanding/placeholderLanding.json` (intentionally local-
-   only). Symptom: `Error: ENOENT … placeholderLanding.json`. Fix: the corpus is
-   loaded defensively and the three corpus-dependent suites are `describe.skip`'d
-   when the file is absent — the full 27-test battery still runs locally. Do not
-   commit the live-prod payload.
-3. **npm auth to GitHub Packages** — the committed `.npmrc` must interpolate
-   `${NODE_AUTH_TOKEN}` (what `setup-node` and the workflow set). A `${NPM_TOKEN}`
-   mismatch caused `npm publish` to fail with `401 Unauthorized`. Do not rename
-   the variable.
-
-Any new pre-release test failure that references a gitignored path should be
-skipped (fixture-absent) or built first (dist), never worked around by
-committing the gitignored file.
-
 ## Import
 
 The package is ESM-only (no CommonJS build) and dependency-free: it runs on

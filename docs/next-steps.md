@@ -72,13 +72,19 @@ following must be done (in order):
 release must ship as `provident-ssr` (the name the Electron consumer and the
 published 0.1.x line already use).
 
-**CI constraints (2026-08-25, pinned in AGENTS.md item 12 + README §"CI /
-publish troubleshooting"):** the publish workflow runs in a CLEAN checkout —
-`dist/` is gitignored (build before `npm test`), `live-prod/` is gitignored
-(the corpus-dependent suites `describe.skip` when absent), and the npm auth to
-GitHub Packages uses `${NODE_AUTH_TOKEN}` (not `${NPM_TOKEN}`). Any future CI
-failure referencing a gitignored path is fixed by skip-when-absent or
-build-first, never by committing the gitignored file.
+**STATUS (2026-08-25):** steps 1-4 are DONE — Electron validated rc.4 green; the
+package `name` flipped to `provident-ssr`, version bumped to `0.2.0`, the GitHub
+Packages `publishConfig`/`.npmrc`/`.github/workflows/publish-prerelease.yml` are
+removed, and the README public install/import restored. **Remaining (steps 5-6):
+`npm publish` to the public registry (as `rarasey`), tag `v0.2.0`, then the
+Electron re-install + battery.**
+
+**CI constraints (2026-08-25, pinned in AGENTS.md item 12):** a publish runs in
+a CLEAN checkout — `dist/` is gitignored (build before `npm test`), `live-prod/`
+is gitignored (the corpus-dependent suites `describe.skip` when absent), and npm
+auth uses `${NODE_AUTH_TOKEN}` (not `${NPM_TOKEN}`). Any future CI failure
+referencing a gitignored path is fixed by skip-when-absent or build-first, never
+by committing the gitignored file.
 
 ## PENDING (awaiting the user gate — bookmark, do NOT auto-proceed)
 
