@@ -23,6 +23,7 @@ import { describe, it, expect } from 'vitest'
 import { Node } from '../../src/core/node.js'
 import { Supervisor } from '../../src/core/supervisor.js'
 import { EventBridge } from '../../src/core/events.js'
+import { translateLegacy } from '../../src/core/translate.js'
 import {
   createIsolatedScope,
   registerHandlerDef,
@@ -215,5 +216,26 @@ describe('ADVERSARIAL (2026-08-25 adversarial pass — DEFECT-A/B/C, isolation l
     expect(copiedId).toBeDefined()
     const copy = scopeB.byId.get(copiedId as string)
     expect(copy).toBeDefined()
+  })
+
+  it('X13 — CHILD nodes of an isolated graph carry the scope (the data.children recursion threads graphScope, ISO-ADV-D)', () => {
+    const scope = createIsolatedScope()
+    const t = translateLegacy({
+      template: {
+        root: {
+          type: 'div',
+          children: [{ type: 'span', content: 'child' }],
+        },
+      },
+      content: [],
+    } as never, { graphScope: scope })
+    // the root AND its child must be in the isolated scope — never DEFAULT
+    for (const n of t.nodes) {
+      expect(scopeOf(n)).toBe(scope)
+    }
+    // the child must be resolvable in the isolated scope
+    const child = t.nodes.find((n) => n.type === 'span')
+    expect(child).toBeDefined()
+    expect(scope.byId.get(child!.id)).toBe(child)
   })
 })

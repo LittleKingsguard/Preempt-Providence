@@ -1043,7 +1043,7 @@ function translateNodeData(
         // CHILD-SIDE family attach (DEFECT #3-1): the child attaches itself
         // inside its own translate (before its placement minting) — the
         // parent passes itself + the index down
-        const child = translateNodeData(childData, hub, nodes, warnings, `${path}.children[${i}]`, undefined, seamRefs, { node, index: i })
+        const child = translateNodeData(childData, hub, nodes, warnings, `${path}.children[${i}]`, undefined, seamRefs, { node, index: i }, graphScope)
       })
     } else {
       warn(warnings, 'children-shape-invalid', path, 'children must be an array of NodeData; field skipped (never dual-parsed, never wrapped)')
