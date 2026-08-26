@@ -75,9 +75,11 @@ published 0.1.x line already use).
 **STATUS (2026-08-25):** steps 1-4 are DONE — Electron validated rc.4 green; the
 package `name` flipped to `provident-ssr`, version bumped to `0.2.0`, the GitHub
 Packages `publishConfig`/`.npmrc`/`.github/workflows/publish-prerelease.yml` are
-removed, and the README public install/import restored. **Remaining (steps 5-6):
-`npm publish` to the public registry (as `rarasey`), tag `v0.2.0`, then the
-Electron re-install + battery.**
+removed, and the README public install/import restored. **Step 5 DONE —**
+`provident-ssr@0.2.0` PUBLISHED to the public npm registry (2026-08-25, as
+`rarasey`) + tag `v0.2.0`. **Step 6 (post-publish verification):** the Electron
+project re-installs public `provident-ssr@0.2.0` and re-runs its battery; the
+private `@littlekingsguard/provident-ssr` pre-release is retired.
 
 **CI constraints (2026-08-25, pinned in AGENTS.md item 12):** a publish runs in
 a CLEAN checkout — `dist/` is gitignored (build before `npm test`), `live-prod/`

@@ -54,7 +54,7 @@ blind-test-pending notes.
 
 | Item | Gate |
 | --- | --- |
-| **Public 0.2.0 release — the final publish (2026-08-25)** | **PREP DONE:** Electron validated rc.4 green (2026-08-25); `package.json` flipped to `provident-ssr@0.2.0`; the GitHub-Packages `publishConfig`/`.npmrc`/`.github/workflows/publish-prerelease.yml` removed; README public install/import restored. **REMAINING:** `npm publish` (as `rarasey`) to the public npm registry; tag `v0.2.0`; the Electron project re-installs public `provident-ssr@0.2.0` and re-runs its battery. Full checklist in `docs/next-steps.md` §"PUBLIC RELEASE CHECKLIST — 0.2.0". The public release ships as `provident-ssr` (the name the Electron consumer + the published 0.1.x line already use) |
+| **Public 0.2.0 release — the final publish (2026-08-25)** | **PUBLISHED 2026-08-25:** `provident-ssr@0.2.0` is LIVE on the public npm registry (as `rarasey`, `dist-tags.latest = 0.2.0`) + tag `v0.2.0`. Prep: Electron validated rc.4 green; `package.json` flipped to `provident-ssr@0.2.0`; the GitHub-Packages `publishConfig`/`.npmrc`/`.github/workflows/publish-prerelease.yml` removed; README public install/import restored. **REMAINING (post-publish verification, step 6):** the Electron project re-installs public `provident-ssr@0.2.0` and re-runs its battery; the private `@littlekingsguard/provident-ssr` pre-release is retired. Full checklist in `docs/next-steps.md` §"PUBLIC RELEASE CHECKLIST — 0.2.0" |
 
 ## NOT-YET-IMPLEMENTED features
 
