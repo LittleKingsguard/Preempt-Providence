@@ -189,6 +189,18 @@ Context management guidelines for agents working in this repository:
        that should break or surprise the compile/render pipeline; each
        scenario records the example situation, the expected output, and the
        suspected failure stage. Artifact: `archive/test-data/2026-08-15/2026-08-15-stress-test-scenarios.md`.
+       **CONSTRUCTION-PATH EXHAUSTION (added 2026-08-25 — RCA of ISO-ADV-D/
+       X13, archive/findings/2026-08-25/2026-08-25-iso-adv-d-rca.md):** for a
+       value threaded through N construction sites (a `graphScope`/hub-like
+       invariant — root, `data.children` recursion, def-children, content
+       children, clone, loadState seed, re-mint), the scenario set MUST include
+       at least one scenario per DISTINCT construction site asserting the value
+       is carried on EVERY node that site produces — NOT just the entry/root
+       node. A threading invariant can diverge at ONE recursion site while every
+       behavioral seam still passes. Behavioral-seam scenarios alone are
+       INSUFFICIENT — the pass must also exhaust the construction paths.
+       Scenario numbering MUST use a feature prefix (`ISO-X<n>` / `F3-X<n>`) so
+       a downstream handoff numbering never collides with the scenario set.
     b. **Probe agent** — completes every scenario using ONLY core
        (`dist/core/*`) + legacy JSON (probe scripts, no page-side logic);
        records real vs expected output.

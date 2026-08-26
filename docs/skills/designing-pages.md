@@ -1582,6 +1582,25 @@ handlers.md/payload.md/placement-path-spec §10.ag):
    default (no scope) keeps the shared permissive contract.
 4. **Host-facing API docs must name the traps, not just the internal spec.** The
    four host traps (half-coverage, shared EventBridge, render-scope mismatch,
-   plus the isolated-path guards) now live in `docs/specs/api.md` §1.4 + the
-   isolation spec — a consumer reading only the public surface sees them.
+    plus the isolated-path guards) now live in `docs/specs/api.md` §1.4 + the
+    isolation spec — a consumer reading only the public surface sees them.
+
+### 14.14 Construction-path exhaustion for threading invariants (RCA of ISO-ADV-D, 2026-08-25)
+
+1. **A threading invariant can diverge at ONE recursion site while every
+   behavioral seam still passes.** The isolation adversarial pass framed the
+   boundary as "two graphs" and tested cross-graph reads/writes/teardowns
+   (behavioral seams) — all green. But it never built an isolated graph through
+   `translateLegacy` WITH children, so the `data.children` recursion
+   (translate.ts:1046) dropped `graphScope` silently and the child nodes fell
+   to `DEFAULT_SCOPE`. Only a real host adoption (the SecurePanels pane, which
+   renders an isolated graph with children) caught it. Lesson: for a
+   `graphScope`/hub-like invariant, the adversarial scenario set must exhaust
+   EVERY distinct construction path (root, `data.children`, def-children,
+   content-children, clone, loadState seed, re-mint) asserting the value on
+   EVERY node each path produces — not just the entry node.
+2. **Scenario numbering must be feature-prefixed.** The scenario agent's `X13`
+   (D4 userData) and the host's `X13` (ISO-ADV-D child scope) collided. Use a
+   feature prefix (`ISO-X<n>` / `F3-X<n>`) so a downstream handoff numbering
+   never collides with the scenario set.
 
