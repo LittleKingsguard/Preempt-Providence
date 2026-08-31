@@ -168,6 +168,7 @@ function resolveBodyRunsChildWires(
   el: MinimalElement,
   nodeById: Map<string, EmitNodeSource> | null,
   pathCtx?: PathEmitContext,
+  authoredIdToWire?: Map<string, string>,
 ): void {
   const text = el.props['text']
   if (typeof text !== 'string' || !isBodyEncoded(text)) return
@@ -175,16 +176,16 @@ function resolveBodyRunsChildWires(
   if (!runs.some((r) => 'child' in r)) return
   const childWires = new Set(el.childOrder)
   // authored props.id → child wire, first-match-in-order over the node's OWN childOrder
-  const authoredIdToWire = new Map<string, string>()
+  const authoredIdToWireLocal = new Map<string, string>()
   for (const w of el.childOrder) {
     const nodeId = pathCtx?.pathNodeOf.get(w) ?? w
     const node = nodeById?.get(nodeId)
     const authored = (node as { base?: { props?: Record<string, unknown> } } | undefined)?.base?.props?.id
-    if (typeof authored === 'string' && authored !== '' && !authoredIdToWire.has(authored)) {
-      authoredIdToWire.set(authored, w)
+    if (typeof authored === 'string' && authored !== '' && !authoredIdToWireLocal.has(authored)) {
+      authoredIdToWireLocal.set(authored, w)
     }
   }
-  if (authoredIdToWire.size === 0) return
+  if (authoredIdToWireLocal.size === 0 && !authoredIdToWire) return
   let changed = false
   const rewritten: BodyRun[] = []
   for (const r of runs) {
@@ -192,10 +193,18 @@ function resolveBodyRunsChildWires(
       if (childWires.has(r.child)) {
         // already a real child wire — passes through unchanged
         rewritten.push(r)
-      } else if (authoredIdToWire.has(r.child)) {
-        // authored-id ref → its child's wire (first-match-in-order)
+      } else if (authoredIdToWire?.has(r.child)) {
+        // the GLOBAL index first: a def-fill SYNTHETIC wire (or a real
+        // actionable child's wire) — the def-fill element's own childOrder
+        // carries the synthetic wire, so its bodyRuns must resolve to it
+        // (the local nodeById lookup below would map the same authored id to
+        // the real standalone wire, which is NOT the def-fill's child).
         changed = true
         rewritten.push({ child: authoredIdToWire.get(r.child)! })
+      } else if (authoredIdToWireLocal.has(r.child)) {
+        // authored-id ref → its child's wire (first-match-in-order)
+        changed = true
+        rewritten.push({ child: authoredIdToWireLocal.get(r.child)! })
       } else {
         // dangling ref (absent id / def-child synthetic / foreign): drop the
         // run deterministically (gate §3 — never a throw, never a wrong-child)
@@ -586,6 +595,26 @@ export function emitElements(
   for (const [wire, states] of groups) {
     if (!(states.length === 1 && defCovered.has(wire))) standaloneWires.add(wire)
   }
+  // ENG-BODYRUNS-WIRE-REF-PATHSTATE — the SINGLE GLOBAL authoredId → wire
+  // index, built ONCE per emitElements (O(n) over the actionable set). Real
+  // nodes map their authored `props.id` → their emitted wire; the def-fill
+  // sites EXTEND it with their SYNTHETIC wires as they emit (a synthetic wire
+  // has no nodeById entry, so the generic path cannot map it). The per-element
+  // nodeById lookup in resolveBodyRunsChildWires still runs FIRST (the
+  // element's own real children take precedence); this index fills the gaps
+  // (def-fill synthetic children).
+  const authoredIdToWire = new Map<string, string>()
+  for (const s of actionable) {
+    const node = nb?.get(s.nodeId)
+    const authored = (node as { base?: { props?: Record<string, unknown> } } | undefined)?.base?.props?.id
+    if (typeof authored === 'string' && authored !== '' && !authoredIdToWire.has(authored)) {
+      authoredIdToWire.set(authored, pathWireOf(s))
+    }
+  }
+  const pathCtx: PathEmitContext | undefined =
+    pathNodeOf.size > 0 || pathStateChildren.size > 0 || ownerPlaced.size > 0
+      ? { pathNodeOf, pathStateChildren, ownerPlaced }
+      : undefined
   for (const [wire, states] of groups) {
     const multi = states.length > 1
     const base = states[0]!
@@ -593,11 +622,7 @@ export function emitElements(
     // states: a copy, never mutating the compiled state)
     const converted = convertedOf(base)
     const emitBase = converted ? { ...base, children: converted } : base
-    const pathCtx: PathEmitContext | undefined =
-      pathNodeOf.size > 0 || pathStateChildren.size > 0 || ownerPlaced.size > 0
-        ? { pathNodeOf, pathStateChildren, ownerPlaced }
-        : undefined
-    const emitted = emitOne(emitBase, multi ? 0 : undefined, nb, pathCtx, nodeIdAttr, myScope)
+    const emitted = emitOne(emitBase, multi ? 0 : undefined, nb, pathCtx, nodeIdAttr, myScope, authoredIdToWire)
     const covered = states.length === 1 && defCovered.has(wire)
     if (!covered) {
       const el = emitted.el
@@ -605,12 +630,10 @@ export function emitElements(
         el.childOrder = []
         // one element per arm; the first arm carries the full el, the rest are leaf dupes
         els.push(el)
-        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nb, pathCtx, nodeIdAttr, myScope).el)
+        for (let i = 1; i < states.length; i += 1) els.push(emitOne(states[i]!, i, nb, pathCtx, nodeIdAttr, myScope, authoredIdToWire).el)
       } else {
         // remap any forked child references to their arm wires in arm order
         el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])
-        // ENG-BODYRUNS-WIRE-REF — resolve authored-id child runs to wires
-        resolveBodyRunsChildWires(el, nb, pathCtx)
         els.push(el)
       }
     }
@@ -635,6 +658,14 @@ export function emitElements(
       if (!coveredChildless && !standaloneWires.has(c.wire)) els.push(c)
     }
   }
+  // ENG-BODYRUNS-WIRE-REF-PATHSTATE — resolve `{ child }` runs on EVERY
+  // emitted element (def-fill elements included) against the GLOBAL index.
+  // The def-fill sites encode their runs BEFORE their synthetic children are
+  // registered, so the rewrite must run AFTER the whole set is emitted (the
+  // global map is fully populated by now). The standalone branch's per-element
+  // nodeById lookup still runs first (real children take precedence); the
+  // global map fills the def-fill synthetic gaps.
+  for (const el of els) resolveBodyRunsChildWires(el, nb, pathCtx, authoredIdToWire)
   return els
 }
 
@@ -843,10 +874,11 @@ function emitDefRootElement(
   chain: string[],
   nodeIdAttr = false,
   scope?: GraphScope,
+  authoredIdToWire?: Map<string, string>,
 ): { el: MinimalElement; flat: MinimalElement[] } {
   const cprops: Record<string, unknown> = {}
   const styles: string[] = []
-  if (def.content !== undefined) cprops['text'] = bakeValue(def.content)
+  if (def.content !== undefined) emitTextProp(cprops, def.content, (rootProto as { base?: { bodyRuns?: BodyRun[] } } | undefined)?.base?.bodyRuns)
   if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
   const css = rootProto?.css ?? def.css ?? {}
   for (const [k, v] of Object.entries(css)) {
@@ -866,9 +898,18 @@ function emitDefRootElement(
     // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
     // (its subtree never recurses either)
     if (defChildPruned(childProtos[i])) continue
-    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx, chain, nodeIdAttr, scope)
+    const child = emitDefChildTree(childSpecs[i]!, i, rootWire, childProtos[i], undefined, nodeById, pathCtx, chain, nodeIdAttr, scope, authoredIdToWire)
     flat.push(...child.flat)
     children.push(child.el)
+  }
+  // ENG-BODYRUNS-WIRE-REF-PATHSTATE — the def-ROOT's synthetic wire registers
+  // its authored id into the GLOBAL index (a parent's `{ child: <id> }` run
+  // resolves to the def-root's synthetic wire).
+  if (authoredIdToWire) {
+    const authored = (rootProto as { base?: { props?: Record<string, unknown> } } | undefined)?.base?.props?.id
+    if (typeof authored === 'string' && authored !== '' && !authoredIdToWire.has(authored)) {
+      authoredIdToWire.set(authored, rootWire)
+    }
   }
   // DEFECT #25 — adopted placed packets whose chain routes through the
   // def-root itself (a def whose ROOT is the placement container) join the
@@ -903,6 +944,7 @@ function emitDefChildTree(
   chain: string[],
   nodeIdAttr = false,
   scope?: GraphScope,
+  authoredIdToWire?: Map<string, string>,
 ): { el: MinimalElement; flat: MinimalElement[] } {
   // DEFECT #25 — this def child's REAL node chain (the consumer root-down,
   // through the def-root, to this proto): the placed-child adoption matches
@@ -910,6 +952,18 @@ function emitDefChildTree(
   const thisChain = proto?.id ? [...chain, proto.id] : chain
   const bind = (spec as { bind?: unknown }).bind
   const wire = typeof bind === 'string' ? `${parentWire}:${bind}` : `${parentWire}:${index}`
+  // ENG-BODYRUNS-WIRE-REF-PATHSTATE — this def-child's SYNTHETIC wire
+  // registers its authored id into the GLOBAL index (a parent's
+  // `{ child: <id> }` run resolves to the def-child's synthetic wire). The
+  // def-fill synthetic wire OVERWRITES the real node's wire (a def-child
+  // prototype that also emits standalone): the def-fill element's OWN
+  // childOrder carries the synthetic wire, so its bodyRuns must resolve to it.
+  if (authoredIdToWire) {
+    const authored = (proto as { base?: { props?: Record<string, unknown> } } | undefined)?.base?.props?.id
+    if (typeof authored === 'string' && authored !== '') {
+      authoredIdToWire.set(authored, wire)
+    }
+  }
   const cprops: Record<string, unknown> = {}
   const styles: string[] = []
   // AUTH-SEAM (2026-08-16) — the mutated proto pass1 (state-slice content
@@ -919,7 +973,7 @@ function emitDefChildTree(
   // child (button → sign-in link), and the CONVERTED element must render.
   const authSeamed = proto !== undefined && (proto.layers?.some((l) => l.sourceName === 'handler-seam') ?? false)
   let type = (authSeamed && typeof proto?.type === 'string') ? proto.type : spec.type
-  if ((proto?.content !== undefined && authSeamed) || spec.content !== undefined) cprops['text'] = bakeValue(authSeamed ? proto?.content ?? spec.content : spec.content)
+  if ((proto?.content !== undefined && authSeamed) || spec.content !== undefined) emitTextProp(cprops, authSeamed ? proto?.content ?? spec.content : spec.content, (proto as { base?: { bodyRuns?: BodyRun[] } } | undefined)?.base?.bodyRuns)
   if (layersSuffix !== undefined) cprops['prop:stress:layers'] = layersSuffix
   for (const [k, v] of Object.entries(proto?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
   for (const [k, v] of Object.entries(proto?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
@@ -935,7 +989,7 @@ function emitDefChildTree(
     // DEFECT #20 — the def-fill prune: a destroyed adopted def child skips
     // (its subtree never recurses either)
     if (defChildPruned(childProtos[i])) continue
-    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx, thisChain, nodeIdAttr, scope)
+    const child = emitDefChildTree(childSpecs[i]!, i, wire, childProtos[i], undefined, nodeById, pathCtx, thisChain, nodeIdAttr, scope, authoredIdToWire)
     flat.push(...child.flat)
     children.push(child.el)
   }
@@ -959,18 +1013,18 @@ function emitDefChildTree(
       const value = providerValueFromLink(seamTarget.link)
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
         const nested = value as { type?: string; content?: unknown; props?: Record<string, unknown>; children?: unknown; css?: Record<string, unknown> }
+        const nestedRoot = defRootPrototypeFor(seamTarget.link, scope)
         if (seamTarget.options.seam === 'content') {
-          if (nested.content !== undefined) cprops['text'] = bakeValue(nested.content)
+          if (nested.content !== undefined) emitTextProp(cprops, nested.content, (nestedRoot as { base?: { bodyRuns?: BodyRun[] } } | undefined)?.base?.bodyRuns)
         } else if (seamTarget.options.seam === 'type') {
           // SED-1 — the element collapses into the nested def's element
-          const nestedRoot = defRootPrototypeFor(seamTarget.link, scope)
           const css = nestedRoot?.css ?? nested.css ?? {}
           for (const [k, v] of Object.entries(css)) {
             if (k === 'cssDef') styles.push(...cssDefRules(v))
             else cprops[`css:${k}`] = v
           }
           if (typeof nested.type === 'string') type = nested.type
-          if (nested.content !== undefined) cprops['text'] = bakeValue(nested.content)
+          if (nested.content !== undefined) emitTextProp(cprops, nested.content, (nestedRoot as { base?: { bodyRuns?: BodyRun[] } } | undefined)?.base?.bodyRuns)
           if (nested.props) {
             for (const [k, v] of Object.entries(nested.props)) cprops[`prop:${k}`] = v
           }
@@ -982,7 +1036,7 @@ function emitDefChildTree(
             for (let i = 0; i < nested.children.length; i += 1) {
               // DEFECT #20 — the def-fill prune (nested branch)
               if (defChildPruned(nestedProtos[i])) continue
-              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx, nestedChain, nodeIdAttr, scope)
+              const child = emitDefChildTree(nested.children[i] as DefChildSpec, i, wire, nestedProtos[i], undefined, nodeById, pathCtx, nestedChain, nodeIdAttr, scope, authoredIdToWire)
               flat.push(...child.flat)
               children.push(child.el)
             }
@@ -994,7 +1048,6 @@ function emitDefChildTree(
           // element goes through the SHARED finalizer (makeSeamShellEl,
           // also used by the top-level branch) — DEFECT #4 deleted the
           // shell's text here while the top-level branch preserved it.
-          const nestedRoot = defRootPrototypeFor(seamTarget.link, scope)
           const nestedProtos = defPrototypesFor(seamTarget.link, scope)
           const rootTree = emitDefRootElement(
             nested as LinkDefSpec & { content?: unknown; css?: Record<string, unknown>; children?: Array<DefChildSpec> },
@@ -1007,6 +1060,7 @@ function emitDefChildTree(
             [...thisChain, ...(nestedRoot?.id ? [nestedRoot.id] : [])],
             nodeIdAttr,
             scope,
+            authoredIdToWire,
           )
           flat.push(...rootTree.flat)
           stampNodeId(cprops, proto?.id, thisChain, nodeIdAttr)
@@ -1087,6 +1141,7 @@ function emitOne(
   pathCtx?: PathEmitContext,
   nodeIdAttr = false,
   scope?: GraphScope,
+  authoredIdToWire?: Map<string, string>,
 ): { el: MinimalElement; defChildren?: MinimalElement[] } {
   // P3 §4.1 wire scheme: a path-state emits on its pathKey wire; a component
   // fork arm on `nodeId#<i>`; a family/non-path state on its nodeId.
@@ -1159,7 +1214,7 @@ const rootWire = `${wire}:0`
           // prototype, matching the placed packets' ancestor chains
           // (placed-child adoption matches the full chain).
           const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
-          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr, scope)
+          const rootTree = emitDefRootElement(def, rootWire, defRootProto, protos, layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr, scope, authoredIdToWire)
           stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
           const el = makeSeamShellEl(wire, s.type, props, s.content, [...childWires, rootWire], styles, s.forkKey)
           return { el, defChildren: rootTree.flat }
@@ -1187,10 +1242,10 @@ const rootWire = `${wire}:0`
         // child's element never surfaces (flatMap skips the pair)
         const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
         const trees = (def.children ?? []).flatMap((spec, i) =>
-          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr, scope)])
+          defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr, scope, authoredIdToWire)])
         const bound = scalarBinding(s.bindings)
         if (bound !== undefined) props['text'] = bound
-        else if (def.content !== undefined) props['text'] = bakeValue(def.content)
+        else if (def.content !== undefined) emitTextProp(props, def.content, (defRootProto as { base?: { bodyRuns?: BodyRun[] } } | undefined)?.base?.bodyRuns)
         const adopted = adoptPlacedChildren(pathCtx, defChain, defRootProto?.id)
         stampNodeId(props, s.nodeId, undefined, nodeIdAttr)
         const el: MinimalElement = { wire, type: def.type, props, childOrder: [...trees.map((t) => t.el.wire), ...(adopted ?? [])] }
@@ -1207,7 +1262,7 @@ const rootWire = `${wire}:0`
       // DEFECT #20 — the P-EMIT-3 def-fill prune (same rule).
       const defChain = [...(s.trace ?? [s.nodeId]), ...(defRootProto?.id ? [defRootProto.id] : [])]
       const trees = def.children.flatMap((spec, i) =>
-        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr, scope)])
+        defChildPruned(protos[i]) ? [] : [emitDefChildTree(spec, i, wire, protos[i], layersSuffix, nodeById, pathCtx, defChain, nodeIdAttr, scope, authoredIdToWire)])
       const bound = scalarBinding(s.bindings)
       if (bound !== undefined) props['text'] = bound
       const type = bound !== undefined ? s.type : def.type
@@ -1244,7 +1299,6 @@ const rootWire = `${wire}:0`
       const resolvedWire = cw ?? (allowed ? `${wire}:${spec.bind}` : undefined)
       if (resolvedWire === undefined) continue
       const cprops: Record<string, unknown> = {}
-      if (allowed) cprops['text'] = bakeValue(spec.content ?? '')
       if (def.childLayersSuffix && parentLayers) cprops['prop:stress:layers'] = `${parentLayers}|${def.childLayersSuffix}`
       // a REAL child (covered by the def, standalone emission skipped) keeps
       // its OWN authored css/props — the def's css/props are a fallback only
@@ -1271,6 +1325,9 @@ const rootWire = `${wire}:0`
       }
       for (const [k, v] of Object.entries(childNode?.css ?? spec.css ?? {})) cprops[`css:${k}`] = v
       for (const [k, v] of Object.entries(childNode?.props ?? spec.props ?? {})) cprops[`prop:${k}`] = v
+      // ENG-BODYRUNS-WIRE-REF-PATHSTATE — the re-typed def child's text consults
+      // the child's own base.bodyRuns (interleaves instead of flattening).
+      if (allowed) emitTextProp(cprops, spec.content, (childNode as { base?: { bodyRuns?: BodyRun[] } } | undefined)?.base?.bodyRuns)
       const childOrder = pathCtx?.pathStateChildren.get(resolvedWire)
         ?? (childNode ? (childNode.children ?? []).map((c) => c.id) : [])
       // D8 — a blocked def never re-types: the covered real child keeps its
