@@ -8,6 +8,10 @@ export interface FragmentDescriptor {
   closeTag: string
   contentText: string
   isVoid: boolean
+  /** BARE-TEXT-EMIT (Shape A1) — a `text` child renders its contentText with
+   *  NO wrapper element (openTag/closeTag are ''); childHtml emits contentText
+   *  only. */
+  isText?: boolean
 }
 
 export const VOID_TAGS: ReadonlySet<string> = new Set([
@@ -34,8 +38,8 @@ export interface DomAdapterOptions {
 const FORM_CONTROLS = new Set(['TEXTAREA', 'INPUT', 'SELECT'])
 const VALUE_FORMS = new Set(['INPUT', 'TEXTAREA'])
 
-export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
-  readonly wires: Map<string, HTMLElement> = new Map()
+export class DomAdapter implements RenderAdapter<HTMLElement | Text, Document> {
+  readonly wires: Map<string, HTMLElement | Text> = new Map()
   readonly reused: Set<string> = new Set()
   private readonly mount: HTMLElement
   private readonly onEvent: ((wire: NodeRef, event: Event) => void) | undefined
@@ -62,7 +66,7 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
    *  the append op — 4095 useless live attachments on a 4095-node first
    *  render, each triggering the browser's incremental style machinery).
    *  Non-batched calls keep the immediate-attach behavior (DOM-H1). */
-  private batchEls: HTMLElement[] | null = null
+  private batchEls: (HTMLElement | Text)[] | null = null
   /** D4 (DOM-H29) — per-adapter-instance rule-signature dedup set: a rule
    *  string whose exact signature was already appended is SKIPPED (the emit
    *  side already dedups per sweep; this is the boundary's defensive half). */
@@ -92,7 +96,27 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
     }
   }
 
-  createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): HTMLElement {
+  createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): HTMLElement | Text {
+    // BARE-TEXT-EMIT (Shape A1) — a `text` child is a REAL Text node; it has
+    // no `dataset`, so the `el.dataset.wire = wire` write below must be
+    // skipped (it would throw).
+    if (type === 'text') {
+      // SHIM/DOM guard (matching the bodyRuns text-node branch): the headless
+      // smoke shim does not provide `document.createTextNode` — for a text
+      // node in a shimmed env, create a span as the wire holder (the shim
+      // records text in `textContent`; the emit-side `text-content-only` +
+      // `setProp` handle it). In a real DOM it is a genuine Text node.
+      const text = typeof document.createTextNode === 'function'
+        ? (document.createTextNode('') as unknown as HTMLElement)
+        : document.createElement('span')
+      const key = wireKey(wire, forkKey)
+      const prev = this.wires.get(key)
+      if (prev) this.purgeListeners(key, prev)
+      this.wires.set(key, text as HTMLElement | Text)
+      if (this.batchEls) this.batchEls.push(text as HTMLElement | Text)
+      else this.mount.appendChild(text)
+      return text as HTMLElement | Text
+    }
     const el = document.createElement(type)
     el.dataset.wire = wire
     const key = wireKey(wire, forkKey)
@@ -110,6 +134,18 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
   setProp(wire: NodeRef, name: string, val: unknown, forkKey?: ForkPathKey): void {
     const el = this.wires.get(wireKey(wire, forkKey))
     if (!el) return
+    // BARE-TEXT-EMIT (Shape A1) — content-only defensive backstop: a Text
+    // node (nodeType 3) accepts ONLY its `text` prop (its data); any other
+    // prop degrades safely (never a throw — Text has no setAttribute/
+    // textContent branches). `nodeType === 3` is used instead of `instanceof
+    // Text` so the check works in shimmed DOM environments where the Text
+    // global is absent.
+    if (el.nodeType === 3) {
+      if (name !== 'text') return
+      ;(el as Text).data = val === undefined ? '' : bakeValue(val)
+      return
+    }
+    const elem = el as HTMLElement
     if (name === 'text') {
       if (typeof val === 'string' && isBodyEncoded(val)) {
         // ENG-INLINE-ORDER — the interleaving branch: a FULL CONTENT REBUILD.
@@ -118,51 +154,51 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
         // position. (The plain-string / form-control branch below is the
         // focus/caret keystroke path and is NOT touched.)
         const runs = decodeRuns(val)
-        el.textContent = ''
+        elem.textContent = ''
         // The test shim records text runs into an `ordered` array on the
         // element; a real HTMLElement has no such field, so this is a no-op
         // there. It lets the interleaving order be observed in both worlds.
-        const ordered = (el as unknown as { ordered?: Array<{ kind: 'text'; value: string }> }).ordered
+        const ordered = (elem as unknown as { ordered?: Array<{ kind: 'text'; value: string }> }).ordered
         for (const run of runs) {
           if ('text' in run) {
             if (typeof document.createTextNode === 'function') {
-              el.appendChild(document.createTextNode(run.text))
+              elem.appendChild(document.createTextNode(run.text))
             } else {
-              el.textContent += run.text
+              elem.textContent += run.text
             }
             ordered?.push({ kind: 'text', value: run.text })
           } else {
             const childEl = this.wires.get(wireKey(run.child))
-            if (childEl) el.appendChild(childEl)
+            if (childEl) elem.appendChild(childEl)
           }
         }
-      } else if (FORM_CONTROLS.has(el.tagName)) {
-        const formEl = el as HTMLInputElement
+      } else if (FORM_CONTROLS.has(elem.tagName)) {
+        const formEl = elem as HTMLInputElement
         if (val === undefined) {
           formEl.value = ''
         } else if (formEl.value !== bakeValue(val)) {
           formEl.value = bakeValue(val)
         }
       } else {
-        el.textContent = val === undefined ? '' : bakeValue(val)
+        elem.textContent = val === undefined ? '' : bakeValue(val)
       }
     } else if (name.startsWith('css:')) {
       const key = name.slice(4)
       if (val === undefined) {
-        if (key === 'id') el.id = ''
-        else if (key === 'classes') el.className = ''
-        else if (key === 'style') el.style.cssText = ''
-        else el.removeAttribute(key)
+        if (key === 'id') elem.id = ''
+        else if (key === 'classes') elem.className = ''
+        else if (key === 'style') elem.style.cssText = ''
+        else elem.removeAttribute(key)
       } else if (key === 'id') {
-        el.id = bakeValue(val)
+        elem.id = bakeValue(val)
       } else if (key === 'classes') {
-        el.className = Array.isArray(val) ? val.join(' ') : bakeValue(val)
+        elem.className = Array.isArray(val) ? val.join(' ') : bakeValue(val)
       } else if (key === 'style') {
-        el.style.cssText = bakeValue(val)
+        elem.style.cssText = bakeValue(val)
       } else if (key === 'cssDef') {
-        el.setAttribute('cssDef', bakeValue(val))
+        elem.setAttribute('cssDef', bakeValue(val))
       } else {
-        el.setAttribute(key, bakeValue(val))
+        elem.setAttribute(key, bakeValue(val))
       }
     } else if (name.startsWith('on:')) {
       const evtName = name.slice(3)
@@ -175,7 +211,7 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
         if (evtMap) {
           const entry = evtMap.get(evtName)
           if (entry) {
-            ;(el as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener(evtName, entry.fn)
+            ;(elem as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener(evtName, entry.fn)
             evtMap.delete(evtName)
             if (evtMap.size === 0) this.listeners.delete(wireKey(wire, forkKey))
           }
@@ -193,35 +229,35 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
       const key = wireKey(wire, forkKey)
       const prev = this.listeners.get(key)?.get(evtName)
       if (prev) {
-        ;(el as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener(evtName, prev.fn)
+        ;(elem as unknown as { removeEventListener: (e: string, f: (e: Event) => void) => void }).removeEventListener(evtName, prev.fn)
       }
-      el.addEventListener(evtName, handler)
+      elem.addEventListener(evtName, handler)
       let evtMap = this.listeners.get(key)
       if (!evtMap) {
         evtMap = new Map()
         this.listeners.set(key, evtMap)
       }
-      evtMap.set(evtName, { el, fn: handler })
+      evtMap.set(evtName, { el: elem, fn: handler })
     } else if (name.startsWith('data:')) {
       // DATA-* (ssr-synthetic-event.md §4 — the opt-in `data:` namespace): a
       // `data:<name>` op prop routes to setAttribute('data-<name>') (the
       // data-node-id traceability attribute), mirroring the prop:/css: routing.
       const attr = 'data-' + name.slice(5)
-      if (val === undefined) el.removeAttribute(attr)
-      else el.setAttribute(attr, bakeValue(val))
+      if (val === undefined) elem.removeAttribute(attr)
+      else elem.setAttribute(attr, bakeValue(val))
     } else {
       const attr = name.startsWith('prop:') ? name.slice(5) : name
       if (val === undefined) {
-        el.removeAttribute(attr)
-      } else if (attr === 'value' && VALUE_FORMS.has(el.tagName)) {
-        ;(el as HTMLInputElement).value = bakeValue(val)
+        elem.removeAttribute(attr)
+      } else if (attr === 'value' && VALUE_FORMS.has(elem.tagName)) {
+        ;(elem as HTMLInputElement).value = bakeValue(val)
       } else {
-        el.setAttribute(attr, bakeValue(val))
+        elem.setAttribute(attr, bakeValue(val))
       }
     }
   }
 
-  appendChild(owner: HTMLElement | string, child: HTMLElement | string): void {
+  appendChild(owner: HTMLElement | Text | string, child: HTMLElement | Text | string): void {
     // ENG-INLINE-ORDER — accept BARE WIRE STRINGS (the test surface calls
     // appendChild('p', 'b1')); resolve them via the wires map. The pipeline
     // passes element objects; both forms are supported.
@@ -362,11 +398,13 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
   createEl(type: string, wire: NodeRef, forkKey?: ForkPathKey): FragmentDescriptor {
     const key = wireKey(wire, forkKey)
     const isVoid = VOID_TAGS.has(type)
+    const isText = type === 'text'
     const fd: FragmentDescriptor = {
-      openTag: '<' + type + '>',
-      closeTag: isVoid ? '' : '</' + type + '>',
+      openTag: isText ? '' : '<' + type + '>',
+      closeTag: isText ? '' : isVoid ? '' : '</' + type + '>',
       contentText: '',
-      isVoid,
+      isVoid: isText ? true : isVoid,
+      isText,
     }
     this.states.set(fd, { key, type, isVoid, attrs: new Map(), text: '', runs: undefined, children: [], parent: null })
     this.fragments.set(key, fd)
@@ -525,6 +563,9 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
   }
 
   private childHtml(child: FragmentDescriptor): string {
+    // BARE-TEXT-EMIT (Shape A1) — a `text` child renders its contentText ONLY
+    // (never a `<text>` wrapper, even though isVoid is true).
+    if (child.isText) return child.contentText
     return child.isVoid ? child.openTag : child.openTag + child.contentText + child.closeTag
   }
 }

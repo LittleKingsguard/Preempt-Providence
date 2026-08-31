@@ -266,6 +266,18 @@ recorded so a future markdown-interleaving need can extend the four sites
 explicitly. (Astrographer's consumer need is HTML/DOM rendering, not the
 markdown export adapter.)
 
+## 9b. Recommended alternative for the trivial case (2026-08-31 gate)
+
+For placing literal text **beside** children where the text only needs to come
+AFTER the parent's own content, a `<span>` child in `children[]` avoids `bodyRuns`:
+a node `{ content: 'Title ', children: [{ type: 'span', content: 'note', props:
+{ id: 't1' } }] }` renders `Title <span id="t1">note</span>`. **Limitation:** a
+`<span>`/`text`-node child cannot interleave text BETWEEN children (the mid-line
+`Some <strong>bold</strong> text` case) — the parent's `content` always renders
+before all children (`escapeText(content) + children`, adapters.ts:524), and there
+is no wire-less bare-text node. Use `bodyRuns` for any interleaving needed between
+children. See `docs/specs/content-xor-children-review.md`.
+
 ## 10. Happy-path states (TestWriter red set — valid paths)
 
 1. **No interleaving, no `bodyRuns`** → byte-identical to today (`props['text']` =

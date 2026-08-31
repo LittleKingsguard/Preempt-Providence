@@ -336,7 +336,7 @@ describe('DOM-* DomAdapter', () => {
 
   describe('createEl (DOM-H1, H26, F4, F3-not-applicable)', () => {
     it('DOM-H1 createEl creates element, sets dataset.wire, appends to mount', () => {
-      const el = adapter.createEl('div', 'w1')
+      const el = adapter.createEl('div', 'w1') as HTMLElement
       expect(el.tagName).toBe('DIV')
       expect(el.dataset.wire).toBe('w1')
       expect(elOf(adapter, 'w1')).toBe(el)
@@ -1094,7 +1094,7 @@ describe('DOM-B* — the detached INITIAL-BUILD batch (A, 2026-08-16)', () => {
     adapter.endBatch()
     // only the unparented root mounted; a/b nested under it, NOT on the mount
     expect(mount.children).toEqual([root])
-    expect(root.children).toEqual([a, b])
+    expect((root as HTMLElement).children).toEqual([a, b])
     expect((a as unknown as { parent: unknown }).parent).toBe(root)
   })
 
@@ -1106,7 +1106,7 @@ describe('DOM-B* — the detached INITIAL-BUILD batch (A, 2026-08-16)', () => {
     adapter.appendChild(r1, kid)
     adapter.endBatch()
     expect(mount.children).toEqual([r1, r2])
-    expect(r1.children).toEqual([kid])
+    expect((r1 as HTMLElement).children).toEqual([kid])
     expect(mount.children).not.toContain(kid)
   })
 

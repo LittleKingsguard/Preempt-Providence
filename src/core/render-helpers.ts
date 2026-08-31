@@ -1146,6 +1146,20 @@ function emitOne(
   // P3 §4.1 wire scheme: a path-state emits on its pathKey wire; a component
   // fork arm on `nodeId#<i>`; a family/non-path state on its nodeId.
   const wire = isPathState(s) ? s.pathKey! : armIdx !== undefined ? `${s.nodeId}#${armIdx}` : s.nodeId
+  // BARE-TEXT-EMIT (Shape A1) — a `text` child is CONTENT-ONLY: it carries
+  // ONLY its `text` prop (the escaped content). No prop:/css:/on: mapping and
+  // no stampNodeId (a Text node has no attributes — a data:node-id stamp would
+  // route to setAttribute and throw). Any authored props/css/handlers/
+  // placement are ignored deterministically (the DomAdapter `instanceof Text`
+  // guard is the defensive backstop).
+  if (s.type === 'text') {
+    const props: Record<string, unknown> = {}
+    const content = scalarBinding(s.bindings) ?? s.content
+    if (content !== undefined) props['text'] = content
+    const el: MinimalElement = { wire, type: s.type, props, childOrder: [] }
+    if (s.forkKey !== undefined) el.forkKey = s.forkKey
+    return { el }
+  }
   const props: Record<string, unknown> = {}
   const styles: string[] = []
   for (const [k, v] of Object.entries(s.props ?? {})) props[`prop:${k}`] = v

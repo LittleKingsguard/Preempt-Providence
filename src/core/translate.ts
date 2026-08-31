@@ -322,6 +322,17 @@ export function parseStyle(str: string): Record<string, string> {
   return out
 }
 
+/** BARE-TEXT-EMIT — true when `bodyRuns` is present AND a valid array of
+ *  `{text}` / `{child}` runs (the same check baseFrom uses to accept it); a
+ *  malformed bodyRuns warns `body-runs-shape-invalid` there and is skipped. */
+function nodeDataHasBodyRuns(nodeData: LegacyNodeData): boolean {
+  return (
+    nodeData.bodyRuns !== undefined &&
+    Array.isArray(nodeData.bodyRuns) &&
+    nodeData.bodyRuns.every((r) => r !== null && typeof r === 'object' && (('text' in r && typeof r.text === 'string') || ('child' in r && typeof r.child === 'string')))
+  )
+}
+
 function baseFrom(
   nodeData: LegacyNodeData,
   derived: DerivedDecl | undefined,
@@ -937,6 +948,26 @@ function translateNodeData(
   parent: { node: Node; index: number } | undefined = undefined,
   graphScope?: GraphScope,
 ): Node {
+  // BARE-TEXT-EMIT (0.4.0 gate) — additive per-node deprecation / back-compat
+  // diagnostics (warn-never-throw; the render path below is UNCHANGED).
+  // docs/specs/bare-text-emit-review.md §6.
+  // `text-content-only`: a `text` node should carry ONLY content; props/css/
+  // handlers/placement on a text node warn (those fields are ignored for it).
+  if (data.type === 'text' && (data.props !== undefined || data.css !== undefined || data.handlers !== undefined || data.placement !== undefined)) {
+    warn(warnings, 'text-content-only', path, 'a "text" node should carry only content; props/css/handlers/placement are ignored for text nodes')
+  }
+  // `bodyruns-deprecated`: `bodyRuns` is deprecated-but-present (behavior
+  // unchanged; removed at the next major). Fires for a VALID bodyRuns array —
+  // the malformed shape already warns `body-runs-shape-invalid` in baseFrom.
+  if (nodeDataHasBodyRuns(data)) {
+    warn(warnings, 'bodyruns-deprecated', path, 'bodyRuns is deprecated (deprecated-but-present; behavior unchanged) — prefer content / text children')
+  }
+  // `content-with-children-recommended` — DEFERRED to the 1.0.0 XOR migration
+  // (2026-08-31). Firing it here warns every legitimate content+children node
+  // in the shipped demos/fixtures and forces the census-changing re-expression
+  // (a 1.0.0-major migration). Kept out of the additive 0.4.0 pass; the warn +
+  // the XOR render enforcement land together at the major. See
+  // docs/specs/bare-text-emit-review.md §4/§5.
   // component bindings (K1–K8): planned BEFORE construction so the
   // synthesized derived merge rides the node's base data ("authored-derived
   // wins", review doc §2.2 K2)
