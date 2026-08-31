@@ -155,6 +155,59 @@ function emitTextProp(props: Record<string, unknown>, content: unknown, bodyRuns
   else if (content !== undefined) props['text'] = content
 }
 
+/** ENG-BODYRUNS-WIRE-REF (2026-08-31 — gate §3 approved shape) — a POST-EMIT
+ *  pass that rewrites `bodyRuns` `{ child: <authoredId> }` runs to the child's
+ *  MINTED WIRE, using the element's OWN final `childOrder` (the H2/order-
+ *  faithful set — so a run can NEVER reference a non-child) + nodeById (a
+ *  child's authored `props.id`) + the path-state nodeId lookup. Resolution:
+ *  a ref that is ALREADY a child wire passes through unchanged; an authored-id
+ *  ref rewrites to the mapped wire; anything else is dropped — deterministic,
+ *  never a throw. `base.bodyRuns` is NEVER mutated (round-trip idempotent —
+ *  only the emitted `props['text']` string is rewritten). */
+function resolveBodyRunsChildWires(
+  el: MinimalElement,
+  nodeById: Map<string, EmitNodeSource> | null,
+  pathCtx?: PathEmitContext,
+): void {
+  const text = el.props['text']
+  if (typeof text !== 'string' || !isBodyEncoded(text)) return
+  const runs = decodeRuns(text)
+  if (!runs.some((r) => 'child' in r)) return
+  const childWires = new Set(el.childOrder)
+  // authored props.id → child wire, first-match-in-order over the node's OWN childOrder
+  const authoredIdToWire = new Map<string, string>()
+  for (const w of el.childOrder) {
+    const nodeId = pathCtx?.pathNodeOf.get(w) ?? w
+    const node = nodeById?.get(nodeId)
+    const authored = (node as { base?: { props?: Record<string, unknown> } } | undefined)?.base?.props?.id
+    if (typeof authored === 'string' && authored !== '' && !authoredIdToWire.has(authored)) {
+      authoredIdToWire.set(authored, w)
+    }
+  }
+  if (authoredIdToWire.size === 0) return
+  let changed = false
+  const rewritten: BodyRun[] = []
+  for (const r of runs) {
+    if ('child' in r) {
+      if (childWires.has(r.child)) {
+        // already a real child wire — passes through unchanged
+        rewritten.push(r)
+      } else if (authoredIdToWire.has(r.child)) {
+        // authored-id ref → its child's wire (first-match-in-order)
+        changed = true
+        rewritten.push({ child: authoredIdToWire.get(r.child)! })
+      } else {
+        // dangling ref (absent id / def-child synthetic / foreign): drop the
+        // run deterministically (gate §3 — never a throw, never a wrong-child)
+        changed = true
+      }
+    } else {
+      rewritten.push(r)
+    }
+  }
+  if (changed) el.props['text'] = encodeRuns(rewritten)
+}
+
 /** Compiled-state reducer: props → `prop:*`, css → `css:*` EXCLUDING cssDef
  *  (cssDef → the element's `styles` RULE STRINGS, D4/STL-1), content → `text`. */
 export function minimalFromState(cs: MinimalElementSource): MinimalElement {
@@ -556,6 +609,8 @@ export function emitElements(
       } else {
         // remap any forked child references to their arm wires in arm order
         el.childOrder = el.childOrder.flatMap((c) => armWires.get(c) ?? [c])
+        // ENG-BODYRUNS-WIRE-REF — resolve authored-id child runs to wires
+        resolveBodyRunsChildWires(el, nb, pathCtx)
         els.push(el)
       }
     }
