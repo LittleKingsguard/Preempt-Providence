@@ -95,6 +95,7 @@ by committing the gitignored file.
 | RENDER_PROCESS_NOTES → decisions.md fold | a future archival pass |
 | Runtime fork pass2-scaling lead (d12 pass2 = 1424ms of 1772ms total on the runtime loop page — flagged 2026-08-20) | future browser profile on the d14 runtime pages — pending.md PARKED row (compile-RESOLUTION of runtime-minted nodes, NOT handler bodies) |
 | Preservation-by-reversal layer flag | future feature (pending.md) — **NOTE: the 0.2.0 batch's Feature 4 is the same item, gated in the batch** |
+| Script DSL / guardrailed code-as-data proposal + the Cordis spatiotemporal-composability follow-up (2026-08-27) | **REVIEWED — WORKABLE WITH SCOPING (three-agent gate, `docs/specs/script-dsl-review.md`).** **USER RULING 2026-08-31: PARK THE WHOLE PROPOSAL — do NOT advance R1 to the spec gate.** The script-DSL (R1/R2) is parked in pending.md. The Cordis follow-up is SCOPED AS A SEPARATE WORKSTREAM (`docs/specs/cordis-composability-scope.md` + a pending.md row) — parked, not in progress. Do NOT auto-proceed on either. **USER CONSTRAINT + VERSIONING-SCHEME DECISION (2026-08-31): both are 1.0.0 MAJOR-RELEASE changes that do NOT assert full backwards compatibility with existing handler code** (`X.X.Y` patch / `X.Y.X` non-breaking / `Y.X.X` breaking — decisions.md VERSIONING-SCHEME row) — a future gate must state the explicit BC scope (retained vs re-expressed handler code) at proposal time. |
 
 ## RESOLVED (circle-back log)
 
