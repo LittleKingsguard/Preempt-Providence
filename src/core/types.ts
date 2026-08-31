@@ -1,5 +1,6 @@
 // Shared wire/internal types for src/core (contract.md §types).
 // Pure types only — this module emits no runtime code and imports nothing.
+import type { BodyRun } from './body-runs.js'
 
 // Forward structural references to the Node/Link classes (defined in
 // node.ts / link.ts, which this module is not allowed to import). Kept
@@ -280,6 +281,7 @@ export interface UnresolvedRef { referenceName: string; code: 'unresolved-refere
 export interface CompiledState {
   nodeId: NodeId; pathKey: PathKey; state: NodeState; type: string
   props: Record<string, unknown>; css: Record<string, unknown>; content: unknown
+  bodyRuns?: BodyRun[]
   anchors: readonly Anchor[]; parent: NodeRef | null; children: NodeRef[]
   bindings: Record<string, unknown>; unresolved: UnresolvedRef[]
   trace?: NodeRef[]
@@ -332,7 +334,7 @@ export interface NodeLayer {
    *  defaults to no (the current reverse-exclusion). */
   preserveByReversal?: boolean
 }
-export interface NodeBaseData { id?: string; type?: string; content?: unknown; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind>; batches?: Record<string, BatchRecord> }
+export interface NodeBaseData { id?: string; type?: string; content?: unknown; bodyRuns?: BodyRun[]; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind>; batches?: Record<string, BatchRecord> }
 /** HOOKS-ARRAY (§9.4 item 1 — CONTRACT AMENDMENT C) — the closed kind union
  *  a `hooksKind` declaration may name: `'value'` (the shipped §7 scalar
  *  value-provider slot), `'component'` (the hook mints nodes with

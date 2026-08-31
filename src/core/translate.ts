@@ -37,6 +37,7 @@ import type { GraphScope } from './registry.js'
 import { wrapLegacyHandler } from './legacy-handlers.js'
 import { validateDerived } from './derived.js'
 import type { Anchor, DerivedDecl, DerivedExpr, HookKind, LinkConfigNameHub, NodeBaseData } from './types.js'
+import type { BodyRun } from './body-runs.js'
 export type LegacyHandlerPhase = 'before-compile' | 'after-compile' | 'after-render'
 
 export interface LegacyHandlerDef {
@@ -98,6 +99,11 @@ export interface LegacyNodeData {
   /** single binding OR the K7 array form (multiple bindings per node) */
   component?: LegacyComponentBinding | LegacyComponentBinding[]
   content?: unknown
+  /** ENG-INLINE-ORDER — the opt-in text/element interleaving segments. A
+   *  non-array / non-conforming value warns `body-runs-shape-invalid` + the
+   *  field is skipped (the children-shape-invalid discipline; never a
+   *  throw). Coexists with scalar `content` (whose meaning never changes). */
+  bodyRuns?: BodyRun[]
   /** D5 — ONLY child nodes; a non-ARRAY value (single NodeData OBJECT, string,
    *  …) warns `children-shape-invalid` + the field is skipped */
   children?: LegacyNodeData[]
@@ -325,6 +331,17 @@ function baseFrom(
   const base: NodeBaseData = {}
   if (typeof nodeData.type === 'string') base.type = nodeData.type
   if (nodeData.content !== undefined) base.content = nodeData.content
+  if (nodeData.bodyRuns !== undefined) {
+    // ENG-INLINE-ORDER — a valid bodyRuns array (each entry a `{text}` or
+    // `{child}` run) is carried onto the base; a non-array / non-conforming
+    // value warns `body-runs-shape-invalid` + is skipped (the
+    // children-shape-invalid discipline; never a throw).
+    if (Array.isArray(nodeData.bodyRuns) && nodeData.bodyRuns.every((r) => r !== null && typeof r === 'object' && (('text' in r && typeof r.text === 'string') || ('child' in r && typeof r.child === 'string')))) {
+      base.bodyRuns = nodeData.bodyRuns as BodyRun[]
+    } else {
+      warn(warnings, 'body-runs-shape-invalid', path, 'bodyRuns must be an array of {text} / {child} runs; field skipped')
+    }
+  }
   if (nodeData.props !== undefined) base.props = nodeData.props
   if (nodeData.css !== undefined) {
     // D3 — a css.style OBJECT is serialized AT TRANSLATE into the kebab-case
@@ -1179,6 +1196,7 @@ function nodeToLegacy(node: Node, isContentRoot: (n: Node) => boolean, preserved
   const data: LegacyNodeData = {}
   data.type = node.type
   if (node.content !== undefined) data.content = node.content
+  if (node.base.bodyRuns !== undefined) data.bodyRuns = node.base.bodyRuns
   if (node.props && Object.keys(node.props).length > 0) {
     const props = { ...node.props }
     // DEFECT #28 (handoffs-review REQ-GAP-3): the engine auto-mint fill

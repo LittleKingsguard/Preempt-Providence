@@ -5,8 +5,12 @@
 broken by this exact ordering gap (a formatted span preceding plain text renders
 after it). Concrete consumer need confirmed (user, 2026-08-29) + this passing
 gate record + user go-ahead. Implementation proceeds via the TDD trio.
+**IMPL BUILT 2026-08-30 — the TDD trio returned GREEN** (`tests/unit/body-runs.test.ts`
+red set → green; implementation contract `docs/specs/eng-inline-order.md`,
+AMENDED 2026-08-30: field `bodyRuns`/type `BodyRun`, run-encoded string value).
 **The implementation contract is `docs/specs/eng-inline-order.md`** (written
-2026-08-29; TDD red→green pending, not yet built).
+2026-08-29; TDD red→green completed 2026-08-30, full trio green: 1256 tests +
+typecheck + demo:smoke, no fork-stress scaling regression).
 Date: 2026-08-29.
 Gate provenance: three-agent gate (AGENTS.md item 9). Step 1 validity verdict
 **YES-WITH-CONSTRAINTS**; step 2 critique verdict **REJECTED-AS-SHAPED, adapted

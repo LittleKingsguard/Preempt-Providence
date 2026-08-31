@@ -6,6 +6,7 @@ import { kebabKey } from './translate.js'
 import { defPrototypesFor, defRootPrototypeFor, DEFAULT_SCOPE } from './registry.js'
 import type { GraphScope } from './registry.js'
 import { providerValueFromLink } from './resolve.js'
+import { encodeRuns, decodeRuns, isBodyEncoded, type BodyRun } from './body-runs.js'
 
 /** D4/STL-1 — serialize one css.cssDef value (a `StyleNode[]` or a single
  *  StyleNode `{selector, styles}`) into RULE STRINGS `{selector}{kebab-case
@@ -54,6 +55,7 @@ export interface MinimalElementSource {
   props?: Record<string, unknown>
   css?: Record<string, unknown>
   content?: unknown
+  bodyRuns?: BodyRun[]
   children?: string[]
   forkKey?: ForkPathKey
 }
@@ -137,6 +139,22 @@ function pathWireOf(s: { nodeId: string; pathKey?: ForkPathKey; forkKey?: ForkPa
   return isPathState(s) ? s.pathKey! : s.nodeId
 }
 
+/** ENG-INLINE-ORDER — a `bodyRuns` array is "interleaving" (and must be
+ *  encoded) when it has ≥2 runs OR any `{ child }` run. A single `{ text }`
+ *  run NORMALIZES to the scalar `content` path (byte-identical, no encode). */
+function isInterleaving(runs: BodyRun[] | undefined): boolean {
+  if (!runs || runs.length === 0) return false
+  if (runs.length > 1) return true
+  return 'child' in runs[0]!
+}
+
+/** ENG-INLINE-ORDER — emit the run-encoded STRING as `props['text']` when
+ *  interleaving is present; otherwise fall through to the scalar path. */
+function emitTextProp(props: Record<string, unknown>, content: unknown, bodyRuns: BodyRun[] | undefined): void {
+  if (isInterleaving(bodyRuns)) props['text'] = encodeRuns(bodyRuns!)
+  else if (content !== undefined) props['text'] = content
+}
+
 /** Compiled-state reducer: props → `prop:*`, css → `css:*` EXCLUDING cssDef
  *  (cssDef → the element's `styles` RULE STRINGS, D4/STL-1), content → `text`. */
 export function minimalFromState(cs: MinimalElementSource): MinimalElement {
@@ -150,7 +168,7 @@ export function minimalFromState(cs: MinimalElementSource): MinimalElement {
     }
     props[`css:${k}`] = v
   }
-  if (cs.content !== undefined) props['text'] = cs.content
+  emitTextProp(props, cs.content, cs.bodyRuns)
   // P3 §4.1: a path-state's wire is its pathKey; family/non-path states keep
   // the nodeId wire. childOrder reads the state as-is (§4.2 — the per-path
   // conversion to child pathKey wires is the emitElements seam, which has the
@@ -409,6 +427,7 @@ export function emitElements(
     css?: Record<string, unknown>
     content?: unknown
     children?: string[]
+    bodyRuns?: BodyRun[]
     bindings?: Record<string, unknown>
     forkKey?: ForkPathKey
     anchors?: readonly Anchor[]
@@ -572,6 +591,7 @@ type EmitState = {
   props?: Record<string, unknown>
   css?: Record<string, unknown>
   content?: unknown
+  bodyRuns?: BodyRun[]
   children?: string[]
   bindings?: Record<string, unknown>
   forkKey?: ForkPathKey
@@ -1221,11 +1241,12 @@ const rootWire = `${wire}:0`
     // children (no standalone state in this set) join as their own elements.
     const bound = scalarBinding(s.bindings)
     const content = bound !== undefined ? bound : s.content
-    if (content !== undefined) props['text'] = content
+    emitTextProp(props, content, s.bodyRuns)
     if (
       (s.anchors ?? []).some((a) => a.role === 'container')
       && (s.children ?? []).length === 0
       && content === undefined
+      && !isInterleaving(s.bodyRuns)
       && (s.css?.style === undefined || s.css.style === '')
     ) {
       hideEmptyContainer(props)
@@ -1239,7 +1260,7 @@ const rootWire = `${wire}:0`
 
   const bound = scalarBinding(s.bindings)
   const content = bound !== undefined ? bound : s.content
-  if (content !== undefined) props['text'] = content
+  emitTextProp(props, content, s.bodyRuns)
   // EMPTY-OWNER (user rules 2026-08-14) — a placement-owner container with
   // NO children at render time emits `display: none` UNLESS it carries
   // renderable information of its own: an authored TEXT content or an
@@ -1250,11 +1271,13 @@ const rootWire = `${wire}:0`
   // An AUTHORED display declaration also wins (author intent overrides
   // emptiness). Applies to the container's own element wherever it emits
   // (plain, blocked-def and fork arms — a container with a def is non-empty
-  // by construction).
+  // by construction). A `bodyRuns`-present node renders something, so it is
+  // NON-empty (M4).
   const emptyOwnerHide =
     (s.anchors ?? []).some((a) => a.role === 'container')
     && (s.children ?? []).length === 0
     && s.content === undefined
+    && !isInterleaving(s.bodyRuns)
     && (s.css?.style === undefined || s.css.style === '')
   if (emptyOwnerHide) hideEmptyContainer(props)
   if (armIdx === undefined) {
@@ -1276,3 +1299,8 @@ const rootWire = `${wire}:0`
   if (s.forkKey !== undefined) el.forkKey = s.forkKey
   return { el }
 }
+
+// ENG-INLINE-ORDER — re-export the run-encoding surface so src/index.ts can
+// expose it (the emit seam and the adapters share this module).
+export { encodeRuns, decodeRuns, isBodyEncoded } from './body-runs.js'
+export type { BodyRun } from './body-runs.js'

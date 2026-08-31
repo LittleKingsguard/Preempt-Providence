@@ -272,8 +272,11 @@ interleaving capability must be a general framework feature, not a special-cased
 Per AGENTS.md item 9, any pursuit of this fix goes through the three-agent gate
 (validity → critique → change-analysis) before any spec/code work, and follows
 the TDD trio (spec red → implement → spec green + full validation trio in item
-4). **The gate is COMPLETE (2026-08-29, PROCEED-AS-RESHAPED — see §10.0).**
-Implementation proceeds next, via the TDD trio, landing the `body` segment-list
-capability. The consumer side (Astrographer) will then re-express its
+4). **The gate is COMPLETE (2026-08-29, PROCEED-AS-RESHAPED — see §10.0), and
+the capability is BUILT (2026-08-30 — TDD trio green: `tests/unit/body-runs.test.ts`
+25 tests; `npm test` 1256 + typecheck + demo:smoke; field `bodyRuns`/type `BodyRun`,
+run-encoded string value).**
+Implementation landed via the TDD trio (2026-08-30), shipping the `bodyRuns`
+segment-list capability. The consumer side (Astrographer) will then re-express its
 traversal/`RagNodeChild` model against the shipped capability to fix its inline
 ordering.

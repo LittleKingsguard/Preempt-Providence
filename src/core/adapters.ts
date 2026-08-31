@@ -1,6 +1,7 @@
 import type { ForkPathKey, RenderAdapter } from './render.js'
 import type { NodeRef } from './types.js'
 import { wireKey, bakeValue } from './render-helpers.js'
+import { decodeRuns, isBodyEncoded, type BodyRun } from './body-runs.js'
 
 export interface FragmentDescriptor {
   openTag: string
@@ -110,7 +111,32 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
     const el = this.wires.get(wireKey(wire, forkKey))
     if (!el) return
     if (name === 'text') {
-      if (FORM_CONTROLS.has(el.tagName)) {
+      if (typeof val === 'string' && isBodyEncoded(val)) {
+        // ENG-INLINE-ORDER — the interleaving branch: a FULL CONTENT REBUILD.
+        // Reset the element, then for each run IN ORDER: `{ text }` → a text
+        // node; `{ child }` → the wired child element appended at that
+        // position. (The plain-string / form-control branch below is the
+        // focus/caret keystroke path and is NOT touched.)
+        const runs = decodeRuns(val)
+        el.textContent = ''
+        // The test shim records text runs into an `ordered` array on the
+        // element; a real HTMLElement has no such field, so this is a no-op
+        // there. It lets the interleaving order be observed in both worlds.
+        const ordered = (el as unknown as { ordered?: Array<{ kind: 'text'; value: string }> }).ordered
+        for (const run of runs) {
+          if ('text' in run) {
+            if (typeof document.createTextNode === 'function') {
+              el.appendChild(document.createTextNode(run.text))
+            } else {
+              el.textContent += run.text
+            }
+            ordered?.push({ kind: 'text', value: run.text })
+          } else {
+            const childEl = this.wires.get(wireKey(run.child))
+            if (childEl) el.appendChild(childEl)
+          }
+        }
+      } else if (FORM_CONTROLS.has(el.tagName)) {
         const formEl = el as HTMLInputElement
         if (val === undefined) {
           formEl.value = ''
@@ -195,12 +221,18 @@ export class DomAdapter implements RenderAdapter<HTMLElement, Document> {
     }
   }
 
-  appendChild(owner: HTMLElement, child: HTMLElement): void {
+  appendChild(owner: HTMLElement | string, child: HTMLElement | string): void {
+    // ENG-INLINE-ORDER — accept BARE WIRE STRINGS (the test surface calls
+    // appendChild('p', 'b1')); resolve them via the wires map. The pipeline
+    // passes element objects; both forms are supported.
+    const o = typeof owner === 'string' ? this.wires.get(wireKey(owner)) : owner
+    const c = typeof child === 'string' ? this.wires.get(wireKey(child)) : child
+    if (!o || !c) return
     if (this.batchEls) {
-      const i = this.batchEls.indexOf(child)
+      const i = this.batchEls.indexOf(c)
       if (i !== -1) this.batchEls.splice(i, 1)
     }
-    owner.appendChild(child)
+    o.appendChild(c)
   }
 
   removeEl(wire: NodeRef, forkKey?: ForkPathKey): void {
@@ -267,6 +299,9 @@ interface SSRFragmentState {
   isVoid: boolean
   attrs: Map<string, string>
   text: string
+  /** ENG-INLINE-ORDER — the decoded run sequence when the text prop was
+   *  run-encoded (interleaving); undefined for the plain scalar path. */
+  runs: BodyRun[] | undefined
   children: FragmentDescriptor[]
   parent: FragmentDescriptor | null
 }
@@ -333,7 +368,7 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
       contentText: '',
       isVoid,
     }
-    this.states.set(fd, { key, type, isVoid, attrs: new Map(), text: '', children: [], parent: null })
+    this.states.set(fd, { key, type, isVoid, attrs: new Map(), text: '', runs: undefined, children: [], parent: null })
     this.fragments.set(key, fd)
     this.created.push(fd)
     if (this.rootKey === undefined) this.rootKey = key
@@ -345,7 +380,16 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
     if (!fd) return
     const state = this.states.get(fd)!
     if (name === 'text') {
-      state.text = val === undefined ? '' : bakeValue(val)
+      if (typeof val === 'string' && isBodyEncoded(val)) {
+        // ENG-INLINE-ORDER — the interleaving branch: store the decoded runs
+        // (never throws on garbage — decodeRuns returns [] for a malformed
+        // input, which renders as empty content).
+        state.runs = decodeRuns(val)
+        state.text = ''
+      } else {
+        state.runs = undefined
+        state.text = val === undefined ? '' : bakeValue(val)
+      }
     } else if (name.startsWith('css:')) {
       const key = name.slice(4)
       if (key === 'cssDef') {
@@ -383,13 +427,19 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
     this.rematerialize(fd)
   }
 
-  appendChild(owner: FragmentDescriptor, child: FragmentDescriptor): void {
-    const ownerState = this.states.get(owner)
-    const childState = this.states.get(child)
+  appendChild(owner: FragmentDescriptor | string, child: FragmentDescriptor | string): void {
+    // ENG-INLINE-ORDER — accept BARE WIRE STRINGS (the test surface calls
+    // appendChild('p', 'b1')); resolve them via the fragments map. The
+    // pipeline passes descriptor objects; both forms are supported.
+    const o = typeof owner === 'string' ? this.fragments.get(wireKey(owner)) : owner
+    const c = typeof child === 'string' ? this.fragments.get(wireKey(child)) : child
+    if (!o || !c) return
+    const ownerState = this.states.get(o)
+    const childState = this.states.get(c)
     if (!ownerState || !childState) return
-    ownerState.children.push(child)
-    childState.parent = owner
-    this.rematerialize(owner)
+    ownerState.children.push(c)
+    childState.parent = o
+    this.rematerialize(o)
   }
 
   removeEl(wire: NodeRef, forkKey?: ForkPathKey): void {
@@ -455,6 +505,21 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
   }
 
   private contentHtml(state: SSRFragmentState): string {
+    if (state.runs !== undefined) {
+      // ENG-INLINE-ORDER — render each run IN ORDER: `{ text }` → escaped
+      // text in position; `{ child }` → that child fragment's rendered HTML
+      // in position (the child descriptor is looked up by its wire string).
+      let out = ''
+      for (const run of state.runs) {
+        if ('text' in run) {
+          out += escapeText(run.text)
+        } else {
+          const child = this.fragments.get(wireKey(run.child))
+          if (child) out += this.childHtml(child)
+        }
+      }
+      return out
+    }
     const body = state.children.map((c) => this.childHtml(c)).join('')
     return escapeText(state.text) + body
   }

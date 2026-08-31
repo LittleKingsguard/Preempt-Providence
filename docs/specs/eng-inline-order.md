@@ -1,10 +1,17 @@
 # Spec — ENG-INLINE-ORDER: Text/Element Interleaving (`bodyRuns` segments)
 
-- **Status:** SPEC (implementation contract, TDD red→green pending; NOT yet built).
-  Gate reference: `docs/specs/eng-inline-order-review.md` (three-agent gate, 2026-08-29,
-  **PROCEED-AS-RESHAPED**, trigger fired). Consumer: the adjacent Astrographer
-  project's rich-text UI renders a formatted span that precedes plain text in the
-  WRONG position (after the text); this capability fixes the render ordering.
+- **Status:** **IMPL BUILT 2026-08-30 — TDD trio GREEN.** Gate reference:
+  `docs/specs/eng-inline-order-review.md` (three-agent gate, 2026-08-29,
+  **PROCEED-AS-RESHAPED**, trigger fired). The amended contract (2026-08-30:
+  field `bodyRuns` / type `BodyRun`; run-encoded string value via
+  `encodeRuns`/`decodeRuns`) was implemented red→green: red set
+  `tests/unit/body-runs.test.ts` (25 tests) written first, then the least
+  implementation across `src/core/body-runs.ts` (new) + render-helpers/adapters/
+  node/translate/serialize/types/index. Full trio green: `npm test` 1256, 
+  `npm run typecheck`, `npm run demo:smoke` (incl. derived-fork pins within the
+  2.5× guard) + clean `npm run build`. Consumer: the adjacent Astrographer
+  project's rich-text UI renders a formatted span that precedes plain text in
+  the WRONG position (after the text); this capability fixes the render ordering.
 - **Date:** 2026-08-29
 - **TestWriter contract:** every data shape, emit rule, render ordering, and
   fail-state below is derivable from this spec ALONE. The TestWriter writes the
@@ -341,8 +348,9 @@ markdown export adapter.)
 
 Per AGENTS.md item 9 the three-agent gate is COMPLETE (PROCEED-AS-RESHAPED).
 **This spec is the implementation contract, written and approved (user, 2026-08-29)
-for a LATER implementation pass** — it is NOT built yet. The consumer-side
-Astrographer re-expression (its `RagNodeChild` model against the shipped
+and BUILT via the TDD trio (2026-08-30 — red set `tests/unit/body-runs.test.ts`
+→ green; full validation trio green).** The consumer-side Astrographer
+re-expression (its `RagNodeChild` model against the shipped
 `bodyRuns`) is a SEPARATE change executed after this engine capability lands.
 **The §5-vs-§6 design contradiction and the naming collision flagged by the 2026-08-30
 Review have been resolved by AMENDMENT 1 + AMENDMENT 2; the TestWriter red set

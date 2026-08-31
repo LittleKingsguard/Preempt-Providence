@@ -36,8 +36,8 @@ export type { LegacyNodeView, LegacyContext, LegacyQuery, NodeViewServices } fro
 // ---- render + adapters + helpers --------------------------------------------
 export { diffMinimal, MockAdapter } from './core/render.js'
 export type { RenderAdapter, RenderOp, MinimalElement, ForkPathKey } from './core/render.js'
-export { emitElements, applyOps, minimalFromState, treeFromOps, treeSig, jsonClone, wireKey, renderProducingProcess } from './core/render-helpers.js'
-export type { MinimalElementSource, RenderTree, RenderOptions } from './core/render-helpers.js'
+export { emitElements, applyOps, minimalFromState, treeFromOps, treeSig, jsonClone, wireKey, renderProducingProcess, encodeRuns, decodeRuns, isBodyEncoded } from './core/render-helpers.js'
+export type { MinimalElementSource, RenderTree, RenderOptions, BodyRun } from './core/render-helpers.js'
 export { DomAdapter, SSRFragmentAdapter, MarkdownAdapter, VOID_TAGS } from './core/adapters.js'
 export type { FragmentDescriptor, DomAdapterOptions } from './core/adapters.js'
 

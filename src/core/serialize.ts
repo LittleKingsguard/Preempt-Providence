@@ -4,6 +4,7 @@
 // Anchors serialize as typed refs — never live objects (notes §10.6, D4).
 import type { Node } from './node.js'
 import type { AnchorTarget, DerivedDecl, LinkConfigNameHub, NodeBaseData, NodeRef, Role } from './types.js'
+import type { BodyRun } from './body-runs.js'
 import { validateDerived } from './derived.js'
 import { defPrototypeEntries, defRootPrototypeEntries, defNameForLink, registerDefPrototypes, registerDefRootPrototype, scopeOf, DEFAULT_SCOPE } from './registry.js'
 import type { GraphScope } from './registry.js'
@@ -24,6 +25,8 @@ export interface RenderNodeState {
   props: Record<string, unknown>
   css: { id?: string; classes?: string[]; style?: string; cssDef?: unknown }
   content?: unknown
+  /** ENG-INLINE-ORDER — the opt-in interleaving segments (round-trip source). */
+  bodyRuns?: BodyRun[]
   children: NodeRef[]
   anchors: SerializedAnchor[]
   forkKey?: string
@@ -146,6 +149,11 @@ export function serializeNode(node: Node): RenderNodeState {
     }),
   }
   if (content !== undefined) state.content = content
+  if (node.base.bodyRuns !== undefined) {
+    // ENG-INLINE-ORDER — the run segments ride the JSON-safety boundary.
+    assertJsonSafe(node.base.bodyRuns)
+    state.bodyRuns = node.base.bodyRuns
+  }
   if (node.derived !== undefined) state.derived = node.derived
   if (node.base.hooks !== undefined && node.base.hooks.length > 0) state.hooks = [...node.base.hooks]
   if (node.base.hooksKind !== undefined && Object.keys(node.base.hooksKind).length > 0) state.hooksKind = { ...node.base.hooksKind }
@@ -235,6 +243,7 @@ interface SeededNode {
   css?: Record<string, unknown>
   children?: string[]
   content?: unknown
+  bodyRuns?: BodyRun[]
   anchors?: SerializedAnchor[]
   forkKey?: string
   derived?: DerivedDecl
@@ -275,6 +284,13 @@ function parseNodeState(v: unknown): SeededNode {
     seed.children = o.children as string[]
   }
   if (o.content !== undefined) seed.content = o.content
+  if (o.bodyRuns !== undefined) {
+    // ENG-INLINE-ORDER — a valid bodyRuns array is seeded; a non-array /
+    // non-conforming value is skipped (never a throw).
+    if (Array.isArray(o.bodyRuns) && o.bodyRuns.every((r) => r !== null && typeof r === 'object' && (('text' in r && typeof r.text === 'string') || ('child' in r && typeof r.child === 'string')))) {
+      seed.bodyRuns = o.bodyRuns as BodyRun[]
+    }
+  }
   if (o.anchors !== undefined) {
     if (!Array.isArray(o.anchors)) throw new Error('NodeSchema-shape-mismatch')
     seed.anchors = o.anchors as SerializedAnchor[]

@@ -1198,6 +1198,7 @@ export class Node {
       props: node.props,
       css: node.css,
       content: node.content,
+      ...(node.base.bodyRuns !== undefined ? { bodyRuns: node.base.bodyRuns } : {}),
       anchors: node.anchors,
       parent: node.parent ? node.parent.id : null,
       children: node.children.map(c => c.id),
@@ -1397,6 +1398,7 @@ export class Node {
       props: this.props,
       css: this.css,
       content: this.content,
+      ...(this.base.bodyRuns !== undefined ? { bodyRuns: this.base.bodyRuns } : {}),
       anchors: this.anchors,
       // the path's parent: the landing owner of the node's first hop
       parent: walk.hops.length > 0 ? walk.hops[0]!.owner.id : null,
