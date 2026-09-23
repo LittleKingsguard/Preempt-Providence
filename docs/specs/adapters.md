@@ -89,6 +89,8 @@ export interface FragmentDescriptor {
   closeTag: string         // '</div>' or '' for void
   contentText: string      // escaped text + serialized children, in emit order
   isVoid: boolean
+  isText?: boolean         // BARE-TEXT-EMIT (0.4.0): a `text` fragment — NO wrapper element
+                           // (openTag/closeTag are ''); `childHtml` emits contentText only (§4.1/§4.3/§4.4)
 }
 // R9: the ordered attr Map and the childrenHtml/state are PRIVATE fields on the
 // descriptor (an internal SSRFragmentState), NOT part of the public shape above.
@@ -174,12 +176,20 @@ demo. Rows: every branch below has a corresponding row in §10.1.
 
 | Step | Behavior | Ref |
 | --- | --- | --- |
+| **0 (BARE-TEXT-EMIT, `type === 'text'` only)** | **the Text-holder branch — taken BEFORE step 1 and skipping steps 1-4 below.** `type === 'text'` mints a **Text node as the wire holder**: `document.createTextNode('')` when the environment provides it, else the **headless-shim `span` fallback** (`document.createElement('span')` — the smoke shim has no `createTextNode`; the shim records text in `textContent` and the `setProp` text branch handles it). It **skips the `dataset.wire` write** (a real `Text` has no `dataset` — the write would throw), registers `this.wires.set(wireKey(wire, forkKey), textNode)` (purge-on-duplicate as in step 3/DOM-F8), pushes to the open batch or `mount.appendChild`s exactly as steps 3-4 do, and returns the holder | BARE-TEXT-EMIT (Shape A1, 0.4.0); `src/core/adapters.ts:143-159` |
 | 1 | `document.createElement(type)` | de facto |
 | 2 | `el.dataset.wire = wire` (the **base** wire even for fork arms) | de facto |
 | 3 | `this.wires.set(wireKey(wire, forkKey), el)` — table key is the composite `(NodeRef, forkKey)`; absent `forkKey` ⇒ bare wire | de facto + R2 |
 | 4 | `this.mount.appendChild(el)` — new elements attach to the mount immediately | de facto |
 | 5 | return `el` | de facto |
 
+- **The `text` holder in a real DOM is a genuine `Text`** (`nodeType === 3`), so no
+  `createEl`-time `dataset` exists on it; in the headless shim it is a `span`
+  whose `textContent` carries the same value. Both shapes are `wires` entries and
+  are addressable by `(wire, forkKey)` exactly like an element. **A `css.id` /
+  prop / handler set on a `text` wire is a no-op** (§3.2's Text-owner rows) and
+  **the emit layer never produces one** — the content-only rule is enforced at EMIT
+  (silent filtering), see the note at the end of this section.
 - Duplicate create for the **same `(wire, forkKey)`** **overwrites** the `wires` mapping
   (last-write-wins, `Map.set` semantics — de facto). The previously created element stays
   mounted; a correct pipeline only re-creates a wire after `remove` (D3, R-ORD-6) — the
@@ -201,6 +211,8 @@ first row applies.
 
 | Branch (`name`) | Behavior | Ref |
 | --- | --- | --- |
+| **Text owner — `el.nodeType === 3` and `name !== 'text'` (BARE-TEXT-EMIT)** | **RETURN without writing anything** — the safe-degrade backstop. A `Text` holder accepts NO attribute/style/listener/prop write: every other `name` (`prop:*`, `css:*`, bare, `on:*`, `data:*`) is a **silent no-op**. `nodeType === 3` (not `instanceof Text`) is the test, so it also works in shimmed DOM environments where the `Text` global is absent | BARE-TEXT-EMIT (Shape A1, 0.4.0); `src/core/adapters.ts:183-187` |
+| **Text owner — `name === 'text'` (BARE-TEXT-EMIT)** | `el.data = val === undefined ? '' : bakeValue(val)` — the ONLY honored write on a `Text` owner. `val === undefined` **clears the data to `''`** (the R7 drop, Text flavour — never `textContent`, never a node replacement) | BARE-TEXT-EMIT (Shape A1, 0.4.0); `src/core/adapters.ts:183-186` |
 | `wireKey(wire, forkKey)` not in `this.wires` | **silent no-op** (DECIDED, §3.7) | de facto (returns) |
 | `text` + `TEXTAREA`/`INPUT`/`SELECT` | focus-safe value write: `if (el.value !== String(val)) el.value = String(val)` — **never** replaces the node, never writes `textContent` on a form control | de facto |
 | `text` + any other element | `el.textContent = String(val)` | de facto |
@@ -211,7 +223,8 @@ first row applies.
 | `on:<event>` | **RETAINED HANDLER MAP (2026-08-20 — the listener-removal un-park, docs/specs/retained-handler-map-review.md):** attach = `el.addEventListener(evtName, handler)` where `handler` is a NAMED closure storing the EXACT function reference in the retained map keyed `wireKey(wire, forkKey)` × `evtName` — **REPLACE semantics** (a re-set of the same slot removes the previous exact listener first, then rebinds; one slot never accumulates — the superseded DOM-F5 additive contract); `val === undefined` = real detach — `el.removeEventListener(evtName, retained.fn)` + map delete (the R7 drop row, now honored: DOM/SSR converge); dispatch still goes through the injected `opts.onEvent`, never a pipeline-coupled direct call — the adapter stays the DOM-only page-side seam (**2026-08-20 Phase A parallel path:** the engine entry `supervisor.dispatchEvent(target, event, ...args)` — handlers.md §3 — is a separate, host-callable path into the same bodies; onEvent and the engine entry are independent of each other) | de facto + retained-handler-map (DOM-F5-flip, F6..F12) |
 | `prop:<name>` | strip prefix: `attr = name.slice(5)`; if `attr === 'value'` and element is `INPUT` or `TEXTAREA` → `el.value = String(val)`; else `el.setAttribute(attr, String(val))` | de facto |
 | bare (anything else) | same as `prop:` branch with `attr = name` (the `value` special-case therefore also applies to a bare `value` on `INPUT`/`TEXTAREA`) | de facto |
-| any branch with `val === undefined` | **DECIDED drop — not a write, always a remove/reset** (R7): attr-type names (`prop:*`, bare, `css:<other>`) → `el.removeAttribute(attrName)`; `css:id` → `el.id = ''`; `css:classes` → `el.className = ''`; `css:style` → `el.style.cssText = ''`; `text` → `el.textContent = ''` on non-forms, `el.value = ''` on `INPUT`/`TEXTAREA`/`SELECT`; `on:<event>` → **real detach** (`removeEventListener(evtName, retained.fn)` + map delete — the 2026-08-20 retained-handler-map un-park; the old "no listener-removal channel" no-op is superseded by §3.7) | DECIDED (R7) + retained-handler-map (2026-08-20, DOM-F6) |
+| `prop:<boolean-attr>` / bare boolean attr (**HOST/U1-ENG, 2026-09-12**) | when `attr` is in the closed `BOOLEAN_ATTRS` set (`checked`/`selected`/`disabled`/`multiple`/`required`/`hidden`/`open`/… — `download` NOT boolean): a **falsy** value (`false`/`0`/`'0'`/`'false'`/`''`/`null`) removes the attribute (`el.removeAttribute`) — NEVER `attr="false"` (which is still PRESENT); an **on** value keeps the authored string form (`hidden="true"`, the prior pin) AND reflects the DOM property when the element exposes one (`typeof el[attr] === 'boolean'` → `el[attr] = on`) so `checked`/`selected` form state is correct even when the property was dirtied | Astrographer handoff HOST/U1-ENG; docs/specs/handoffs-review-10.md §5.1 |
+| any branch with `val === undefined` | **DECIDED drop — not a write, always a remove/reset** (R7): attr-type names (`prop:*`, bare, `css:<other>`) → `el.removeAttribute(attrName)`; `css:id` → `el.id = ''`; `css:classes` → `el.className = ''`; `css:style` → `el.style.cssText = ''`; `text` → `el.textContent = ''` on non-forms, `el.value = ''` on `INPUT`/`TEXTAREA`/`SELECT`; **on a `Text` owner (`nodeType === 3`): `text` `undefined` → `el.data = ''`** (the Text case — the ONLY `val === undefined` reset a `Text` owner can perform; every other name already returned in the Text-owner row above); `on:<event>` → **real detach** (`removeEventListener(evtName, retained.fn)` + map delete — the 2026-08-20 retained-handler-map un-park; the old "no listener-removal channel" no-op is superseded by §3.7) | DECIDED (R7) + retained-handler-map (2026-08-20, DOM-F6) + BARE-TEXT-EMIT (Text owner, 0.4.0) |
 
 The `value` special-case covers **`INPUT`/`TEXTAREA` only** (not `SELECT`) — asymmetric
 with the `text` branch, by de facto reference; the asymmetry is intentional and tested
@@ -223,6 +236,20 @@ with the `text` branch, by de facto reference; the asymmetry is intentional and 
 `css:cssDef` set still arrives despite that (invalid emit), it is treated as a
 `css:<other>` attribute (`el.setAttribute('cssDef', String(val))`) — deterministic, and
 marked legacy-unsupported.
+
+> **The `text`-node content-only rule — the ADAPTER's half (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`).**
+> The adapter's Text-owner rows above are a **defensive backstop only**: the rule
+> that decides what a `text` element is given lives in the **emit layer**, and its
+> OWNER is **`docs/specs/render.md` §3.2b** (`BT-EMIT-5` — silent filtering and
+> the translate-time/legacy-JSON-only `text-content-only` warn) — **read it there;
+> it is not restated here** (AGENTS.md item 6 — one contract, one home; AC-30).
+> **What this section adds is the boundary fact the adapter needs, and nothing
+> else:** because the emit filter is **SILENT**, a `text` element never arrives at
+> the adapter with a diagnostic attached — so the adapter observes no warn (UR-1's
+> requested emit-time warn is **declined**, there being no such site:
+> `docs/specs/ur-2026-09-17-review.md` §4 UR-1 (iii) + §5 **N6**), and the adapter
+> must stay a pure consumer. The `DomAdapter`'s `nodeType === 3` guard and the SSR
+> `isText` branch are what make the adapter safe when a stray prop does arrive.
 
 ### 3.3 `ensureStyles(defs)` / `styles(cssDefs)` — coalescing + dedup
 
@@ -329,10 +356,17 @@ serializes it to an HTML string. Every branch has a corresponding row in §10.2.
 
 | Step | Behavior | Ref |
 | --- | --- | --- |
+| 0 (BARE-TEXT-EMIT) | `isText = (type === 'text')`; **`isVoid = isText ? true : isVoid`** — a `text` fragment is registered `isVoid: true` (it has no close tag) **and** `isText: true`, which is why §4.3/§4.4 must branch on `isText` (not on `isVoid`) to keep a `text` child's content alive | BARE-TEXT-EMIT (Shape A1, 0.4.0); `src/core/adapters.ts:452-459` |
 | 1 | `isVoid = VOID_TAGS.has(type)` | *(derived)* HTML void-elements table |
-| 2 | descriptor with `openTag = '<' + type + '>'`, `closeTag = isVoid ? '' : '</' + type + '>'`, `contentText = ''` | de facto §6.8 shape |
+| 2 | descriptor with `openTag = isText ? '' : '<' + type + '>'`, `closeTag = isText ? '' : isVoid ? '' : '</' + type + '>'`, **`isText`**, `contentText = ''` — a `text` fragment therefore serializes as **content only** (no `<text>` wrapper, ever) | de facto §6.8 shape + BARE-TEXT-EMIT |
 | 3 | `this.fragments.set(wireKey(wire, forkKey), descriptor)` — composite `(NodeRef, forkKey)` key (R2); fork arms stay distinct entries | de facto analog |
 | 4 | return the descriptor | |
+
+The `FragmentDescriptor` shape gains the field **`isText?: boolean`**
+(`src/core/adapters.ts:12-14`): *"NO wrapper element (openTag/closeTag are '');
+`childHtml` emits contentText … only"*. It is **true** exactly for a `text`
+fragment and **false/absent** for every other type — including a genuine void tag
+(`br`/`img`/…), which keeps the notes §6.8 void semantics.
 
 Attributes accumulate into an internal ordered `Map<attrName, attrValue>` (first-set
 order preserved; a re-set of an existing name **replaces** its value in place); `openTag`
@@ -362,6 +396,7 @@ only that arm's fragment.
 | `css:<other>` | attr `<key> = escapeAttr(val)`, `key = name.slice(4)` | de facto symmetry with §3.2 |
 | `on:<event>` | attr `on<event> = escapeAttr(val)` — handler **inlined** | de facto §6.8 "handlers inlined as `on…="…"`" |
 | `prop:<name>` / bare | attr `<name> = escapeAttr(val)`, `prop:` prefix stripped | de facto |
+| `prop:<boolean-attr>` / bare boolean attr (**HOST/U1-ENG, 2026-09-12**) | when `attr` is in the closed `BOOLEAN_ATTRS` set: a **falsy** value (`false`/`0`/`'0'`/`'false'`/`''`/`null`) **omits** the attribute (removes a previously-set one) — NEVER `attr="false"` (still PRESENT); an on value keeps the authored string form (`hidden="true"`), never the broken `="false"` | Astrographer handoff HOST/U1-ENG; docs/specs/handoffs-review-10.md §5.1 |
 | `value` | **no property special-case in string form** — always emitted as the attribute `value="…"` | de facto: `<input value="…">` is valid SSR |
 | any branch with `val === undefined` | **DECIDED drop** (R7): the attribute is **omitted** from `openTag`, and a previously-set attribute of that name is **removed** from the ordered attr map; `text` with `undefined` → **empty content** (`textContent = ''`, `contentText = childrenHtml`) | DECIDED (R7) — D4 removed-props re-set |
 
@@ -383,11 +418,46 @@ compiled child order (render.md §2 "string concatenation in compiled child orde
 A `text` set after appends re-materializes as `textContent + childrenHtml` (text precedes
 children in emit order per R-ORD-6/diffMinimal: all `set`s, then `append`s).
 
+**The `isText` branch of `childHtml` (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`;
+`src/core/adapters.ts:622-627`):**
+
+```ts
+if (child.isText) return child.contentText          // bare text — contentText ONLY
+return child.isVoid ? child.openTag : child.openTag + child.contentText + child.closeTag
+```
+
+A `text` child appended into an element therefore contributes **exactly its
+`contentText`** (the escaped `props['text']` value) — **no `openTag`, no `closeTag`,
+no wrapper, even though its descriptor is `isVoid: true`**. This is the whole
+"bare-text emit": for the `[text, strong, text]` childOrder the parent's
+`contentText` is `A <strong id="b1">bold</strong> text` (the `text` children bare,
+the `strong` child wrapped) — FRG-H28.
+
 ### 4.4 Void elements
 
 For an `isVoid` fragment the materialized html is `openTag` **only** — `contentText` and
 appended children never appear in output (FRG-H20, FRG-F1). `text` on a void element
 mutates state but is ignored at serialization time.
+
+**The `isText` case is EXPLICITLY EXCLUDED from this void rule (BARE-TEXT-EMIT,
+`>=0.4.0 <1.0.0`; `src/core/adapters.ts:622-627`, `:591-593`).** A `text`
+fragment carries `isVoid: true` (§4.1 step 0) as a *descriptor* fact (it has no
+close tag), but its serialization never takes the void path:
+
+| Position of the `text` fragment | Serialized output |
+| --- | --- |
+| **as an appended child** of an element | `childHtml` returns **`contentText` only** — the void rule is bypassed by the `isText` branch (§4.3), so the child's text **survives** |
+| **as the SSR ROOT** (first-created wire, R-ORD-8/R10) | `rootHtml(root)` (`:591-593`) takes the **void** branch — `isVoid` is true, so it returns **`openTag`, which is `''`** for a `text` fragment. **A `text` node as the SSR root therefore serializes `''`** (the styles prefix, if any, is still emitted; the `rootHtml` consequence) |
+| **as a floating (created-but-never-appended) fragment** | `toString()`'s floating list renders each via `rootHtml` (`:579-583`) — same void branch, same `''` |
+
+**This is the pinned intended behaviour, not a defect:** a `text` node is a *child*
+shape (the bare-text emit exists so text can sit between sibling elements —
+`docs/specs/eng-inline-order.md`, the XOR-alternative use case); an SSR **root**
+`text` node is an authoring shape the render contract does not bless, and it
+degrades to empty output **deterministically and without a throw**. If a future
+gate rules that a root `text` node should serialize its `contentText`, that is a
+behaviour change with its own gate — record it in `docs/pending.md`, do not patch
+it here.
 
 ### 4.5 Styles block — emitted once
 
@@ -540,6 +610,7 @@ no DOM globals).
 | SSR-H2 | `hydrate(rootWire, vdom)` reuses `css.id`-keyed DOM: the `reused` set collects every `css.id` in the doc (validated against `mount.querySelector` by id when the DOM exists — the seam yields the actual SSR-rendered element, which is never re-created); wires remain bound via the normal `setProp`/`wires` path | render.md §7.3, notes §5.1 |
 | SSR-F2 | On hydrate mismatch, the **client re-resolution is canon**; the mismatched slice re-renders through the normal op path — adapters never bake in their own resolution | render.md §7.5 |
 | SSR-F4 | Adapter behaviors must not diverge for the same op — both adapters are pure mappings of the identical `RenderOp` stream | render.md §8/§10.3 SSR-F4 |
+| **SSR-F5 — the `isText` DIVERGENCE between the DOM and SSR products (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`)** | A `text` wire is a **DOM `Text` node** (`document.createTextNode('')`, shim fallback `span`) whose content is written through `el.data`; on the SSR side it is a **fragment descriptor with `isText: true`, empty `openTag`/`closeTag` and `isVoid: true`**, whose content is `contentText`. The two products are **structurally different objects with no `openTag`/`closeTag` counterpart on the DOM side**, so `treeSig`/`treeFromOps` parity (PARS-H1) compares a `text` wire's **text content and position**, not a wrapper. **The documented divergence: a `text` node as the SSR ROOT serializes `''`** (§4.4 — the `rootHtml` void branch), while the DOM mounts its `Text` holder at the mount root. This is the ONE place the `text` shape is not symmetric, is pinned as intended behaviour, and is excluded from PAR-5's structural-equality claim for that authoring shape (a `text` root is not a blessed authored shape) | BARE-TEXT-EMIT (Shape A1, 0.4.0); `src/core/adapters.ts:143-159` (DOM), `:452-459` / `:591-593` / `:622-627` (SSR); §4.4 |
 
 The adapter-neutral parity oracle is `treeFromOps` + `treeSig` over the op stream
 (render.md §3, `src/core/render-helpers.ts`); the SSR side is additionally checked by parsing
@@ -599,6 +670,7 @@ and `render-helpers.ts` need no DOM.
 | ID | State / fail-state | Expected |
 | --- | --- | --- |
 | DOM-H1 | `createEl('div', 'w1')` | element created with tag `DIV`; `el.dataset.wire === 'w1'`; `wires.get('w1') === el`; element appended to `mount`; returns el |
+| **DOM-H31 — the `text` wire (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`; §3.1 step 0 + §3.2 Text-owner rows)** | `createEl('text', 'w1')` on a DOM with a real `Text` global; then `setProp('w1','text','hi')`; then `setProp('w1','css:id','k')`; then `setProp('w1','prop:title','t')`; then `setProp('w1','on:click',fn)`; then `setProp('w1','text',undefined)`; then `createEl('text','w2')` in a shimmed env with **no** `document.createTextNode` | (a) created node has **`nodeType === 3`** (a genuine `Text`); (b) **NO `dataset` write** — `el.dataset` is undefined/absent and no throw occurs (the skipped step-2 write); (c) it **is** registered: `wires.get('w1') === el`; (d) a **`css:*` set is a no-op** (no attribute, no throw — the Text-owner return); (e) a **bare/`prop:` set is a no-op** (no attribute, no throw); (f) an **`on:` set is a no-op** (no listener registered, no throw); (g) a **`text` set writes `.data`** — `el.data === 'hi'` (NOT `textContent`); (h) `text` `undefined` → `el.data === ''`; (i) with no `createTextNode` available the holder is the **shim `span` fallback** (`tagName === 'SPAN'`, still registered, still addressable) and the `text` set lands in its `textContent` | BARE-TEXT-EMIT (Shape A1); `src/core/adapters.ts:143-159`, `:183-187` |
 | DOM-H2 | `setProp(w, 'text', 'hi')` on a `div` | `el.textContent === 'hi'` |
 | DOM-H3 | `setProp(w, 'text', 'hi')` on a `TEXTAREA` | `el.value === 'hi'`; `el` node identity unchanged (never replaced); `textContent` untouched |
 | DOM-H4 | `setProp(w, 'text', v)` on an `INPUT` | `el.value === String(v)`; node identity preserved |
@@ -659,14 +731,16 @@ and `render-helpers.ts` need no DOM.
 | FRG-H11 | `setProp(w, 'value', 'v')` on `input` | `openTag` contains `value="v"` (attribute form; no property special-case) |
 | FRG-H12 | attr value `a&b "c" <d> e` | escaped `a&amp;b &quot;c&quot; &lt;d&gt; e` in `openTag` |
 | FRG-H13 | text `a < b & c > d` | `contentText === 'a &lt; b &amp; c &gt; d'` |
-| FRG-H14 | `appendChild(owner, child)` | `owner.contentText` ends with `child.openTag + child.contentText + child.closeTag` |
+| FRG-H14 | `appendChild(owner, child)` | `owner.contentText` ends with `childHtml(child)` = `child.openTag + child.contentText + child.closeTag`; **for a `text` child the `isText` branch applies** — `owner.contentText` ends with **`child.contentText` ONLY** (no wrapper) |
 | FRG-H15 | deep nesting (3+ levels) | full html string correct at every level |
 | FRG-H16 | `toString()` after a full render | prefix is **exactly** `'<style id="preempt-dynamic-styles">' + defs.map(d => '\n' + String(d)).join('') + '</style>'` — a single leading `\n` before each def, defs joined, **no stray trailing `\n`** (R18) — then root fragment html; root = first-created wire |
 | FRG-H17 | multiple `styles(['.a{}', '.b{}'])` ops (no `css:cssDef` sets) | single styles prefix block; defs in arrival order |
 | FRG-H27 | `styles(['.x{a:b}', '.x{a:b}'])` — the SAME rule string twice | dedup (D4 — SPEC-ENCODED, fix pass PENDING; expect RED): pushed ONCE into `this.styles` — `toString()` prefix contains a single `\n.x{a:b}`; per adapter instance, across ops |
 | FRG-H18 | `setProp(w, 'hidden', true)` then `setProp(w, 'hidden', undefined)`; `setProp(w, 'text', undefined)` | D4 drop (R7): attr **omitted** from `openTag`, removed from the ordered attr map; `text` `undefined` → `contentText === ''` (empty content) |
 | FRG-H19 | `hydrate(rootWire, vdom)` | no-op — no state change, no throw |
-| FRG-H20 | `text` / children on a void fragment | output html is `openTag` only; content ignored |
+| FRG-H20 | `text` / children on a void fragment | output html is `openTag` only; content ignored. **The `isText` case is EXCLUDED from this rule** (§4.4) — a `text` child's `contentText` is NOT ignored (`childHtml`'s `isText` branch); what the void branch affects is a `text` node as the SSR **ROOT** (serializes `''`, §4.4) |
+| **FRG-H28 — the bare-text child append (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`; §4.3)** | a parent `div` (`createEl('div','p')`) with children created in childOrder `[text('A '), strong('bold', css:id 'b1'), text(' text')]`, appended in order | `createEl('text', …)` yields `{ openTag: '', closeTag: '', isVoid: true, isText: true }`; **`p.contentText === 'A <strong id="b1">bold</strong> text'`** — each `text` child contributes its bare `contentText`, the `strong` child its full `openTag + contentText + closeTag`; **no `<text>` substring appears anywhere in the output**; `toString()` equals that same string (root = `p`) |
+| **FRG-H29 — the `text`-as-root serialization (BARE-TEXT-EMIT; §4.4, pins the `rootHtml` consequence)** | `createEl('text','root')` as the FIRST create (so it is the root wire) + `setProp('root','text','bare')`, then `toString()` | `''` (or the styles prefix only, when a `styles` op ran) — a `text` root takes `rootHtml`'s **void** branch (`isVoid` is true, `openTag` is `''`), so its content is **not** serialized; no throw. **Explicitly the pinned intended behaviour** — a `text` node is a child shape, and a root `text` node degrades deterministically (see §4.4 for the ruling boundary; changing it needs its own gate) |
 | FRG-H21 | `setProp(w, 'css:id', 'k')` twice | `openTag` identical both times (`<div id="k">`); no duplicate `id="k"` string — D4 idempotency (R8) |
 | FRG-H22 | `setProp(w, 'css:id', 'k')` then `setProp(w, 'text', 'hi')` then read `openTag` | `openTag` regenerated from type + attr map, **unchanged** by the text set; `contentText === 'hi'` (R8) |
 | FRG-H23 | `createEl('div','w')` with `forkKey:'fk1'`, then `forkKey:'fk2'` (two creates, same wire) | two **distinct** descriptors in `fragments` (`wireKey`-keyed); independent; no clobber (R2) |

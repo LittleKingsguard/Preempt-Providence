@@ -38,6 +38,46 @@ export interface DomAdapterOptions {
 const FORM_CONTROLS = new Set(['TEXTAREA', 'INPUT', 'SELECT'])
 const VALUE_FORMS = new Set(['INPUT', 'TEXTAREA'])
 
+/** HOST/U1-ENG — the closed set of HTML BOOLEAN attributes (presence = true;
+ *  `checked="false"` is still PRESENT, the defect the generic `setAttribute`
+ *  path produced). `download` is deliberately absent (it is a value attr).
+ *  `docs/specs/handoffs-review-10.md` §5.1. */
+const BOOLEAN_ATTRS: ReadonlySet<string> = new Set([
+  'allowfullscreen',
+  'async',
+  'autofocus',
+  'autoplay',
+  'checked',
+  'controls',
+  'default',
+  'defer',
+  'disabled',
+  'formnovalidate',
+  'hidden',
+  'inert',
+  'ismap',
+  'itemscope',
+  'loop',
+  'multiple',
+  'muted',
+  'nomodule',
+  'novalidate',
+  'open',
+  'playsinline',
+  'readonly',
+  'required',
+  'reversed',
+  'selected',
+  'truespeed',
+  'typemustmatch',
+])
+
+/** Boolean-attribute truthiness: `false`, `0`, `'0'`, `'false'`, `''`, `null`,
+ *  `undefined` are OFF; everything else is ON. */
+function booleanAttrValue(v: unknown): boolean {
+  return !(v === undefined || v === null || v === false || v === 0 || v === '0' || v === 'false' || v === '')
+}
+
 export class DomAdapter implements RenderAdapter<HTMLElement | Text, Document> {
   readonly wires: Map<string, HTMLElement | Text> = new Map()
   readonly reused: Set<string> = new Set()
@@ -249,6 +289,17 @@ export class DomAdapter implements RenderAdapter<HTMLElement | Text, Document> {
       const attr = name.startsWith('prop:') ? name.slice(5) : name
       if (val === undefined) {
         elem.removeAttribute(attr)
+      } else if (BOOLEAN_ATTRS.has(attr)) {
+        // HOST/U1-ENG — presence/absence, never `attr="false"`. ON keeps the
+        // authored string form (`hidden="true"`, the existing pin); OFF removes
+        // the attribute. Reflect the DOM property when the element exposes one
+        // (`checked`/`selected`/`disabled`) so a `false` clears form state even
+        // when the property was dirtied.
+        const on = booleanAttrValue(val)
+        if (on) elem.setAttribute(attr, bakeValue(val))
+        else elem.removeAttribute(attr)
+        const el = elem as unknown as Record<string, unknown>
+        if (typeof el[attr] === 'boolean') el[attr] = on
       } else if (attr === 'value' && VALUE_FORMS.has(elem.tagName)) {
         ;(elem as HTMLInputElement).value = bakeValue(val)
       } else {
@@ -459,7 +510,13 @@ export class SSRFragmentAdapter implements RenderAdapter<FragmentDescriptor, str
     } else {
       const attr = name.startsWith('prop:') ? name.slice(5) : name
       if (val === undefined) state.attrs.delete(attr)
-      else state.attrs.set(attr, escapeAttr(val))
+      else if (BOOLEAN_ATTRS.has(attr)) {
+        // HOST/U1-ENG — a boolean attr emits its authored string form when ON
+        // (`hidden="true"`, the existing pin) and is absent when OFF (never
+        // `attr="false"`).
+        if (booleanAttrValue(val)) state.attrs.set(attr, escapeAttr(val))
+        else state.attrs.delete(attr)
+      } else state.attrs.set(attr, escapeAttr(val))
     }
     fd.openTag = this.openTag(state)
     this.rematerialize(fd)

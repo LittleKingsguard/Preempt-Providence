@@ -211,12 +211,30 @@ function fitReference(node: Node, name: string, slice: Node[], viable: ReadonlyS
   const own = providersOn(node, name)
   if (own.length > 0) return fit(own)
 
+  // SLICE-SCOPED DESCENT (PASS2-FIT-REFERENCE-SCOPE R1, spec §3 S1): the walk
+  // descends only into children that are members of the focused slice, so no
+  // out-of-slice node's `children` is ever read — neither the seed level (the
+  // resolving node's own children) nor any deeper level. Output-preserving by
+  // construction: `viable ⊆ slice` (node.ts:1119-1160 adds ids only from the
+  // slice iteration) keeps the yield test as safe as before; the engine's
+  // slices are DESCENDANT-CLOSED under `get children` (`focusedSliceFor` =
+  // parent-ward ∪ child-ward closure ∪ the provider universe, whose
+  // source/duplex predicate every family descendant inherits), so D_S(n) = D(n)
+  // for each slice member n and the bounded walk yields the IDENTICAL hit set in
+  // the IDENTICAL pre-order. A non-member child is skipped — which is parity-
+  // neutral because it yields no viable hit and its whole subtree is outside the
+  // slice — and an in-slice non-provider child is still descended THROUGH:
+  // membership bounds the walk, it never stops it. Child lists are read live at
+  // walk time (no cache, no new state).
+  const sliceSet = new Set<NodeId>()
+  for (const s of slice) sliceSet.add(s.id)
   const descendants: ProviderHit[] = []
-  const stack: Node[] = [...node.children]
+  const stack: Node[] = []
+  for (const c of node.children) if (sliceSet.has(c.id)) stack.push(c)
   while (stack.length > 0) {
     const d = stack.pop()!
     if (viable.has(d.id)) descendants.push(...providersOn(d, name))
-    stack.push(...d.children)
+    for (const c of d.children) if (sliceSet.has(c.id)) stack.push(c)
   }
   if (descendants.length > 0) return fit(descendants)
 

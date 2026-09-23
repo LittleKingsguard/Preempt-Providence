@@ -284,8 +284,14 @@ replace-in-place layer per hook).
    bypass (the api.md §1 letter's discipline; the amendment's answer to the
    §3/§2.2 raw-Node write-surface concern).
 2. **PRECEDENCE** — one `providerValueFor(owner, anchor, name)` — hook layer
-   first, authored `a.value` fallback — at resolve.ts:307/314,
-   resolve.ts:189, node.ts:276, node.ts:1401-1402, and the emit-time def-fill
+   first, authored `a.value` fallback — at the **call sites** `resolve.ts:39`/`:44`
+   (inside `providerValueFromLink`; the function itself is `resolve.ts:25`),
+   ✎ **2026-09-23 citation repair (`STALE-RESOLVE-ANCHORS`): the previously
+   cited `resolve.ts:307/314` no longer resolves — those lines are now inside
+   `placementChangeIrrelevant`'s doc comment; cite BY SYMBOL, not by line.**
+   `resolve.ts:189` (`fallbackTermination`'s `kindDropReason(chainKindOf(...))`
+   term read) is **still correct as cited**; the other read sites are
+   node.ts:276, node.ts:1401-1402, and the emit-time def-fill
    read render-helpers.ts:724-725. Hook wins; the authored value is the
    cleared-hook fallback (clearing the hook restores the authored value).
 3. **CASCADE** — the state-slice branch reuses the E2E-3 consumer walk
@@ -402,8 +408,11 @@ def case), §5.4 duplicate warns (recast as the seam-name guard +
   value via the layer's `hookFallback`), the resolve.ts helper set
   (`providerValueFor` / `providerValueFromLink` / `hookWriteGuard` /
   `hookAnchorFor` / `isDefShapedValue`) wired at the five read sites
-  (resolve.ts:307/314 + resolve.ts:189, node.ts seedOwnBindings +
-  materializeSeam, render-helpers.ts:724-725), the supervisor state-slice
+  (resolve.ts:39/44 + resolve.ts:189, node.ts seedOwnBindings +
+  materializeSeam, render-helpers.ts:724-725) — ✎ **2026-09-23 citation repair
+  (`STALE-RESOLVE-ANCHORS`): `resolve.ts:307/314` is stale (those lines are
+  inside `placementChangeIrrelevant`'s doc comment); the live call sites are
+  `:39`/`:44`. Cite BY SYMBOL.** — the supervisor state-slice
   ENTRY gate (`hook-name-unresolved` / `hook-mode-blocked` rejections on
   `ApplyErrorCode`; `hook-seam-exempt` warn + no-op), and the E2E-3
   consumer cascade (supervisor.ts:412-420 — inherited, verified). Tests:

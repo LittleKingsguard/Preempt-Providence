@@ -23,6 +23,13 @@ import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, Place
 
 let journalSeq = 0
 
+/** ENG-JOURNAL-ENTRY-READ-API — `journalEntries` window sizing. */
+const DEFAULT_JOURNAL_WINDOW = 500
+const MAX_JOURNAL_WINDOW = 1000
+/** The cursor-relative default window peeks this far past the cursor so an
+ *  undone (redo-able) tail is visible without an explicit `afterIndex`. */
+const REDO_PEEK = 50
+
 /**
  * Bounded pass-2 slice for one changed node: the node itself, its ancestor
  * chain and its subtree — the walk path. PLUS, only when the walk path
@@ -103,6 +110,47 @@ export interface UndoRedoReport {
   baseBoundary: boolean
 }
 
+/** ENG-JOURNAL-ENTRY-READ-API (docs/specs/journal-read-access-review.md,
+ *  DECIDED 2026-09-12) — the sanitized journal-read surface. A row carries ONLY
+ *  the absolute position and the coerced op-kind / last-apply status: never a
+ *  live Node ref (`op.node`/`op.target`), a snapshot payload (the `base` op's
+ *  `op.snapshot`), a raw `result.dirtied`, or the internal entry id. */
+export interface JournalEntryView {
+  index: number
+  kind: string
+  status: string
+}
+
+/** Window options for `Supervisor.journalEntries`. */
+export interface JournalViewOptions {
+  /** Absolute start override (clamped to `[0, total]`); when omitted the window
+   *  is cursor-relative (a REDO_PEEK span ahead of the cursor). */
+  afterIndex?: number
+  /** Window size (default 500; clamped `[1, 1000]`). */
+  limit?: number
+}
+
+/** The sanitized, JSON-safe journal snapshot returned by `journalEntries()`. */
+export interface JournalView {
+  entries: JournalEntryView[]
+  fromIndex: number
+  totalEntries: number
+  truncated: boolean
+  undoDepth: number
+  redoDepth: number
+  /** A `base` condense marker exists anywhere in the journal (independent of
+   *  `undoBaseBoundary`, which is true only at the floor). */
+  basePresent: boolean
+  undoBaseBoundary: boolean
+  /** Omitted when the undo stack is empty (`exactOptionalPropertyTypes`). */
+  undoTopKind?: string
+  /** Omitted when the redo stack is empty. */
+  redoTopKind?: string
+  /** Omitted when undefined (no journal condensing configured). */
+  maxJournalLength?: number
+}
+
+
 /** Shared-host dispatch report (ssr-synthetic-event.md §3.1). */
 export interface DispatchReport {
   results: HandlerResult[]
@@ -152,6 +200,9 @@ export class Supervisor {
    *  (D5). Read-only once constructed. */
   private readonly maxJournalLength: number | undefined
   private condenseScheduled = false
+  /** ENG-SUPERVISOR-HOOK-ACCUMULATION — the module finalize-hook unsubscribe
+   *  returned by `onNodeFinalized`; called by `dispose()`. */
+  private finalizeUnsub: () => void = () => {}
 
   constructor(rootOrOpts: Node | { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number; graphScope?: GraphScope }, nodes?: Map<NodeId, Node>) {
     this.hub = null
@@ -177,12 +228,23 @@ export class Supervisor {
     // holds is tombstoned here — the id-keyed delete would otherwise remove a
     // DIFFERENT graph's re-seeded node sharing the same id (the smoke runs
     // several loadState-re-seeded graphs in one process with shared ids).
-    onNodeFinalized((node) => {
+    this.finalizeUnsub = onNodeFinalized((node) => {
       if (this.nodes.get(node.id) === node) {
         this.nodes.delete(node.id)
         this.destroyedRefs.set(node.id, node)
       }
     })
+  }
+
+  /** ENG-SUPERVISOR-HOOK-ACCUMULATION — release this Supervisor's module-level
+   *  finalize hook + its node maps. Idempotent; a disposed Supervisor is inert.
+   *  The module sweep timer is untouched; other Supervisors are unaffected. */
+  dispose(): void {
+    this.finalizeUnsub()
+    this.finalizeUnsub = () => {}
+    this.nodes.clear()
+    this.destroyedRefs.clear()
+    this.pass2Dirty.clear()
   }
 
   getNode(id: NodeId): Node | undefined {
@@ -231,6 +293,56 @@ export class Supervisor {
 
   get undoBaseBoundary(): boolean {
     return this.undoStack.length === 0 && this.journal.some((e) => e.op.kind === 'base')
+  }
+
+  /**
+   * ENG-JOURNAL-ENTRY-READ-API — a sanitized, non-draining snapshot of the
+   * journal + the exact position accessors. JSON-safe (never live Node refs /
+   * snapshot payloads). Read-only: never mutates, drains, awaits, or re-renders.
+   * Pagination is by absolute index; `limit` is clamped [1, MAX_JOURNAL_WINDOW].
+   */
+  journalEntries(opts?: JournalViewOptions): JournalView {
+    const total = this.journal.length
+    const basePresent = this.journal.some((e) => e.op.kind === 'base')
+    const limitRaw = opts?.limit
+    const limit = limitRaw === undefined
+      ? DEFAULT_JOURNAL_WINDOW
+      : Math.min(Math.max(Math.floor(limitRaw), 1), MAX_JOURNAL_WINDOW)
+    let fromIndex: number
+    if (opts?.afterIndex !== undefined) {
+      fromIndex = Math.min(total, Math.max(0, Math.floor(opts.afterIndex)))
+    } else {
+      const cursorIndex = (basePresent ? 1 : 0) + this.undoStack.length
+      const toIndex = Math.min(total, cursorIndex + REDO_PEEK)
+      fromIndex = Math.max(0, toIndex - limit)
+    }
+    const end = Math.min(total, fromIndex + limit)
+    const entries: JournalEntryView[] = []
+    for (let i = fromIndex; i < end; i++) {
+      const e = this.journal[i]!
+      entries.push({
+        index: i,
+        kind: typeof e.op?.kind === 'string' ? e.op.kind : 'unknown',
+        status: typeof e.result?.status === 'string' ? e.result.status : 'unknown',
+      })
+    }
+    const truncated = entries.length > 0 ? fromIndex > 0 || end < total : fromIndex < total
+    const view: JournalView = {
+      entries,
+      fromIndex,
+      totalEntries: total,
+      truncated,
+      undoDepth: this.undoStack.length,
+      redoDepth: this.redoStack.length,
+      basePresent,
+      undoBaseBoundary: this.undoBaseBoundary,
+    }
+    const undoTop = this.undoStack.at(-1)?.op.kind
+    if (undoTop !== undefined) view.undoTopKind = undoTop
+    const redoTop = this.redoStack.at(-1)?.op.kind
+    if (redoTop !== undefined) view.redoTopKind = redoTop
+    if (this.maxJournalLength !== undefined) view.maxJournalLength = this.maxJournalLength
+    return view
   }
 
   /** UNDO-REDO-REPORT — build the report from the post-op stacks, omitting the

@@ -1,6 +1,6 @@
 {
   "name": "provident-ssr",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "description": "The Preempt-Providence reactive render engine — legacy-envelope translate, anchor-graph Supervisor, handlers, SSR/DOM render adapters.",
   "license": "AGPL-3.0",
   "repository": {
@@ -39,8 +39,10 @@
     "prepublishOnly": "npm test && npm run typecheck",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run && vitest run --config vitest.smoke.config.ts",
+    "test:unit": "vitest run",
+    "test:smoke-ops": "vitest run --config vitest.smoke.config.ts",
+    "test:watch": "vitest --exclude 'tests/unit/no-clone-guards.test.ts'",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "demo:build": "tsc -p tsconfig.demo.json",
     "demo": "npm run demo:build && node scripts/build-demo.mjs && node scripts/serve-demo.mjs",

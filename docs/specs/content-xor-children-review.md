@@ -34,6 +34,26 @@ text-before-a-child-AND-after-it. The `Some <strong>bold</strong> text` case
 
 - Every element gets a wrapper (`adapters.ts:362-376` createEl); there is **no
   wire-less bare-text node** — a `text` type renders `<text>…</text>`, not bare text.
+  > **⚠ AMENDED / SUPERSEDED-IN-PART (2026-09-22 — UR-2/W2, `docs/specs/ur-2026-09-17-review.md` §4 UR-2 + §7 AC-16; `docs/decisions.md` BODYRUNS-REMOVABILITY + BARE-TEXT-EMIT rows):**
+  > **this sentence was TRUE at the 2026-08-31 gate and became FALSE at 0.4.0.**
+  > The **BARE-TEXT-EMIT** `text` child **IS** a wire-less-element bare-text node
+  > — SSR: `isText` + empty `openTag`/`closeTag`, `childHtml` returns
+  > `contentText` only (`src/core/adapters.ts:452-459`, `:622-627`); DOM:
+  > `createEl` returns `document.createTextNode('')` (`:143-159`). A `text` child
+  > therefore renders **bare text**, not `<text>…</text>`.
+  > **What still stands in this §2:** the OTHER half of the finding — that a
+  > `<span>`/`text`-node **child** cannot express **mid-line** interleaving,
+  > because the parent's own `content` always renders before all children
+  > (`escapeText(state.text) + body`, `adapters.ts:524`). That is why `bodyRuns`
+  > remains the sole carrier of the parent-scalar-content-interleave.
+  > **Do NOT read the amended sentence as a live claim.** Scope of the new
+  > contract: **`>=0.4.0 <1.0.0`** (`docs/specs/adapters.md` §3.1/§3.2/§4.1/
+  > §4.3/§4.4, `docs/specs/render.md`, `docs/specs/node.md` §2), with the 1.0.0
+  > revisit. **`bodyRuns` removability is likewise RULED** (branch (b): removed
+  > at the 1.0.0 major) — this document's §4 "cannot be removed without a
+  > semver-major break" is correct but under-specified; see §6 below, which is
+  > annotated and **not** rewritten (§3 and §6 of this document STAND — this
+  > document does NOT argue un-removability).
 - A `text` node with no element boundary is exactly what `bodyRuns` provides and a
   `<span>`/`text` element structurally cannot.
 
@@ -83,6 +103,12 @@ The proposal conflates two distinct needs:
   1. Keep content+children legal for the default render (status quo; no change).
   2. Keep `bodyRuns` deprecated-but-present (do NOT remove; it is published API and
      the only solution to mid-line interleaving).
+     — **[versioned ruling, 2026-09-22 (UR-2): the "do NOT remove" half is
+     superseded by branch (b) — `bodyRuns` IS removed, at the 1.0.0 major
+     (`docs/decisions.md` BODYRUNS-REMOVABILITY row; the shipped
+     `bodyruns-deprecated` warn already says "removed at the next major"). What
+     stands here is "deprecated-but-present, and NOT redundant". The sentence
+     above is annotated, not rewritten, per §7 AC-16.]**
   3. Add a documented `<span>` recommendation for the trivial after-content case:
      "to place literal text beside child nodes, put a `<span>` in `children[]` at
      the desired position; this renders text *after* the parent's own content. For
@@ -96,6 +122,18 @@ The proposal conflates two distinct needs:
   allow-list, treeSig/treeFromOps support) for marginal benefit over the documented
   `<span>` pattern. Revisit only if a concrete need for wire-less text (no wrapper
   element, no `bodyRuns`) emerges.
+  > **⚠ PARK DISCHARGED — REVISIT CONDITION FIRED (2026-09-22 — UR-2/W2; `docs/decisions.md` BARE-TEXT-EMIT row, `docs/specs/bare-text-emit-review.md` §7):**
+  > the revisit condition **"a concrete need for wire-less text (no wrapper
+  > element, no `bodyRuns`)"** was met and the item **SHIPPED**: the `text` node
+  > type with a bare-text emit landed at **0.4.0** (**BARE-TEXT-EMIT**, Shape A1 —
+  > SSR `isText` + empty tags + `childHtml` → `contentText`; DOM
+  > `document.createTextNode('')`; `emitOne`'s `type === 'text'` early return).
+  > The machinery this PARK predicted is exactly what was built (bare-text
+  > `contentText` branch, the no-element `createEl` path, the emit-time
+  > content-only filter). **The park is DISCHARGED, not re-opened** — the contract
+  > now lives in the behaviour specs (`docs/specs/adapters.md` §3.1/§3.2/§4.1/
+  > §4.3/§4.4/§6 + §10.1/§10.2, `docs/specs/render.md`, `docs/specs/node.md` §2),
+  > scoped **`>=0.4.0 <1.0.0`**.
 
 **Salvageable element:** the `<span>` best-practice documentation note. No engine
 code changes.

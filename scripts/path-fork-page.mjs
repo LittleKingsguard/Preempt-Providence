@@ -24,12 +24,26 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { pathForkLegacyData, pathForkServerData, pathForkSsrSample } from '../demo/path-fork-data.js'
+import { pathForkLegacyData, pathForkServerData, pathForkSsrSample, derivedDefFillChildlessCount } from '../demo/path-fork-data.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 /** Family numbers for a depth: 2·(depth−1) prototypes, 2·depth−1 graph nodes,
- *  2^depth − 1 path-states/elements, states − 3 re-typed link elements. */
+ *  2^depth − 1 path-states, `states − 3` re-typed link elements (the root + the
+ *  two level-1 states are standalone at every depth, so the re-typed set is the
+ *  rest), and the ELEMENT census `2^depth − 1` PLUS the childless def-host
+ *  def-fill term.
+ *
+ *  THE SHALLOW EXCEPTION (ruled 2026-09-23 — `FD7-D2-LINK-CENSUS`): the link
+ *  variant emits 7 = 3 path-state elements + 4 synthetic def-fill children at
+ *  d2 ONLY — the two level-1 def hosts' path-states are CHILDLESS there, so the
+ *  covered-CHILDLESS gate does not fire for them and the standalone P-EMIT-3
+ *  def-fill pushes their `<wire>:a`/`:b` children
+ *  (`src/core/render-helpers.ts:743-746`; the gate's rationale at `:733-742`;
+ *  contract `docs/specs/render.md:224` DFC-1). At `depth ≥ 3` those hosts have
+ *  real children and the census is exactly `2^depth − 1` for every method. The
+ *  term is read from the family's own envelope
+ *  (`derivedDefFillChildlessCount`), never a literal. */
 function familyFor(depth) {
   const states = 2 ** depth - 1
   return {
@@ -39,11 +53,14 @@ function familyFor(depth) {
     layers: depth - 1,
     states,
     retyped: states - 3,
+    // the link variant's shallow def-fill term (0 at every depth ≥ 3)
+    defFill: derivedDefFillChildlessCount('link', depth),
   }
 }
 
 function methodMetaFor(method, f) {
-  const { depth, nodes, prototypes, layers, states, retyped } = f
+  const { depth, nodes, prototypes, layers, states, retyped, defFill } = f
+  const elements = states + (method === 'link' ? defFill : 0)
   const h1 = (label) =>
     `Path Fork (${label}) — ${nodes} nodes → <code>2<sup>${depth}</sup> − 1 = ${states}</code> path-states in ONE compile pass`
   if (method === 'values') {
@@ -58,8 +75,8 @@ function methodMetaFor(method, f) {
     return {
       title: `Path Fork (link-derived) — ${prototypes} prototypes, ONE path-enumeration pass`,
       h1: h1('link-derived'),
-      goals: `The link member of the DERIVED TRIO (placement / values / link — derived-fork-variants-review §5.1): the SAME ${prototypes}-prototype binary topology, every prototype additionally carrying <code>component: {reference: 'link-&lt;k&gt;', value: &lt;linkDefForLevel(k)&gt;}</code> — the component DEF (prototype-as-child link) as the source value (the fork-stress-data.js link shape). Every path-state is a def consumer whose OWN children are re-typed by the def at emit time — the recursive def chain over path-states (P-EMIT-3 carve-out). The ${states}-element census holds via the covered-leaf def-fill gate (DEFECT #21 — render.md:185 letter). The checks add the def-chain re-type assertions (div type, def content for k &gt; 1, the child's OWN props on re-typed elements) + the re-typed-element count pin (${retyped} bare-wire elements, no forkKey — the adapter-key asymmetry).`,
-      methodNote: `Link-derived: every prototype provides a component DEF; the def re-types the next layer at emit time (${states} elements post the covered-leaf gate).`,
+      goals: `The link member of the DERIVED TRIO (placement / values / link — derived-fork-variants-review §5.1): the SAME ${prototypes}-prototype binary topology, every prototype additionally carrying <code>component: {reference: 'link-&lt;k&gt;', value: &lt;linkDefForLevel(k)&gt;}</code> — the component DEF (prototype-as-child link) as the source value (the fork-stress-data.js link shape). Every path-state is a def consumer whose OWN children are re-typed by the def at emit time — the recursive def chain over path-states (P-EMIT-3 carve-out). The element census is <code>2<sup>d</sup> − 1</code> = ${states} for every d ≥ 3 (the covered-CHILDLESS gate keeps the link leaves' def-fill from becoming phantoms — DEFECT #21, render.md:224 DFC-1) and <code>7 = 3 + 4</code> at <b>d2</b>, where the two level-1 def hosts are themselves childless and the standalone def-fill therefore fires (<code>render-helpers.ts:743-746</code>) — the documented boundary of the gate, NOT a regression. This page is d${depth}, so its census is ${elements} elements. The checks add the def-chain re-type assertions (div type, def content for k &gt; 1, the child's OWN props on re-typed elements) + the re-typed-element count pin (${retyped} bare-wire elements, no forkKey — the adapter-key asymmetry) + the d2 def-fill shape pin.`,
+      methodNote: `Link-derived: every prototype provides a component DEF; the def re-types the next layer at emit time (${elements} elements at d${depth} post the covered-leaf gate${defFill ? `: ${states} path-states + ${defFill} shallow def-fill children` : ''}).`,
     }
   }
   return {

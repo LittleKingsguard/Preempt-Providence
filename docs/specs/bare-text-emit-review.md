@@ -61,9 +61,31 @@ A1's DOM cascade (understated in the plan) — the precise seams:
 **Enforcement point: EMIT, not translate.** validation.ts is an opt-in registry
 (registerTagSchema + explicit validateNode), not in the render pipeline; a consumer never
 calling it bypasses any translate rule. So emitElements/emitOne filters a `text` child to
-the `text` prop only (skip stampNodeId/css/handlers), emits a deterministic
-`text-content-only` warn for rejected props, and the DomAdapter `instanceof Text` guard is
-the defensive backstop.
+the `text` prop only (skip stampNodeId/css/handlers), and the DomAdapter `instanceof Text`
+guard is the defensive backstop.
+
+> **ERRATUM (2026-09-22 — N6, `docs/specs/ur-2026-09-17-review.md:235`; gate records are append-only-with-annotations).**
+> **This passage overstated the warn site. As LANDED, the enforcement point and the
+> warn site are DIFFERENT SEAMS — this is a correction of an unreachable claim, not a
+> behaviour change (no W4 clause moves):**
+>
+> | Claim as written here | The truth (re-derived from the code) |
+> | --- | --- |
+> | *"emitElements/emitOne filters a `text` child to the `text` prop only (skip stampNodeId/css/handlers)"* | **CORRECT** — `emitOne`'s `if (s.type === 'text')` early return (`src/core/render-helpers.ts:1155-1162`) emits only `props['text']` (from `scalarBinding(s.bindings) ?? s.content`) and performs no `prop:`/`css:`/`on:`/`data:` mapping, no `stampNodeId`, and `childOrder: []`. The filter is **SILENT** |
+> | *"emits a deterministic `text-content-only` warn for rejected props"* | **FALSE — there is NO emit-time warn site.** The only `text-content-only` warn is **TRANSLATE-time and legacy-JSON-only** (`src/core/translate.ts:956-958`, gated on authored `data.props`/`data.css`/`data.handlers`/`data.placement`). A **programmatically constructed** `text` node warns **NEVER** |
+> | *"the DomAdapter `instanceof Text` guard is the defensive backstop"* | **CORRECT IN SUBSTANCE, DIFFERENT TEST** — the landed guard is `el.nodeType === 3` (`src/core/adapters.ts:183-187`), chosen so it also works in shimmed DOM environments where the `Text` global is absent |
+>
+> **What this means for the contract (AC-8 + AC-9):** the owning behaviour specs state
+> the emit rule as **silent filtering** and claim **no** emit-time warn —
+> `docs/specs/render.md` §3.2b (BT-EMIT-5) and `docs/specs/adapters.md` §3.2's
+> silent-filter note. Whether an emit-time warn should be **BUILT** is a
+> W4-adjacent decision (it would be a code change with its own red set), NOT a doc
+> fix; the diagnostic contract that would host it is
+> `docs/specs/bodyruns-drop-diagnostics.md` (§3 C5 covers only the `text`-node
+> children/`bodyRuns` silence, and its §2.2 row 9 explicitly leaves
+> `content-with-children-recommended` out of scope). Tracked as defect **N6**
+> (`docs/defects.md`) and corrected in the `docs/decisions.md` BARE-TEXT-EMIT row
+> (✎ ENFORCEMENT-SITE CORRECTION).
 
 ## 4. Versioning + migration
 
@@ -97,10 +119,16 @@ Red set (AGENTS.md item 8):
 - Ordering: `[text,strong,text]` ≠ `[strong,text,text]` (orderSig).
 - Content-only: `text` with props/css/handlers/placement → `text-content-only` warn, op
   filtered, DOM guard degrades safe (no throw).
+  **[ERRATUM 2026-09-22 — N5: the op filter is SILENT at emit and this `text-content-only`
+  warn is the TRANSLATE-time one, legacy-JSON only (see the §3 ERRATUM); a programmatic
+  `text` node warns never.]**
 - Whitespace: text content preserved verbatim.
 - Round-trip: text-child translate → emit → reverse faithful.
 - bodyRuns deprecation: emitting bodyRuns → `bodyruns-deprecated` warn, render unchanged.
 - content+children: `content-with-children-recommended` warn, render unchanged.
+  **[ERRATUM 2026-09-22 — N5: this warn was NOT built at 0.4.0. It is DEFERRED to
+  the 1.0.0 major and the string exists nowhere in `src/` — see §4/§7 below and
+  the `docs/decisions.md` BARE-TEXT-EMIT row's ✎ N5 CORRECTION.]**
 
 ## 7. Verdict
 
@@ -123,6 +151,20 @@ build, demo:smoke (handlers 25/0, rows 10/0, fork-stress pins within 2.5×).
 ### Decision records
 - **DECIDED:** A1 over A2 (A2 recreates the bodyRuns coupling).
 - **DECIDED:** content-only enforced at EMIT (+ DomAdapter Text guard), not translate.
+  **(✎ 2026-09-22 — N6: the ENFORCEMENT is at emit and it is SILENT; the
+  `text-content-only` WARN is translate-time/legacy-JSON-only. See §3's ERRATUM.)**
 - **DECIDED:** 0.4.0 additive now (text-child + `text-content-only` + `bodyruns-deprecated`
   warns); `content-with-children-recommended` + XOR render enforcement + bodyRuns removal +
   migration at 1.0.0 major.
+  **(✎ 2026-09-22 — N5: the `content-with-children-recommended` warn is DEFERRED, not
+  shipped at 0.4.0.)**
+- **DECIDED (2026-09-22 — W3 fold, `docs/specs/ur-2026-09-17-review.md` §4 UR-1 / §7 AC-1..AC-12):**
+  this gate record is a **HISTORICAL** record; the bare-`text` emit contract now lives in
+  the BEHAVIOUR specs — `docs/specs/render.md` §3.2b (the register entry + emit rule,
+  `>=0.4.0 <1.0.0`), `docs/specs/adapters.md` §3.1 step 0 / §3.2 Text-owner rows / §4.1 /
+  §4.3 / §4.4 / §6, `docs/specs/node.md` §2.1. Cite those for behaviour; cite this record
+  for provenance only.
+- **DECIDED (2026-09-22 — UR-2, `docs/decisions.md` BODYRUNS-REMOVABILITY row):** the
+  "removed at the major" phrasing in §2/§5/§7 above is now a **versioned ruling** —
+  branch (b), **removed at the 1.0.0 major**. §2's "This pass: bodyRuns kept-deprecated,
+  not removed" stays correct *for 0.4.0* and is not a claim about removability.

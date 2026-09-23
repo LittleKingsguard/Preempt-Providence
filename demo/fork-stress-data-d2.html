@@ -11,62 +11,69 @@
     FORK STRESS DEMO — DATA-DRIVEN VARIANT of the layered stress test.
 
     ⚠ DEMO-PAGE TEST CASE — NOT expected real-world behavior. No production
-    app builds a binary tree by cloning prototypes recursively; the page
-    exists to prove the same deep binary stress tree can be assembled from a
-    LEGACY envelope alone:
+    app builds a binary tree from prototypes; the page exists to prove the deep
+    binary stress tree can be assembled from a LEGACY envelope alone, by PATH
+    ENUMERATION over 2·(depth−1) + 1 prototype nodes — the SAME construction as
+    the static derived family (docs/specs/placement-path-spec.md §2/§5), but
+    with the translation AND the census assertion performed at RUNTIME by the
+    page (fork-stress-data-p3.md §3 K5: this family is not a duplicate of the
+    static one — its builder embeds NO compiled expectation).
 
       • `preempt-initial-data` carries the LEGACY initial-data envelope
         (template.root + content payload with TWO prototype nodes per layer —
         one per sibling slot — plus clientConfig). NOT a serialized anchor
         document: translateLegacy parses it.
-      • Each prototype declares its `after-compile` handler BY NAME
-        (`handlers: [{ name: 'stress-expand', phase: 'after-compile' }]`);
-        the page module supplies the BODY for that name (functions cannot be
-        JSON-serialized).
-      • The page clones the layer-1 prototypes onto the root; each clone
-        inherits its prototype's handler, which expands the next layer by
-        cloning the layer+1 prototypes under it (recursive assembly). The
-        supervisor registers/attaches/marks every copy, so the tree grows
-        from the data alone.
+      • Each prototype declares its `placement` ROLES — producer
+        `placementName: 'zone-<k>'` plus (k ≥ 2) consumer
+        `targetPlacement: ['zone-<k−1>']`. Both level-(k−1) prototypes own the
+        SAME zone name, so first-match picks that name and its two sibling
+        containers fan the owner path per hop ⇒ 2^depth − 1 path-states over
+        2·depth − 1 nodes.
+      • NO handler, NO clone-instance, NO after-compile expansion: the tree is
+        compiled by ONE path-enumeration bootstrap. The per-method mechanism
+        (values / link) is declared as pure DATA on the prototypes.
       • The page uses ONLY core (dist/core/*) + the shared data-derivation
-        helpers (levelCss/cssPropForLevel) — no demo-fixtures, no demo-side
-        render machinery.
+        helpers (levelCss/cssPropForLevel/linkDefForLevel) — no demo-fixtures,
+        no demo-side render machinery, no page-side anchor attach.
 
-    Every node carries `stress:layer` (its depth) and `stress:layers` (the
-    chain of layer mechanisms from root to it) — depth + tree-back-to-root.
-  ============================================================================
+    Every element documents its depth (`stress:layer` + the `data-depth` badge)
+    and its path back to root (the derived `data-path` attribute).
+    ============================================================================
   -->
 
   <main>
-    <h1>Fork Stress (data-driven) — depth 2 (<code>2<sup>2</sup> − 1 = 3</code> layer nodes + 1 root)</h1>
+    <h1>Fork Stress (data-driven) — depth 2 (<code>2<sup>2</sup> − 1 = 3</code> path-states over 2·depth − 1 nodes)</h1>
     <p class="goals">
-      Layer cycle: placement → component values → component link → handler
-      (repeats with different placement/component names). Each layer doubles
-      the node count. The whole tree is assembled from a LEGACY envelope of
-      two prototypes per layer: each prototype declares its <code>stress-expand</code>
-      after-compile handler by name, the page supplies the body, and cloning
-      (the <code>clone-instance</code> op) recurses layer by layer. The shared
-      harness asserts per-layer node counts, css property/slot pairs, method
-      kinds, DOM nesting, ancestry chains, handler idempotency, and the
-      incremental render contract (no render-side compile after bootstrap).
+      Each layer doubles the PATH count (2<sup>k</sup> path-states at level k)
+      while the graph keeps TWO prototype nodes per layer. The whole tree is
+      assembled from a LEGACY envelope of two prototypes per layer, each owning
+      one shared placement zone name — the path enumeration multiplies the two
+      sibling containers of the chosen name per hop (<code>2<sup>depth</sup> − 1</code>
+      states and elements from <code>2·(depth − 1) + 1</code> nodes,
+      <code>cloneOps = 0</code>). The shared harness asserts the census
+      (registered/in-tree/unplaced/destroyed measured from the registry;
+      <code>cloneOps</code> measured from the page's own journal), the per-level
+      element counts, css property/slot pairs, the derived path display, the
+      per-method mechanism checks, and the render contract (ONE enumeration
+      bootstrap, no pass-2 region).
     </p>
 
     <!-- Framework input: the LEGACY envelope (translateLegacy input — NOT a
          serialized anchor document; spec: docs/specs/fork-stress-data.md). -->
-    <script id="preempt-initial-data" type="application/json">{"template":{"root":{"type":"app","props":{"id":"stress-root"}}},"content":[{"metadata":{"title":"fork-stress prototypes"},"content":[{"type":"div","props":{"stress:layer":1,"stress:slot":"a","stress:kind":"placement","stress:handler":"stress-expand","data-depth":"1"},"css":{"classes":["fs-node"],"style":"background-color: hsl(53, 70%, 50%); --stress-depth: 1;"},"handlers":[{"name":"stress-expand","phase":"after-compile"}],"derived":{"props":{"stress:expanded":{"$if":{"cond":{"$gt":[{"$":"children.length"},0]},"then":true,"else":false}},"data-path":{"$":"pathKey"}}}},{"type":"span","props":{"stress:layer":1,"stress:slot":"b","stress:kind":"placement","stress:handler":"stress-expand","data-depth":"1"},"css":{"classes":["fs-node"],"style":"background-color: hsl(93, 70%, 50%); --stress-depth: 1;"},"handlers":[{"name":"stress-expand","phase":"after-compile"}],"derived":{"props":{"stress:expanded":{"$if":{"cond":{"$gt":[{"$":"children.length"},0]},"then":true,"else":false}},"data-path":{"$":"pathKey"}}}}]}],"clientConfig":{"runInstantiation":false,"runMonitoring":true}}</script>
-    <script id="server-data" type="application/json">{"depth":2,"layerMethods":["placement","values","link","handler"],"layerNames":["placement-1"],"expected":{"perLayer":[2],"total":3}}</script>
+    <script id="preempt-initial-data" type="application/json">{"template":{"root":{"type":"app","props":{"id":"stress-root"},"derived":{"props":{"stress:expanded":{"$if":{"cond":{"$gt":[{"$":"children.length"},0]},"then":true,"else":false}}}},"children":[{"type":"div","props":{"id":"p1a","stress:layer":1,"stress:slot":"a","data-depth":"1"},"css":{"classes":["fs-node"],"style":"background-color: hsl(53, 70%, 50%); --stress-depth: 1;"},"placement":{"placementName":"zone-1"},"derived":{"props":{"stress:expanded":{"$if":{"cond":{"$gt":[{"$":"children.length"},0]},"then":true,"else":false}},"data-path":{"$":"pathKey"}}}},{"type":"span","props":{"id":"p1b","stress:layer":1,"stress:slot":"b","data-depth":"1"},"css":{"classes":["fs-node"],"style":"background-color: hsl(93, 70%, 50%); --stress-depth: 1;"},"placement":{"placementName":"zone-1"},"derived":{"props":{"stress:expanded":{"$if":{"cond":{"$gt":[{"$":"children.length"},0]},"then":true,"else":false}},"data-path":{"$":"pathKey"}}}}]}},"content":[{"metadata":{"title":"fork-stress prototypes"},"content":[]}],"clientConfig":{"runInstantiation":false,"runMonitoring":true}}</script>
+    <script id="server-data" type="application/json">{"depth":2,"layerMethods":["placement","values","link","handler"],"layerNames":["placement-1"]}</script>
 
     <section>
       <h2>Layered stress tree (live DOM)</h2>
       <p class="expect">
-        Every element is framework-rendered. Each node shows its
-        <code>stress:layers</code> chain (layer mechanisms from root to it).
+        Every element is framework-rendered — one element per path-state. Each
+        shows its depth and its <code>data-path</code> back to root.
       </p>
       <div id="app"></div>
     </section>
 
     <section>
-      <h2>Layer plan (embedded)</h2>
+      <h2>Path plan (embedded)</h2>
       <pre id="layer-plan" class="doc"></pre>
     </section>
 

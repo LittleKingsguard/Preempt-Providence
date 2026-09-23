@@ -102,6 +102,45 @@ Diff rules (prev vs next `MinimalElement`, per wire):
 
 Every emitted op **forwards the element's `forkKey`** — the DEFECT #1 fix (P3 §4.3/§6.5, shipped as the emit prerequisite) made this canonical for `emitElements` as well as `minimalFromState`, so actionable fork arms and path-states stay distinct at the adapter boundary (adapters.md §2/R2; `append` carries no forkKey — it targets the already-created arm entries).
 
+### 3.2b The `text` node type — its register entry + its emit rule (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`)
+
+**The `text` node type is a REGISTERED emit-time type**: a node whose compiled
+`type === 'text'` emits as a **bare-text element** — an element-shaped
+`MinimalElement` with an empty-body product and **no wrapper**, ordered
+deterministically by `childOrder` exactly like any other child. This subsection is
+the **owning behaviour-spec home of the emit RULE**; the ADAPTER products are
+specified in `docs/specs/adapters.md` (§3.1 step 0 + §3.2 Text-owner rows for the
+DOM; §4.1/§4.3/§4.4 for the SSR) and the data TYPE is specified in
+`docs/specs/node.md` §2.1. Nothing here is restated there, and vice versa (AC-30).
+
+| Rule | Statement |
+| --- | --- |
+| **BT-REG-1 — the wire** | the `text` state emits on the standard wire scheme: its `pathKey` when it is a path-state, `nodeId#<i>` for a component fork arm, its `nodeId` otherwise (`render-helpers.ts:1148`) — a `text` node is NOT a special wire case |
+| **BT-EMIT-1 — content only** | `emitOne` takes an early-return branch when `s.type === 'text'`: the emitted element carries **ONLY `props['text']`**, computed as `scalarBinding(s.bindings) ?? s.content`, and **only when that value is not `undefined`**. All other compiled data on the state is **ignored by construction** — there is **no** `prop:*` / `css:*` / `on:*` / `data:` mapping |
+| **BT-EMIT-2 — `stampNodeId` skipped** | the `data:node-id` stamp is NOT applied to a `text` element (even when `renderOptions.nodeIdAttribute` is on) — a Text owner has no attributes to carry it |
+| **BT-EMIT-3 — `childOrder: []`** | the emitted `childOrder` is hard-coded **empty**: a `text` node never emits children, so authored `children` (and an authored `bodyRuns`) on a `text` state are not represented in the emit. **(The silent-loss half of this is defect N2 and is closed by the W4 diagnostic contract `docs/specs/bodyruns-drop-diagnostics.md` §3 C5 — that spec owns the diagnostic; this spec owns the emit shape.)** |
+| **BT-EMIT-4 — the auto-minted `props.id` is dropped** | `ensureAutoIds` may have filled `props.id` on the node at construction; because a `text` element maps props to `props['text']` only, that minted id **never reaches the adapter**. An authored `props.id` is equally not emitted (there is no attribute to carry it) — a `text` node has no rendered `id` |
+| **BT-EMIT-5 — SILENT FILTERING (no emit-time warn)** | the content-only rule is enforced by **filtering silently**. There is **no** emit-time `text-content-only` warning site: `text-content-only` fires at **TRANSLATE**, legacy-JSON only, for authored `props`/`css`/`handlers`/`placement` (`src/core/translate.ts:956-958`); a programmatically constructed `text` node warns **never**. This is the **settled** reading (N6) — the earlier "content-only enforced at EMIT with a `text-content-only` warn" phrasing conflated the enforcement site with the warn site and is superseded in `docs/decisions.md` (BARE-TEXT-EMIT ✎ ENFORCEMENT-SITE CORRECTION) and `docs/specs/bare-text-emit-review.md` §3 (ERRATUM). The `text` content-only **op filter is silent**; an emit-time warn is an option reserved to the W4-adjacent gate, NOT shipped |
+| **BT-EMIT-6 — version scope + revisit** | the whole `text`-node contract above **applies to `>=0.4.0 <1.0.0`**. It is revisited at the **1.0.0 major**, together with the XOR render enforcement ("children win"), the `bodyRuns` removal and the authored producer-migration guide (`docs/decisions.md` BARE-TEXT-EMIT + BODYRUNS-REMOVABILITY rows; `docs/pending.md` 1.0.0-XOR batch row) |
+| **BT-EMIT-7 — no runtime throw, ever** | every branch degrades safely: the DOM product falls back to a shim holder and its set-prop writes are no-ops for non-`text` names (adapters.md §3.1/§3.2); the SSR product serializes content only (§4.3) and an unpreventable root case degrades to `''` (§4.4) |
+
+**Where the DATA type is specified (cross-reference only, never restated here):**
+`docs/specs/node.md` §2.1 — the `text` value's entry in the node-type register.
+**Where the ADAPTER products are specified:** `docs/specs/adapters.md` §3.1/§3.2
+(DOM) + §4.1/§4.3/§4.4/§6 (SSR).
+
+**Exhaustiveness (TestWriter — `render`-level rows):**
+
+| ID | State / fail-state | Expected |
+| --- | --- | --- |
+| **BT-H1** | a `text` state with `content: 'A '`, an authored `props: {id:'x'}`, `css: {classes:['c']}`, a handler, and `children: ['n1']` | the emitted element is `{ wire, type: 'text', props: { text: 'A ' }, childOrder: [] }` — an auto-minted `props.id` is dropped, no `prop:`/`css:`/`on:`/`data:` key, `childOrder` empty (BT-EMIT-1..4) |
+| **BT-H2** | a `text` state with `content === undefined` and no binding | `props` has **no `text` key** (the `content !== undefined` gate) — the element still emits (an empty bare-text child), never a throw |
+| **BT-H3** | a `text` state with a scalar binding for its `content` | the binding WINS (`scalarBinding(s.bindings) ?? s.content`) — `props['text']` is the bound value |
+| **BT-H4** | `renderOptions.nodeIdAttribute: true` over a tree containing a `text` child | every non-`text` element carries `data:node-id`; the `text` element carries **only** `props['text']` (stampNodeId skipped, BT-EMIT-2) |
+| **BT-H5** | `[text, strong, text]` childOrder through `emitElements` | the parent's `childOrder` lists all three wires in order; the two `text` children each emit a bare `text` element (the adapter-level content oracle `A <strong id="b1">bold</strong> text` is FRG-H28 in adapters.md §10.2) |
+| **BT-H6** | a `text` state with an interleaving `bodyRuns` | the emitted element is **unchanged** from today (`childOrder: []`, `props['text']` from the scalar/binding expression) — the authored interleaving is NOT emitted. **The diagnostic half is NOT this spec's** (`docs/specs/bodyruns-drop-diagnostics.md` §3 C5); the W4 red set owns it (defect N2) |
+| **BT-F1** | a `text` state is asked to emit a `css:id` (authoring bug: an authored `css` on a `text` node) | the emitted element still carries only `props['text']` — the css never reaches the adapter, and **no warn fires at emit** (BT-EMIT-5 — silent filtering; the translate-time warn covers only the legacy-JSON path) |
+
 ### 3.3 Wires: path-states key on their pathKey (P3 §4.1)
 
 - Path-state wires ARE their pathKeys (`root/<zone>/<ownerId>/…/<nodeId>` — the
@@ -233,6 +272,37 @@ non-container empty → visible (5); update path → style set op (4). Applies
 to every emit path that renders the container's own element (plain,
 blocked-def and fork-arm paths — a def-fill renders children, so it is
 non-empty by construction).
+
+#### EMPTY-OWNER-1c — `content: ''` is EMITTED but counts as EMPTY (pinned asymmetry, 2026-09-22 — N7)
+
+**Pinned behaviour, NOT a defect.** An authored **empty string** is treated
+differently by the two predicates, and the contract states it explicitly so no
+reader has to infer it:
+
+| Predicate | Test | Consequence for `content: ''` |
+| --- | --- | --- |
+| the **emit** path (does a `text` prop land?) | `content !== undefined` **on the RESOLVED value `scalarBinding(s.bindings) ?? s.content`** — `render-helpers.ts:155` (`emitTextProp`) and `:1158` (`emitOne`'s `text` branch) | **`''` IS emitted** — the element carries a live **`props['text'] = ''`** |
+| the **emptiness gates** (EMPTY-OWNER + def-fill) | `s.content === undefined` — `:1405` (plain path), `:1374` (blocked-def path) — **on the RAW `s.content`**; `def.content === undefined` — `:881`, `:1262` (def-fill sites) | **`''` counts as EMPTY** — the container is still eligible for `display: none` |
+| **✎ the BINDING-supplied case (third shape, added 2026-09-22 — adversarial audit finding 10)** | the emit path writes the **RESOLVED** `content = scalarBinding(s.bindings) ?? s.content` (`:1388-1389` plain, `:1368-1369` blocked-def, `:1157` `text`), while the same gates test the **RAW `s.content`** (`:1405`, `:1374`) | **a binding-supplied `''` is likewise EMITTED WHILE GATED EMPTY**: with a scalar binding resolving to `''` and no authored `content`, `props['text'] = ''` lands **and** the placement owner is still hidden by EMPTY-OWNER-1 (the gate never sees the bound value) |
+
+**The three shapes are one rule:** *the emit path reads the RESOLVED value
+(`scalarBinding(s.bindings) ?? s.content`); the emptiness gates read the RAW
+`s.content`.* Any case where the two disagree — authored `content: ''` **and** a
+binding-supplied `''` with no authored `content` — is emitted-and-gated-empty at
+once. The binding half is the easy one to miss in review because the resolved
+value is computed three lines above the gate that ignores it.
+
+So a placement-owner container authored `content: ''` — or supplied `''` by a
+scalar binding with no authored `content` — **is hidden by EMPTY-OWNER-1 AND
+carries a `''`-valued `text` prop**, both at once. It
+contradicts no recorded contract (EMPTY-OWNER-1 keys on "NO authored `content`",
+and an empty string is authored-present-but-empty), and it is **not** a defect row:
+it is recorded here as a pinned behaviour, in `docs/decisions.md` (the EMPTY-OWNER
+row's `content: ''` note), and in `docs/specs/node.md` §2.1 (the `text`-type
+consequences). Changing it — e.g. treating `''` as authored-present renderable
+information, or as `undefined` at emit — would be a **behaviour change with its own
+gate** (`X.Y.X`/`Y.X.X` per the VERSIONING-SCHEME) and must not be patched in by a
+doc pass.
 
 ---
 
@@ -518,3 +588,5 @@ compiled slices, each either unforked or carrying an actionable `forkKey`.
 | EMPTY-H5 | update path: container gains a child → re-render | `css:style` SET op without `display: none` (EMPTY-OWNER-4) |
 | EMPTY-H6 | empty container WITH authored TEXT | NO `display: none` (EMPTY-OWNER-1a — text is renderable) |
 | EMPTY-H7 | empty container WITH authored `css.style` | NO `display: none` (EMPTY-OWNER-1b — style is renderable; the path-fork/fork-stress leaves) |
+| EMPTY-H8 | placement-owner container with NO children and authored `content: ''` (the N7 asymmetry, EMPTY-OWNER-1c) | BOTH hold: the emitted element carries **`props['text'] === ''`** (the emit path tests `content !== undefined`) AND its `css:style` contains **`display: none`** (the emptiness gate tests `s.content === undefined`) — the two predicates are asymmetric BY CONTRACT, not by accident |
+| BT-H1..BT-H6 / BT-F1 | the `text`-node emit rows (§3.2b) | as specified in §3.2b — register entry + emit rule (BT-REG-1, BT-EMIT-1..7) |

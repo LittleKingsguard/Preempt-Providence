@@ -21,6 +21,81 @@ Status: spec for a REWRITE of the fork-stress demo page. Companion:
 > prototypes, unplaced = 0 (the prototypes never compile/render — the token
 > terminates the walk); `cloneOps` stays the journaled clone count.
 
+> **⛔ ANNOTATION 2026-09-22 — THE SCOPE NOTE ABOVE IS SUPERSEDED BY A USER
+> RULING (this is an annotation; nothing above is deleted).** The user ruled
+> 2026-09-22: *"The fork-stress tests are now showing per-element clones when
+> they should be containing only 23 nodes with 4095 wires/elements."* ⇒ the
+> data-driven family is **CONVERTED to path enumeration — 23 nodes, 4095
+> wires/elements, `cloneOps = 0`** — and **`cloneOps = 0` is PINNED AS AN
+> ASSERTION** (the user's second ruling: drift in this family's construction
+> must FAIL, never be silently accepted). **The contract now lives in
+> `docs/specs/fork-stress-data-p3.md`** (clauses K1..K8, the K7 re-derived
+> register relations, and the typed property register). Consequently these two
+> sentences above are **SUPERSEDED — they are the historical record of WHY the
+> family existed, not its contract**: (a) *"this spec describes the RUNTIME
+> fork-stress-data page (the after-compile `clone-instance` expansion), which is
+> KEPT as-is alongside the new STATIC page"*; (b) *"`cloneOps` stays the
+> journaled clone count"* — the converted family's `cloneOps` is **`0`**, and
+> its census is **`registered = inTree = 23`, `unplaced = destroyed = 0`,
+> `states = elements = 4095`**, i.e. the static family's expression
+> (`docs/specs/placement-path-spec.md:639`, `:655-657`), not
+> `in-tree = 2^depth − 1 + prototypes` (4117). The clone assembly was **NOT a
+> defect**: it predated P3, was deliberately retained to exercise
+> prototype-driven `after-compile` expansion (`docs/specs/placement-path-spec.md:625-629`),
+> and it reported its own journal faithfully (measured 2026-09-22 in the
+> enforcement/RCA session: `cloneOps = 4094` at d12, journal-derived). **No
+> other clause of this spec is amended by this annotation** — the lessons list
+> below (the flat css shape, the dead def css on covered re-types, the
+> bare-vs-composite adapter keys, the covered-gated def-fill) survives as the
+> `link` variant's own mechanism contract.
+
+> **✅ LANDING-PASS ANNOTATION 2026-09-23 — THE CONVERSION IS LANDED; the body
+> below is the PRE-CONVERSION record and is SUPERSEDED IN SUBSTANCE wherever it
+> describes clone assembly (annotated, nothing deleted — `docs/specs/fork-stress-data-p3.md`
+> §4 + §8.3 duty 1).** What actually shipped (measured; `docs/defects.md` row
+> `FORK-STRESS-DATA-P3-CONVERSION`, `docs/decisions.md` row
+> `DATA-DRIVEN-FAMILY-PATH-ENUMERATION`):
+>
+> - `demo/fork-stress-data.js` is a **path-enumeration** page. The envelope is
+>   the R2.2 sibling-shared owner-name placement topology (`placementName:
+>   'zone-<k>'` plus, for `k ≥ 2`, `targetPlacement: ['zone-<k−1>']`); level-1
+>   prototypes are `template.root.children`, deeper levels are content-payload
+>   roots; ONE `compilePath` bootstrap, `passes = 1`. **No `handlers`, no
+>   `stress:handler`, no `clone-instance`, no after-compile expansion, no
+>   pass-2 drain** — so the Purpose bullets' clone description below, the
+>   envelope sample's `handlers` key, the handler-body installation step, the
+>   pass-2 render step and the per-method clone descriptions are **SUPERSEDED**
+>   (kept as the record of why the family existed).
+> - The census is a **runtime MEASUREMENT**: d12 → `registered=23 inTree=23
+>   unplaced=0 destroyed=0 cloneOps=0 journalCloneOps=0 journal=0 states=4095
+>   elements=4095 passes=1` for all three methods; d14 → 27 nodes / 16383; and
+>   `registered = inTree = 2·depth − 1` at every depth. The d12 page totals fell
+>   from the clone model's 334-377ms to **94.5-142.4ms** (the pass-2 region and
+>   all 4094 handler executions are gone), so the **AGENTS.md item-4 totals
+>   watch is unchanged in shape and now has far more headroom**: measured
+>   placement 134.9ms / values 142.4ms / link 94.5ms (values 1.06×, link 0.70×
+>   vs placement, against the asserted 2.5×).
+> - The **per-method mechanism is pure envelope DATA** realised over
+>   PATH-STATES: values (one authored value per prototype → every path-state of
+>   that prototype renders it), link (the def re-types each path-state's
+>   path-derived children — the recursive def chain over path-states; the
+>   covered-leaf def-fill gate keeps the element census at `2^d − 1`).
+> - **The lessons list below still applies** (flat css shape; dead def css on
+>   covered re-types; bare-vs-composite adapter keys — now the path-state
+>   `elOfWire` bare-first-then-composite lookup; the covered-gated def-fill).
+>   The `stress:kind` per-node mechanism LABEL and the four-mechanism cycle
+>   framing are **DROPPED-WITH-RECORD** (a clone-era per-node prop with no
+>   path-model meaning — p3 §7's disposition table; the mechanism is now
+>   identified by `server-data.method` + the per-variant path-state checks).
+>   `stress:layers` is **dropped-with-record**; the derived `data-path` is
+>   **CARRIED** and asserted as `data-path === pathKey` (p3 §9 Q-2's
+>   recommended rulings).
+> - **TWO OPEN CONDITIONS the conversion discovered** are filed in
+>   `docs/defects.md`, NOT absorbed here: `FD7-D2-LINK-CENSUS` (the `link`
+>   element census is `2^d − 1` only for `d ≥ 3` — both families read 7 at d2)
+>   and `INJECTED-CLONE-PRIORITY` (the mandatory injected-clone falsifier's
+>   attach priority encodes a clone-era empty-root invariant).
+
 ## Purpose
 
 Prove the same deep binary stress tree can be assembled with:

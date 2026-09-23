@@ -242,12 +242,13 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 > own value" contract above previously held ONLY on pure-provider nodes (no
 > consumer anchors): a LEGAL K7 mix (a node carrying BOTH a consumer anchor
 > and a self-provider with a local apply — distinct names, e.g. S1/S14/S15)
-> routed through `resolveArms` (`resolve.ts:247` — the `publishOwn` branch
-> required `targetNames.length === 0`; fixed by `seedOwnBindings`,
-> node.ts:255) and its arm bindings carried only the
-> CONSUMED names, so the synthesized `bindings.<own-ref>` read evaluated
-> null and the self-apply was SILENTLY omitted. FIXED in the compile loop:
-> `seedOwnBindings` (extracted from `publishOwn`) now seeds each arm's
+> routed through the arm-resolution path (`resolveArms` → `resolveNames` →
+> `continueArm`, `resolve.ts` — cite **by symbol**, not by line) and its arm
+> bindings carried only the CONSUMED names, so the synthesized
+> `bindings.<own-ref>` read evaluated null and the self-apply was SILENTLY
+> omitted. FIXED in the compile loop: `seedOwnBindings` (extracted from
+> `publishOwn`, which lives in **`src/core/node.ts:1222`** — `publishOwn` has
+> **never** existed in `resolve.ts`) now seeds each arm's
 > bindings with the node's own source/duplex values right after
 > `cs.bindings = arm.bindings` and before the derived bake — skip-if-present
 > (a same-name resolved/duplex value wins), consumed-first key order, own
@@ -255,6 +256,8 @@ function translateLegacy(doc: LegacyInitialData, opts?: { hub?: LinkConfigNameHu
 > verified by `tests/unit/node.test.ts` T1–T7 and the de-vacuoused
 > translate-showcase smoke (see `archive/findings/2026-08-15/2026-08-15-test-findings.md` §"Stress-test review
 > loop #2" "Fix landed").
+>
+> ✎ **CITATION REPAIRED 2026-09-23 (doc housekeeping — defect row `STALE-RESOLVE-ANCHORS`).** The sentence above previously read *"routed through `resolveArms` (`resolve.ts:247` — the `publishOwn` branch …; fixed by `seedOwnBindings`, node.ts:255)"*. **`publishOwn` exists NOWHERE in `src/core/resolve.ts`** (grep, 2026-09-23): it is a local closure inside `Node.compile` at `src/core/node.ts:1222`, and `seedOwnBindings` is `src/core/node.ts:276`. The `resolve.ts:247` line number is now `fitReference`'s `fallbackTermination(...)` call — a live but UNRELATED construct. **All `resolve.ts` citations in this file are therefore re-pointed BY SYMBOL NAME** (the ranges are fragile: the R1 slice-scoped-descent landing shifted every line after `:214`). Current symbol anchors, read in the tree 2026-09-23: `providersOn` `:102-111`, `fallbackTermination` `:167-203`, `fitReference` `:205-248` (own `:211-212` / descendants `:229-238` / ancestors `:241-245`), `isFanOutBlowup` `:263-265`, `resolveArms` `:347-350`, `resolveNames` `:352-390`, `continueArm` `:392-446` (`#f:<ownerId>#<i>` keys `:423-428`).
 
 ## 2. Mapping rules
 
@@ -483,7 +486,7 @@ clarification, authoritative: "multiple components are allowed on the same
 prop in legacy, but not with the same reference or target"). The engine
 already supports N component anchors per node (only the `child` role is
 restricted, `node.ts:648-672`) and compile cross-products multiple target
-names (`resolve.ts:247-320`); the landed kernel accepts
+names (✎ 2026-09-23 citation repair — `STALE-RESOLVE-ANCHORS`: previously cited as `resolve.ts:247-320`, a range that no longer resolves; cite BY SYMBOL — the whole-name resolution path is `resolveArms` `:347-350` → `resolveNames` `:352-390` → `continueArm` `:392-446`); the landed kernel accepts
 `component: LegacyComponentBinding[]` (and the same array on
 `template.component`) — each element is a binding in its own right
 (graph-level N bindings per node + `props.<key>` apply paths only, per the
@@ -505,7 +508,7 @@ array):**
 
 Duplicate detection **must run PRE-ANCHOR** (before any anchor is created for
 the array): compile is blind — a duplicate target silently last-wins
-(`resolve.ts:239`) and two providers on one name produce phantom-forks
+(`continueArm`'s positional per-hit fork, `resolve.ts:423-428` — ✎ 2026-09-23 citation repair, `STALE-RESOLVE-ANCHORS`: the previously cited `resolve.ts:239` now lands in `fitReference`'s slice-scoped descendant loop, an unrelated construct) and two providers on one name produce phantom-forks
 (stress probes C2/C4). All guards are translate-time warn+skip, never a throw
 (TR-F2), on the K4 warnings channel (K8 — review doc Appendix E.2).
 **Guard order (pinned, stress scenario 2):** warnings fire in STRICT

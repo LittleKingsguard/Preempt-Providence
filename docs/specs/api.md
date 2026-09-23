@@ -29,6 +29,11 @@ interface ClientAPI {
 
 interface Supervisor {
   apply(op: MutationOp): ApplyResult   // journaling sink behind ClientAPI.apply
+  // ENG-JOURNAL-ENTRY-READ-API (2026-09-12, docs/specs/journal-read-access-review.md)
+  // — a sanitized, non-draining journal snapshot. Rows are {index, kind, status}
+  // ONLY (never live Node refs / snapshot payloads / result.dirtied / entry.id);
+  // absolute-index pagination; exact depths. No per-entry `state` (not derivable).
+  journalEntries(opts?: { afterIndex?: number; limit?: number }): JournalView
 }
 
 type MutationInput = LayerMutationList | StructuralOp   // apply signature owned HERE (ops.md defers);

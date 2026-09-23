@@ -25,7 +25,7 @@ export type {
 // ---- graph + managed channel ----------------------------------------------
 export { Node, mintNodeId, findCycle, reconcileParentTargets, ancestorConsumesZone } from './core/node.js'
 export { Supervisor, focusedSliceFor } from './core/supervisor.js'
-export type { JournalEntry } from './core/supervisor.js'
+export type { JournalEntry, JournalEntryView, JournalView, JournalViewOptions } from './core/supervisor.js'
 
 // ---- handlers + legacy bridge ----------------------------------------------
 export { dispatchEvent, dispatchPhase, dispatchPhaseForNodes, makeHandlerContext } from './core/handlers.js'

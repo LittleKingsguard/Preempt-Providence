@@ -10,6 +10,14 @@ Full catalogue: `docs/defects.md` (this file is the handoff assembly; defects.md
 is the living tracker). Where relevant, "consumer workaround" = what
 Provident-Electron does today so the gap is not blocking.
 
+> **✎ SCOPE NOTE 2026-09-23 (doc housekeeping):** `docs/defects.md` is cited
+> **BY ROW NAME** throughout this file and never by line — the tracker is
+> re-ordered every pass and its line numbers drift (the 2026-09-23 pass re-homed
+> nine closed/superseded rows out of its OPEN table into the labelled
+> `## MOVED OUT OF OPEN 2026-09-23` block). The rows below that were the
+> **upstream fix shapes for this handoff's REQ-GAP items** are recorded in
+> `docs/defects.md`'s FIXED / ARCHIVED sections.
+
 ---
 
 ## Issue 1 — REQ-GAP-1: inline handler bodies default to MODERN; the legacy `(event, context)` stub is not the synthetic-event default
@@ -166,5 +174,11 @@ Provident-Electron does today so the gap is not blocking.
 - Real-Electron e2e: MCP client → HTTP → IPC → renderer graph — dispatch on
   `inc` mutates the graph + re-renders (live DOM + SSR), `dirtied` reported,
   `requestId` dedup works, `event.value` echo works.
-- Trio (this repo's gate): `npm test` green, `npm run typecheck` clean,
-  `npm run build` clean.
+- Trio (this repo's gate): **✎ REFRESHED 2026-09-23** — `npm test` is now **two
+  sequential Vitest phases** (see AGENTS.md item 4): phase A **1430 passed / 0
+  failed (81 files)**, phase B **13 passed (2 files)**, exit 0; `npm run
+  typecheck` clean; `npm run build` clean. `npm run demo:smoke` is **GREEN**
+  (exit 0, 34 guard entries, 0 failures) — the failing cross-family tripwire was
+  retired in favour of the runtime-vs-runtime growth guard
+  (`docs/decisions.md` `RUNTIME-FORK-GROWTH-GUARD`). **The readings above in this
+  section are historical and are kept as the workaround-proof record.**

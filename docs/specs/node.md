@@ -67,7 +67,6 @@ for chain termination.
 
 ```ts
 type NodeState = 'prototype' | 'unplaced' | 'in-tree' | 'destroyed'   // notes §10.1
-
 // Owned by graph.md; re-declared here for signature reference only.
 type Role = 'parent' | 'child' | 'source' | 'target' | 'duplex' | 'container' | 'content' | 'component'   // P3 §1.1: 'placement' renamed 'container', consumer role 'content' added
 type AnchorTarget = Node | 'rootNode' | 'component' | 'contentNodes' | string /* referenceName token */
@@ -117,6 +116,33 @@ interface CompileResult {
   warnings: Array<{ code: 'circular-source' | 'unresolved-reference'; pathKey: string }>  // S-R4.3: unresolved-reference logs a warning; the state still renders
 }
 ```
+
+### 2.1 The `text` value in the node-TYPE register (BARE-TEXT-EMIT, `>=0.4.0 <1.0.0`)
+
+`type` is an open authored string (`NodeBaseData.type: string`), and the node layer
+itself puts **no** constraint on it (`new Node(data)` performs no value validation —
+§4 Pre). One type name, however, changes the **emit** shape and therefore belongs in
+this register:
+
+| Type | Register entry |
+| --- | --- |
+| **`text`** | **A bare-text child.** A node authored as `{ "type": "text", "content": "…" }` compiles as an ordinary node (same `NodeBaseData`, same layers, same `CompiledState`, same anchors/state derivation, and it can be a family child or a placement-routed path-state like any other) — the ONLY thing that changes is the **emit rule**: the emitted element carries **only** its `text` prop (`scalarBinding(s.bindings) ?? s.content`) and no `prop:`/`css:`/`on:`/`data:` mapping, **no `stampNodeId`**, and a **hard-coded `childOrder: []`**; an auto-minted `props.id` (`§4 Post-1`) is therefore dropped and a `text` node has **no rendered `id`**. **The owning spec of the emit rule is `docs/specs/render.md` §3.2b** (this register entry names the type; it does not restate the rule). **The adapter products** (DOM `Text` holder vs SSR `isText`/empty-tag descriptor) are `docs/specs/adapters.md` §3.1/§3.2 + §4.1/§4.3/§4.4/§6. **Scope: `>=0.4.0 <1.0.0`**, revisited at the 1.0.0 major. **Not `validation.ts`-gated**: validation is an opt-in registry, not part of the render pipeline, so a programmatically constructed `text` node is legal input to the emit layer. |
+
+**Consequences at this layer (so no reader has to infer them):**
+
+- **§4 Post-1 (`ensureAutoIds`) still fills `props.id`** for a `text` node when the
+  id is absent (the fill is type-blind); the fill is simply **not emitted** (see the
+  register entry) and remains **reverse-excluded** (DEFECT #28).
+- **`content` is the value that survives** — not `props`, not `css`, not `handlers`.
+  A `text` node carrying any of those is authored against the type's contract; the
+  only diagnostic for it is the **translate-time** `text-content-only` warn, which
+  covers the legacy-JSON path only (a programmatic `text` node warns **never** —
+  `docs/specs/render.md` §3.2b BT-EMIT-5, defect N6).
+- **The emptiness predicate is unaffected**: EMPTY-OWNER keys on
+  `s.content === undefined`, so a container whose `content: ''` counts as empty for
+  the gates while `''` is still emitted as a live `props['text']` — the pinned
+  asymmetry recorded in `docs/decisions.md` (EMPTY-OWNER note, N7) and
+  `docs/specs/render.md` §3.4.3.
 
 ---
 

@@ -22,12 +22,28 @@
  *           added node; nothing at depth>4 recalculates.
  *
  * Plus the consolidated guards: the static census (23/4095/0/0 + per-level
- * 2^k), the runtime re-pins (F-13: in-tree = 4117 = 4095 + 22 prototypes,
- * cloneOps = 4094), the `component-source-duplicate` guard pin, and the
- * §8-Q6 split pins: the derived-family per-region baseline + pins and the
- * unchanged runtime 2× tripwire (demo-smoke's [derived-fork:baseline] marker
- * supersedes the single-total [path-fork:baseline] framing — §10.ad N-5/R-5,
- * derived-fork-variants-review §5.2).
+ * 2^k), the CONVERTED data-driven re-pin (fork-stress-data-p3.md §8.2 row 8 —
+ * registered = inTree = 2·depth − 1 = 23, states = elements = 4095,
+ * cloneOps = 0; the pre-conversion F-13 reading in-tree = 2^depth − 1 + 22
+ * prototypes = 4117 with cloneOps = 4094 is SUPERSEDED), the
+ * `component-source-duplicate` guard pin, and the §8-Q6 split pins: the
+ * derived-family per-region baseline + pins and the runtime-vs-runtime GROWTH
+ * guard (d10 → d12 pass-2 ratio, bound 10×; demo-smoke's [derived-fork:baseline]
+ * marker supersedes the single-total [path-fork:baseline] framing — §10.ad
+ * N-5/R-5, derived-fork-variants-review §5.2).
+ *
+ * ✎ HISTORICAL NOTE (2026-09-23): this case used to pin the **cross-family 3×
+ * runtime:derived tripwire** ('runtime 3× total tripwire' / 'exceeds 3× the
+ * placement-derived baseline'). That tripwire was **RETIRED as an assertion** by
+ * the user's ruling of 2026-09-23 — its two operands are page totals over
+ * DIFFERENT CONSTRUCTION METHODS, so the ratio never measured engine scaling and
+ * the 3× bound had been calibrated on a derived-vs-derived reading. It is
+ * replaced by the **runtime-vs-runtime growth guard**
+ * (`runtime-fork-growth-guard`, d10 → d12 pass-2 ratio, bound 10× —
+ * `docs/decisions.md` RUNTIME-FORK-GROWTH-GUARD, which SUPERSEDES
+ * RUNTIME-FORK-TRIPWIRE-BOUND); the retired cross-family measurement survives as
+ * an INFORMATIONAL print only. Defect record: `docs/defects.md`
+ * FORK-STRESS-TRIPWIRE-STALE-SPEC.
  *
  * TDD: RED first — E2E-1/2/4 and the guard pins land against the Units 4–11
  * machinery; E2E-3's pressure + precision cases are expected red (the
@@ -575,22 +591,36 @@ describe('E2E-4 — post-render placement addition: dirty = container + added no
 // ============================================================================
 
 describe('consolidated guards — census re-pins, duplicate-source, ratio-baseline pins', () => {
-  it('runtime re-pin (F-13 reading, §5.2): the runtime pages expect in-tree = 2^depth − 1 + 22 prototypes = 4117, unplaced = 0, cloneOps = 4094', () => {
-    // the runtime page's envelope carries 22 prototypes (2 per layer × 11)
-    // and is assembled by clone-instance after translate; the F-13 census
-    // arithmetic (demo-smoke.mjs:192-226 asserts the LIVE numbers):
+  it('converted data-driven re-pin (K2/K6): the family expects registered = inTree = 2·depth − 1 = 23, states = elements = 4095, cloneOps = 0 (path enumeration — the old 2^depth − 1 + prototypes / 2^depth − 2 readings are SUPERSEDED)', () => {
+    // ✎ §8.2 row 8 RE-POINT (user ruling 2026-09-22 — fork-stress-data-p3.md §3
+    // K2/K6): the data-driven family no longer assembles by clone-instance, so
+    // its census is the static model's — 2·(depth−1) + 1 = 2·depth − 1 nodes
+    // (22 prototypes + root at d12), 2^depth − 1 path-states/elements, and a
+    // MEASURED `cloneOps` of 0. The pre-conversion expectation was inTree =
+    // 2^depth − 1 + prototypes (= 4117) with `cloneOps = inTree − 1 −
+    // prototypes` (= 4094) — an ARITHMETIC IDENTITY at test level, which the
+    // no-clone RCA named (docs/specs/no-clone-invariants.md:692-695). The
+    // re-expression asserts the derived census itself, and asserts on the
+    // GUARD'S OWN SOURCE that the superseded derivations are gone.
     const depth = 12
+    const nodes = 2 * depth - 1
     const states = 2 ** depth - 1
-    const prototypes = 2 * (depth - 1)
-    expect(prototypes).toBe(22)
-    const inTree = states + prototypes
-    expect(inTree).toBe(4117)
-    const cloneOps = inTree - 1 - prototypes
-    expect(cloneOps).toBe(4094)
-    expect(2 ** depth - 1).toBe(4095)
-    // the static tree (23 nodes) is the ONLY 23-node census — the runtime
-    // tree registered = inTree + unplaced + destroyed = 4117 + 0 + 0
-    expect(inTree).toBe(4117)
+    expect(nodes).toBe(23)
+    expect(2 * (depth - 1) + 1).toBe(nodes) // 22 prototypes + root
+    expect(nodes - 2 * (depth - 1)).toBe(1) // the root is the only non-prototype
+    expect(states).toBe(4095)
+    expect(states).toBe(2 ** depth - 1)
+    expect(nodes).toBeLessThan(states) // the multiplicity rides the WIRE, not the nodes
+    // the superseded readings are gone from the harness's derivation for THIS
+    // family: no `+ prototypes` term, no `2^depth − 2` clone count
+    const here = dirname(fileURLToPath(import.meta.url))
+    const smoke = readFileSync(join(here, '../../scripts/demo-smoke.mjs'), 'utf8')
+    const guardStart = smoke.indexOf('function assertForkStressCensus(')
+    expect(guardStart, 'assertForkStressCensus is no longer defined in the harness').toBeGreaterThan(-1)
+    const guardSrc = smoke.slice(guardStart, smoke.indexOf('\n}', guardStart))
+    expect(guardSrc.includes('2 ** depth - 1 + prototypes'), 'the guard still derives the clone model\'s in-tree expression').toBe(false)
+    expect(guardSrc.includes('2 ** depth - 2'), 'the guard still derives the clone count 2^depth − 2').toBe(false)
+    expect(guardSrc.includes('2 * depth - 1'), 'the guard does not derive the converted node count 2·depth − 1').toBe(true)
   })
 
   it('component-source-duplicate pin: a second same-name source on one node is skipped with a warn — keep-first (identity = pathKey alone)', () => {
@@ -607,19 +637,56 @@ describe('consolidated guards — census re-pins, duplicate-source, ratio-baseli
     expect(link.anchorsOf('source')).toHaveLength(1)
   })
 
-  it('ratio-baseline pins (§8-Q6 split / derived-fork-variants-review §5.2): the smoke carries the derived FAMILY baseline (per-region, placement-derived) + the per-region pins + the runtime 3× tripwire for the d12 family; the d14 fork pages are built but NOT smoke-run (manual/browser scaling probes only)', () => {
+  it('ratio-baseline pins (§8-Q6 split / derived-fork-variants-review §5.2): the smoke carries the derived FAMILY baseline (per-region, placement-derived) + the per-region pins + the runtime-vs-runtime GROWTH guard (d10 → d12 pass-2 ratio, bound 10×) with the retired cross-family ratio kept as an INFORMATIONAL, non-asserted print; the d14 fork pages are built but NOT smoke-run (manual/browser scaling probes only)', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const smoke = readFileSync(join(here, '../../scripts/demo-smoke.mjs'), 'utf8')
+    // FALSIFICATION: a silently renamed/lost marker fails the toContain below
     expect(smoke).toContain('[derived-fork:baseline]')
     expect(smoke).toContain('derived FAMILY baseline recorded')
     expect(smoke).toContain('[derived-fork:pin]')
-    expect(smoke).toContain('runtime 3× total tripwire')
+    // ---- THE RUNTIME SCALING SIGNAL: the runtime-vs-runtime GROWTH guard -----
+    // (2026-09-23 ruling, docs/decisions.md RUNTIME-FORK-GROWTH-GUARD, superseding
+    // RUNTIME-FORK-TRIPWIRE-BOUND; defect docs/defects.md
+    // FORK-STRESS-TRIPWIRE-STALE-SPEC.)
+    // FALSIFICATION: removing/renaming the guard, dropping its printed envelope
+    // (either depth's reading, the ratio, the bound or the margin), or dropping
+    // the class it exists to detect all fail one of these four.
+    expect(smoke).toContain("runGuard('runtime-fork-growth-guard'")
+    expect(smoke).toContain('[runtime-fork:growth]')
+    expect(smoke).toContain('STATISTIC=pass2-ratio')
+    expect(smoke).toContain('pass2-ratio ${ratio.toFixed(2)}× / total-ratio')
+    expect(smoke).toContain('per-node ${(ratio / nodeMultiple).toFixed(2)}×); bound ${RUNTIME_GROWTH_BOUND_MULTIPLE}×; margin ${margin.toFixed(2)}×')
+    expect(
+      smoke,
+      'the growth guard no longer states what a breach MEANS (per-node pass-2 cost degrading super-linearly) — the failure class must stay named',
+    ).toContain('PER-NODE PASS-2 COST IS DEGRADING SUPER-LINEARLY')
+    // the retired cross-family ratio stays printed, EXPLICITLY labelled
+    // non-asserted, with both sets' composition stated — a silent re-assertion
+    // (or a silent deletion, which would hide the construction-cost confound) is
+    // the failure this pair catches.
+    expect(smoke).toContain('[runtime-fork:tripwire]')
+    expect(smoke).toContain('INFORMATIONAL (construction-cost ratio, NOT a like-workload metric — no longer asserted)')
+    expect(smoke).toContain('4095 real nodes, built INCREMENTALLY')
+    expect(smoke).toContain('23 real nodes → 4095 path-states/wires by ONE bootstrap enumeration pass')
+    // the RETIRED assertion's CONTRACT is gone from the harness: the old failure
+    // message text (the literal the retired guard existed to emit) must not come
+    // back, and the retired marker must not be re-labelled as asserted. NB the
+    // retired guard's NAME survives inside superseded-history prose (the harness
+    // annotates what it replaced), so the guard is checked on its BEHAVIOUR
+    // (no assertion text, no `(N× asserted)` form) rather than on the phrase.
+    expect(smoke).not.toContain('exceeds 3× the placement-derived baseline')
+    expect(smoke).not.toContain('(3× asserted)')
+    expect(
+      smoke,
+      'the retired cross-family tripwire is still DECLARED as a guard (runGuard call site or aggregate exit) — it must survive as an informational print only',
+    ).not.toContain("runGuard('runtime-fork-tripwire'")
     // the d12 family: the placement-derived baseline (path-fork-data.html,
-    // depth 12) + the runtime 3× tripwire + the d12-only depth lists — an
-    // O(n²) return flags on the d12 family
-    expect(smoke).toContain('exceeds 3× the placement-derived baseline')
+    // depth 12) + the growth guard's d10/d12 operand depths, and the d12-only
+    // depth lists — an O(n²) return flags on the d12 family
     expect(smoke).toContain('depth: 12')
     expect(smoke).toContain('2, 4, 6, 8, 9, 10, 11, 12')
+    expect(smoke).toContain('const RUNTIME_GROWTH_LOW_DEPTH = 10')
+    expect(smoke).toContain('const RUNTIME_GROWTH_HIGH_DEPTH = 12')
     // the d14 fork pages are BUILT (scripts/build-demo.mjs) but NOT part of
     // the automated smoke — no d14 runs, no d14 family wiring, no d14 tripwire
     expect(smoke).not.toContain('d14Totals')

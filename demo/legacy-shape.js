@@ -73,6 +73,76 @@ import { setCompilePassLogging } from '../dist/core/debug.js'
 import { makeRunner } from './lib/runner.js'
 
 // ============================================================================
+// THE CLONE CENSUS MEASUREMENT (docs/specs/no-clone-invariants.md §3 I5)
+// ============================================================================
+
+/**
+ * The clone census is a MEASUREMENT, never a literal and never an arithmetic
+ * identity: `PROFILE.cloneOps` counts the `clone-instance` entries in the
+ * supervisor's OWN journal through the read accessor (`journalEntries`,
+ * ENG-JOURNAL-ENTRY-READ-API — non-draining, read-only). This page applies NO
+ * ops at all (its own check proves `supervisor.journal.length === 0`), so the
+ * measured value is 0 — but it is a MEASURED 0, and it fails if a
+ * clone-instance op ever appears.
+ *
+ * The window must COVER the whole journal or the measurement must fail loudly:
+ * `journalEntries` returns `truncated` + `fromIndex` + `totalEntries`, and this
+ * guard accepts the accessor's own `truncated === false` OR an explicit
+ * `fromIndex === 0 && entries.length === totalEntries` (the §3 I5 rule). A
+ * truncated window silently under-counting is the same defect class as a
+ * literal — so it THROWS rather than publishing a number the journal does not
+ * support. `limit` is clamped to [1, 1000] (`supervisor.ts`), so the
+ * measurement window requests the maximum and asserts its own completeness.
+ *
+ * @param {object} view the `JournalView` returned by `journalEntries(...)`
+ * @returns {number} the number of journaled `clone-instance` ops
+ */
+function measuredCloneOps(view) {
+  const complete = view.truncated === false || (view.fromIndex === 0 && view.entries.length === view.totalEntries)
+  if (!complete) {
+    throw new Error(`clone census: journal window incomplete (fromIndex=${view.fromIndex} entries=${view.entries.length} totalEntries=${view.totalEntries} truncated=${view.truncated}) — refusing to publish a silently under-counted cloneOps`)
+  }
+  return view.entries.filter((e) => e.kind === 'clone-instance').length
+}
+
+/**
+ * The PER-KIND journal census — the census's INDEPENDENT second source
+ * (2026-09-22 audit finding 5). `PROFILE.cloneOps` comes from the journal READ
+ * above (`measuredCloneOps`); this walk pages the SAME read accessor through a
+ * separate traversal and tallies the entries BY KIND. The two are published as
+ * DISTINCT fields (`cloneOps` and `journalCloneOps`) — never one assigned from
+ * the other, which would make the smoke's comparison `x !== x` — so a genuine
+ * drift between the census read and the journal's per-kind tally is detectable.
+ *
+ * It THROWS if the paged walk does not cover the journal's own `totalEntries`:
+ * a silently truncated walk would agree with a wrong first source by
+ * construction.
+ *
+ * @param {object} sup the page's supervisor
+ * @returns {{cloneInstances: number, kinds: Record<string, number>, totalEntries: number}}
+ */
+function journalKindCensus(sup) {
+  const kinds = {}
+  let totalEntries = 0
+  let seen = 0
+  let after = 0
+  for (;;) {
+    const view = sup.journalEntries({ afterIndex: after, limit: 1000 })
+    totalEntries = view.totalEntries
+    for (const e of view.entries) {
+      kinds[e.kind] = (kinds[e.kind] ?? 0) + 1
+      seen += 1
+    }
+    if (view.truncated === false || view.entries.length === 0 || view.fromIndex + view.entries.length >= totalEntries) break
+    after = view.fromIndex + view.entries.length
+  }
+  if (seen !== totalEntries) {
+    throw new Error(`clone census (per-kind walk): the walk covered ${seen} of ${totalEntries} journal entries — refusing to publish a second source that did not read the whole journal`)
+  }
+  return { cloneInstances: kinds['clone-instance'] ?? 0, kinds, totalEntries }
+}
+
+// ============================================================================
 // DATA — the LEGACY envelopes (pure data derivation, no graph construction).
 // ============================================================================
 
@@ -380,6 +450,10 @@ if (typeof document !== 'undefined') {
     loadMs: 0, compileMs: 0, emitMs: 0, diffMs: 0, applyMs: 0,
     sideMs: 0, checksMs: 0, totalMs: 0, coveredMs: 0,
     states: 0, elements: 0, registered: 0, inTree: 0, unplaced: 0, destroyed: 0, cloneOps: 0,
+    // §3 I5 — the census fields the journal measurement publishes (both are
+    // (re)assigned by the node-census check below; the initialisers are the
+    // pre-measurement placeholder, never the published value)
+    journalCloneOps: 0, journalEntries: 0,
     prototypes: 0, passes: 0, warningsMain: 0, fanOut: 0, stylesRules: [],
   }
   const now = () => (globalThis.performance?.now ? performance.now() : Date.now())
@@ -774,7 +848,22 @@ if (typeof document !== 'undefined') {
       const destroyed = all.filter((n) => n.destroyed)
       if (destroyed.length !== 0) throw new Error(`destroyed: expected 0, got ${destroyed.length}`)
       if (supervisor.journal.length !== 0) throw new Error(`journal must be empty (no ops applied), got ${supervisor.journal.length}`)
-      PROFILE.cloneOps = 0
+      // MEASURED from the journal (§3 I5) — never assigned as a literal; the
+      // empty-journal check above is the same fact, now published as evidence
+      PROFILE.cloneOps = measuredCloneOps(supervisor.journalEntries({ afterIndex: 0, limit: supervisor.journal.length || 1 }))
+      // the second, INDEPENDENT source: the per-kind journal walk (audit finding 5).
+      // NOTE (H15): `supervisor.journal` is read DIRECTLY in the `limit` above and in
+      // the emptiness check — justified as the page's own diagnostic: it sizes a read
+      // window; it is NOT the I5 census accessor (`journalEntries` is, and both
+      // `measuredCloneOps` and this walk go through it).
+      const kindCensus = journalKindCensus(supervisor)
+      PROFILE.journalCloneOps = kindCensus.cloneInstances
+      PROFILE.cloneOpKinds = kindCensus.kinds
+      PROFILE.journalEntries = kindCensus.totalEntries
+      // two independent sources must agree (an alias would make this vacuous)
+      if (PROFILE.cloneOps !== PROFILE.journalCloneOps) {
+        throw new Error(`clone census drift: the journal read counted ${PROFILE.cloneOps} clone-instance ops but the per-kind walk counted ${PROFILE.journalCloneOps} — two independent sources must agree (kinds=${JSON.stringify(PROFILE.cloneOpKinds)})`)
+      }
       PROFILE.prototypes = prototypes.length
     })
     await runner.check('state census: 12 path-states, distinct pathKeys, forkKey = pathKey on every state', () => {
@@ -924,7 +1013,7 @@ if (typeof document !== 'undefined') {
       `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
       `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms side=${f(PROFILE.sideMs)}ms checks=${f(PROFILE.checksMs)}ms ` +
       `warningsMain=${PROFILE.warningsMain} fanOut=${PROFILE.fanOut} stylesRules=${PROFILE.stylesRules.length} ` +
-      `census(registered=${PROFILE.registered} inTree=${PROFILE.inTree} unplaced=${PROFILE.unplaced} destroyed=${PROFILE.destroyed} prototypes=${PROFILE.prototypes} cloneOps=${PROFILE.cloneOps}) ` +
+      `census(registered=${PROFILE.registered} inTree=${PROFILE.inTree} unplaced=${PROFILE.unplaced} destroyed=${PROFILE.destroyed} prototypes=${PROFILE.prototypes} cloneOps=${PROFILE.cloneOps} journalCloneOps=${PROFILE.journalCloneOps} cloneOpKinds=${JSON.stringify(PROFILE.cloneOpKinds)} journal=${PROFILE.journalEntries}) ` +
       `covered=${f(PROFILE.coveredMs)}ms total=${f(PROFILE.totalMs)}ms ` +
       `unmeasured=${f(PROFILE.totalMs - PROFILE.coveredMs)}ms`,
     )

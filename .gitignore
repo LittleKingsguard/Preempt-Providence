@@ -11,3 +11,6 @@ live-prod/*
 # document archive — obsolete docs/reviews/stale test data, README is tracked
 archive/*
 !archive/README.md
+
+# local npm registry auth (GitHub Packages access token) — never commit
+.npmrc

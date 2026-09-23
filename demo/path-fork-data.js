@@ -8,9 +8,22 @@
  * component def on every prototype — the recursive def chain over
  * path-states). Depth-parameterized (2026-08-16 — the d14 scaling probes):
  * d12 = 23 nodes / 4095 path-states / 4095 elements; d14 = 27 nodes / 16383.
- * Same topology, ONE compilePath bootstrap, ZERO clone-instance ops, 2^depth − 1
- * elements for every method (the link census holds post the covered-leaf
- * def-fill gate — render.md P-EMIT-3 carve-out letter).
+ * Same topology, ONE compilePath bootstrap, ZERO clone-instance ops.
+ *
+ * THE ELEMENT CENSUS RELATION (measured 2026-09-23, `FD7-D2-LINK-CENSUS`):
+ * `elements = 2^depth − 1` for EVERY method at `depth ≥ 3` and for
+ * placement/values at `depth = 2`; the ONE shallow exception is
+ * **d2/link = 7 = (2^2 − 1) + 4** — the level-1 def hosts' path-states are
+ * childless at d2, so the covered-CHILDLESS gate does not fire for them and
+ * the standalone P-EMIT-3 def-fill pushes their synthetic def children
+ * (`<wire>:a` / `<wire>:b`) into the element set:
+ * `src/core/render-helpers.ts:743-746` (gate rationale: the comment block at
+ * `:733-742`; contract `docs/specs/render.md:224` DFC-1). At `depth ≥ 3` those
+ * two hosts have real children, the fill is bounded by the re-typed real
+ * children, and the census lands exactly on `2^depth − 1`. This is the
+ * DOCUMENTED boundary of the gate, NOT an engine defect — the expectation is
+ * what the stale `2^depth − 1`-for-every-method formula got wrong.
+ * `derivedDefFillChildlessCount(method, depth)` derives the term (see below).
  *
  * One module, three roles:
  *
@@ -61,6 +74,74 @@ import { diffMinimal } from '../dist/core/render.js'
 import { setCompilePassLogging } from '../dist/core/debug.js'
 import { makeRunner } from './lib/runner.js'
 import { levelCss, cssPropForLevel, linkDefForLevel } from './fork-stress-fixture.js'
+
+// ============================================================================
+// THE CLONE CENSUS MEASUREMENT (docs/specs/no-clone-invariants.md §3 I5)
+// ============================================================================
+
+/**
+ * The clone census is a MEASUREMENT, never a literal and never an arithmetic
+ * identity: `PROFILE.cloneOps` counts the `clone-instance` entries in the
+ * supervisor's OWN journal through the read accessor (`journalEntries`,
+ * ENG-JOURNAL-ENTRY-READ-API — non-draining, read-only). A hard-coded `0`
+ * carries no evidence and cannot fail for the reason the field exists.
+ *
+ * The window must COVER the whole journal or the measurement must fail loudly:
+ * `journalEntries` returns `truncated` + `fromIndex` + `totalEntries`, and this
+ * guard accepts the accessor's own `truncated === false` OR an explicit
+ * `fromIndex === 0 && entries.length === totalEntries` (the §3 I5 rule). A
+ * truncated window silently under-counting is the same defect class as a
+ * literal — so it THROWS rather than publishing a number the journal does not
+ * support. `limit` is clamped to [1, 1000] (`supervisor.ts`), so the
+ * measurement window requests the maximum and asserts its own completeness.
+ *
+ * @param {object} view the `JournalView` returned by `journalEntries(...)`
+ * @returns {number} the number of journaled `clone-instance` ops
+ */
+function measuredCloneOps(view) {
+  const complete = view.truncated === false || (view.fromIndex === 0 && view.entries.length === view.totalEntries)
+  if (!complete) {
+    throw new Error(`clone census: journal window incomplete (fromIndex=${view.fromIndex} entries=${view.entries.length} totalEntries=${view.totalEntries} truncated=${view.truncated}) — refusing to publish a silently under-counted cloneOps`)
+  }
+  return view.entries.filter((e) => e.kind === 'clone-instance').length
+}
+
+/**
+ * The PER-KIND journal census — the census's INDEPENDENT second source
+ * (2026-09-22 audit finding 5). `PROFILE.cloneOps` comes from the journal READ
+ * above (`measuredCloneOps`); this walk pages the SAME read accessor through a
+ * separate traversal and tallies the entries BY KIND. The two are published as
+ * DISTINCT fields (`cloneOps` and `journalCloneOps`) — never one assigned from
+ * the other, which would make the smoke's comparison `x !== x` — so a genuine
+ * drift between the census read and the journal's per-kind tally is detectable.
+ *
+ * It THROWS if the paged walk does not cover the journal's own `totalEntries`:
+ * a silently truncated walk would agree with a wrong first source by
+ * construction.
+ *
+ * @param {object} sup the page's supervisor
+ * @returns {{cloneInstances: number, kinds: Record<string, number>, totalEntries: number}}
+ */
+function journalKindCensus(sup) {
+  const kinds = {}
+  let totalEntries = 0
+  let seen = 0
+  let after = 0
+  for (;;) {
+    const view = sup.journalEntries({ afterIndex: after, limit: 1000 })
+    totalEntries = view.totalEntries
+    for (const e of view.entries) {
+      kinds[e.kind] = (kinds[e.kind] ?? 0) + 1
+      seen += 1
+    }
+    if (view.truncated === false || view.entries.length === 0 || view.fromIndex + view.entries.length >= totalEntries) break
+    after = view.fromIndex + view.entries.length
+  }
+  if (seen !== totalEntries) {
+    throw new Error(`clone census (per-kind walk): the walk covered ${seen} of ${totalEntries} journal entries — refusing to publish a second source that did not read the whole journal`)
+  }
+  return { cloneInstances: kinds['clone-instance'] ?? 0, kinds, totalEntries }
+}
 
 // ============================================================================
 // DATA — the LEGACY envelope (pure data derivation, no graph construction).
@@ -234,9 +315,56 @@ export function pathForkShapeSig(ops) {
   return shapeSigOfTrees(treeFromOps(ops))
 }
 
+/** The derived family's CHILDLESS DEF-HOST def-fill term — the shallow-depth
+ *  exception to the `elements = 2^depth − 1` relation (`FD7-D2-LINK-CENSUS`,
+ *  ruled 2026-09-23: DOCUMENTED behaviour of the standalone P-EMIT-3 def-fill
+ *  branch, NOT an engine defect).
+ *
+ *  DERIVATION (from the envelopes the builder itself compiles — never a magic
+ *  constant): only the `link` method puts a component DEF on every prototype
+ *  (`component: {reference: 'link-<k>', value: linkDefForLevel(k)}`), so only
+ *  the link family has def-fill hosts at all; and the level-1 path-states are
+ *  CHILDLESS only at the shallowest depth (at `depth ≥ 3` their path-derived
+ *  children — the level-2 states — exist, each level-1 host emits its re-typed
+ *  real children and the def-fill fires nowhere). The term is therefore
+ *  `(number of def-carrying level-1 prototypes) × (their def's child count)`:
+ *
+ *      depth = 2 :  2 hosts × 2 def children = 4   (the only childless case)
+ *      depth ≥ 3 :  0 — the level-1 hosts have real children; the gate at
+ *                   `src/core/render-helpers.ts:743` fires only on the COVERED
+ *                   childless leaves, which emit nothing (`:744-746` skips
+ *                   them), so the census is exactly `2^depth − 1`.
+ *
+ *  The count is read from the SAME legacy envelope the page/builder compiles
+ *  (`pathForkLegacyData`), so a change to the def shape moves this term with
+ *  it instead of silently invalidating a literal.
+ *
+ *  @param {string} method the derived-family method ('placement' | 'values' | 'link')
+ *  @param {number} depth the family depth (d2 is the one shallow case)
+ *  @returns {number} the extra def-fill elements beyond `2^depth − 1`
+ */
+export function derivedDefFillChildlessCount(method = 'placement', depth = 12) {
+  if (method !== 'link') return 0
+  const doc = pathForkLegacyData(method, depth)
+  const level1 = doc.template?.root?.children ?? []
+  if (level1.length === 0) return 0
+  let extra = 0
+  for (const host of level1) {
+    const def = host.component?.value
+    const defChildren = Array.isArray(def?.children) ? def.children.length : 0
+    // the def-fill fires ONLY on a childless host (render-helpers.ts:743); at
+    // d2 the level-1 prototypes carry no path-derived children at all.
+    const childless = depth === 2
+    extra += childless ? defChildren : 0
+  }
+  return extra
+}
+
 /** Expected census + parity reference embedded in the page (server-data).
  *  Depth-parameterized (2026-08-16 — the d14 scaling probes): d12 = 23 nodes
- *  / 4095 states; d14 = 27 nodes / 16383 states. */
+ *  / 4095 states; d14 = 27 nodes / 16383 states. `elements` carries the
+ *  d2/link def-fill term (`derivedDefFillChildlessCount` — see that helper and
+ *  the module header for the ruled relation + mechanism). */
 export function pathForkServerData(method = 'placement', depth = 12) {
   const s = buildPathForkSurface(method, depth)
   const states = 2 ** depth - 1
@@ -246,11 +374,15 @@ export function pathForkServerData(method = 'placement', depth = 12) {
     expected: {
       nodes: 2 * depth - 1,
       states,
-      elements: states,
+      elements: states + derivedDefFillChildlessCount(method, depth),
       unplaced: 0,
       cloneOps: 0,
-      // per-level element counts: 2^k at level k (k = 1..depth−1)
+      // per-level element counts: 2^k at level k (k = 1..depth−1), PLUS the
+      // d2/link def-fill children — synthetic `<wire>:a`/`:b` elements that
+      // carry the level-1 host's own `stress:layer`, so at d2/link level 1
+      // counts 2 real + 4 def-fill = 6 (see `defFillPerLevel` below)
       perLevel: Array.from({ length: depth - 1 }, (_, i) => 2 ** (i + 1)),
+      defFill: derivedDefFillChildlessCount(method, depth),
     },
     serverTreeSig: pathForkShapeSig(s.ops),
   }
@@ -290,6 +422,17 @@ if (typeof document !== 'undefined') {
   const familyNodes = 2 * depth - 1
   const familyStates = 2 ** depth - 1
   const familyLayers = depth - 1
+  // THE ELEMENT CENSUS (ruled 2026-09-23 — FD7-D2-LINK-CENSUS): one element per
+  // path-state, PLUS the standalone P-EMIT-3 def-fill elements of the level-1
+  // def hosts whose path-states are CHILDLESS (only d2/link: +4 — the level-1
+  // hosts have real children from d3 on, so the term is 0 there). The
+  // mechanism: the covered-CHILDLESS gate does not fire for an UN-covered
+  // childless def host, so `render-helpers.ts:744-746` pushes its def children
+  // (contract `docs/specs/render.md:224` DFC-1; the gate's own rationale at
+  // `src/core/render-helpers.ts:733-742`). At d2/link the measured element
+  // count is 7 = 3 path-states + 4 def-fill children (one probe: level 1 counts
+  // 2 real + 4 def-fill = 6 elements, levels above are unchanged).
+  const familyElements = expected.elements ?? familyStates
 
   // ---- profiling -----------------------------------------------------------
   // Measured sections: load (translate), compile (the ONE path-enumeration
@@ -301,6 +444,10 @@ if (typeof document !== 'undefined') {
     loadMs: 0, compileMs: 0, emitMs: 0, diffMs: 0, applyMs: 0,
     checksMs: 0, renderCount: 0, compileCalls: 0, totalMs: 0, coveredMs: 0,
     states: 0, elements: 0, registered: 0, inTree: 0, unplaced: 0, destroyed: 0, cloneOps: 0,
+    // §3 I5 — the census fields the journal measurement publishes (both are
+    // (re)assigned by the node-census check below; the initialisers are the
+    // pre-measurement placeholder, never the published value)
+    journalCloneOps: 0, journalEntries: 0,
   }
   const now = () => (globalThis.performance?.now ? performance.now() : Date.now())
   const tStart = now()
@@ -378,8 +525,22 @@ if (typeof document !== 'undefined') {
       if (destroyed.length !== 0) throw new Error(`destroyed: expected 0, got ${destroyed.length}`)
       if (supervisor.journal.length !== 0) throw new Error(`journal must be empty (no ops applied), got ${supervisor.journal.length}`)
       // no clone-instance ops, no placement-attach ops, no state-slices: the
-      // static model mints NO clones and applies NO ops (E2E-1)
-      PROFILE.cloneOps = 0
+      // static model mints NO clones and applies NO ops (E2E-1) — MEASURED from
+      // the journal (§3 I5), never assigned as a literal
+      PROFILE.cloneOps = measuredCloneOps(supervisor.journalEntries({ afterIndex: 0, limit: supervisor.journal.length || 1 }))
+      // the second, INDEPENDENT source: the per-kind journal walk (audit finding 5).
+      // NOTE (H15): `supervisor.journal` is read DIRECTLY in the `limit` above and in
+      // the emptiness check — justified as the page's own diagnostic: it sizes a read
+      // window; it is NOT the I5 census accessor (`journalEntries` is, and both
+      // `measuredCloneOps` and this walk go through it).
+      const kindCensus = journalKindCensus(supervisor)
+      PROFILE.journalCloneOps = kindCensus.cloneInstances
+      PROFILE.cloneOpKinds = kindCensus.kinds
+      PROFILE.journalEntries = kindCensus.totalEntries
+      // two independent sources must agree (an alias would make this vacuous)
+      if (PROFILE.cloneOps !== PROFILE.journalCloneOps) {
+        throw new Error(`clone census drift: the journal read counted ${PROFILE.cloneOps} clone-instance ops but the per-kind walk counted ${PROFILE.journalCloneOps} — two independent sources must agree (kinds=${JSON.stringify(PROFILE.cloneOpKinds)})`)
+      }
     })
 
     // ---- state census -------------------------------------------------------
@@ -394,12 +555,28 @@ if (typeof document !== 'undefined') {
     })
 
     // ---- element census + per-level counts ----------------------------------
-    await runner.check(`element census: ${familyStates} elements, wires = pathKeys; level k has exactly 2^k elements`, () => {
-      if (els.length !== familyStates) throw new Error(`elements: expected ${familyStates}, got ${els.length}`)
+    // the expectation is the DERIVED relation (familyElements = 2^depth − 1 +
+    // the childless def-host def-fill term), never the stale
+    // `2^depth − 1`-for-every-(depth, method) formula — FD7-D2-LINK-CENSUS.
+    await runner.check(`element census: ${familyElements} elements (${familyStates} path-states${familyElements > familyStates ? ` + ${familyElements - familyStates} def-fill` : ''}), wires = pathKeys; level k has exactly 2^k elements`, () => {
+      if (els.length !== familyElements) throw new Error(`elements: expected ${familyElements}, got ${els.length}`)
       const perLevel = {}
       for (const e of els) {
         const s = stateByWire.get(e.wire)
-        if (!s) throw new Error(`element wire ${e.wire} has no path-state`)
+        if (!s) {
+          // the def-fill synthetic children (`<hostWire>:a`/`:b`) have no
+          // path-state — legitimate ONLY where the census expects them (the
+          // childless def-host def-fill, d2/link), so the count is asserted
+          // against the derived term rather than skipped.
+          if (familyElements === familyStates) {
+            throw new Error(`element wire ${e.wire} has no path-state and the census expects none (elements === states)`)
+          }
+          const host = stateByWire.get(String(e.wire).replace(/:[ab]$/, ''))
+          if (!host) throw new Error(`def-fill element ${e.wire} does not name a def host wire (expected <hostWire>:a|:b)`)
+          const k = layerOfState(host)
+          perLevel[k] = (perLevel[k] ?? 0) + 1
+          continue
+        }
         // the link-derived page's re-typed def-chain children carry NO forkKey
         // (built without one — the adapter-key asymmetry) — legitimately
         // different from the standalone forkKey = pathKey contract
@@ -407,22 +584,86 @@ if (typeof document !== 'undefined') {
         const k = layerOfState(s)
         perLevel[k] = (perLevel[k] ?? 0) + 1
       }
+      const defFill = familyElements - familyStates
       for (let k = 1; k <= familyLayers; k += 1) {
-        const n = 2 ** k
+        // the def-fill children carry their HOST's `stress:layer`, so the level
+        // that holds the childless def hosts counts its real elements PLUS the
+        // fill (only level 1 at d2/link — every other level is 2^k)
+        const n = 2 ** k + (k === 1 ? defFill : 0)
         if (perLevel[k] !== n) throw new Error(`level ${k}: expected ${n} elements, got ${perLevel[k]}`)
       }
-      // the DOM mirrors the element set (every path-state rendered once) —
-      // re-typed elements keep the child's OWN stress:layer attr, so the
-      // per-level DOM counts hold for every method
+      // the DOM mirrors the element set: every element the adapter REGISTERED
+      // carries its level marker EXCEPT the d2/link def-fill synthetics — the
+      // standalone P-EMIT-3 def-fill emits its children with the def spec's own
+      // props (a `<hostWire>:a`/`:b` synthetic wire has no graph node, hence no
+      // authored `stress:layer`; measured 2026-09-23 — the def children carry
+      // `link-1.a`/`link-1.b` text and no layer attr) — and the ROOT (which has
+      // no level at all). So the per-level tally is the plain `2^k`, and the
+      // un-marked registered elements must be exactly root + the def-fill.
       const domLevels = {}
+      let domUnmarked = 0
       for (const [, el] of adapter.wires) {
         const attr = el.getAttribute?.('stress:layer')
         if (attr) domLevels[Number(attr)] = (domLevels[Number(attr)] ?? 0) + 1
+        else domUnmarked += 1
       }
       for (let k = 1; k <= familyLayers; k += 1) {
         if (domLevels[k] !== 2 ** k) throw new Error(`DOM level ${k}: expected ${2 ** k} elements, got ${domLevels[k]}`)
       }
+      if (domUnmarked !== defFill + 1) {
+        throw new Error(`DOM un-marked elements: expected the root + ${defFill} def-fill synthetic(s) (no stress:layer), got ${domUnmarked}`)
+      }
+      if (adapter.wires.size !== familyElements) {
+        throw new Error(`DOM registered wires: expected ${familyElements} (= the element census), got ${adapter.wires.size}`)
+      }
       if (elOfWire('root') == null) throw new Error('root element missing')
+    })
+
+    // ---- the d2/link def-fill PIN (FD7-D2-LINK-CENSUS regression protection) --
+    // At the ONE shallow point where the census exceeds the path-state count
+    // (d2/link: 7 = 3 + 4) the extra elements are the level-1 def hosts'
+    // synthetic def children pushed by the standalone P-EMIT-3 def-fill branch
+    // (`src/core/render-helpers.ts:744-746`; the covered-CHILDLESS gate at
+    // `:743` does not fire for an UN-covered childless host). This check pins
+    // the SHAPE, not the number: every extra element must be a `<hostWire>:<bind>`
+    // child of a path-state, carrying the host's level and the def's content.
+    // Why it matters: the DFC-1 phantom signature for this family is
+    // `2·(2^d − 1) + 1` — at d2 that is ALSO 7, so a bare count cannot tell the
+    // documented boundary from a regression; this assertion can (a phantom
+    // re-emission would carry a real path-state wire, not a `:bind` synthetic).
+    await runner.check('d2/link def-fill pin: at d2 the link census is 7 = 3 path-states + 4 synthetic def-fill children (documented P-EMIT-3 boundary, NOT a phantom)', () => {
+      const fillEls = els.filter((e) => !stateByWire.has(e.wire))
+      const expectedFill = familyElements - familyStates
+      if (fillEls.length !== expectedFill) {
+        throw new Error(`def-fill element count ${fillEls.length} ≠ the derived term ${expectedFill} (elements=${familyElements}, path-states=${familyStates})`)
+      }
+      if (expectedFill > 0) {
+        if (!(depth === 2 && method === 'link')) {
+          throw new Error(`a def-fill term of ${expectedFill} is only documented at d2/link — got depth=${depth} method=${method} (the level-1 hosts have real children from d3 on)`)
+        }
+        for (const e of fillEls) {
+          const m = /^(.*):([ab])$/.exec(String(e.wire))
+          if (!m) throw new Error(`def-fill element ${e.wire} is not a <hostWire>:<bind> synthetic child`)
+          const host = stateByWire.get(m[1])
+          if (!host) throw new Error(`def-fill element ${e.wire}: host wire ${m[1]} is not a path-state`)
+          if (layerOfState(host) !== 1) throw new Error(`def-fill element ${e.wire}: host is level ${layerOfState(host)}, expected the childless level-1 def hosts`)
+          const hostSlot = byNode.get(host.nodeId)?.props?.['stress:slot'] ?? ''
+          // read the RENDERED element (the adapter's registration), not the
+          // emitted record — `emitElements` returns wire/childOrder/defChildren
+          // records, so the text only exists on the DOM element the fill built.
+          const fillEl = elOfWire(e.wire)
+          if (fillEl == null) throw new Error(`def-fill element ${e.wire} was emitted but never registered by the adapter`)
+          if (!elText(fillEl).includes(`link-1.${m[2]}`)) {
+            throw new Error(`def-fill element ${e.wire}: text "${elText(fillEl)}" lacks the def content link-1.${m[2]} (host slot ${hostSlot})`)
+          }
+        }
+      }
+      // anti-vacuity: the pin must be able to fire — at d2/link it asserts a
+      // non-zero term, so a "no fill elements anywhere" regression is caught by
+      // the COUNT above (0 ≠ 4), never silently satisfied.
+      if (depth === 2 && method === 'link' && expectedFill !== 4) {
+        throw new Error(`d2/link def-fill term is ${expectedFill}, the measured relation is 4 (2 level-1 def hosts × their def's 2 children) — the builder expectation drifted`)
+      }
     })
 
     // ---- css stress (per-level property + per-slot value pairs) -------------
@@ -525,16 +766,47 @@ if (typeof document !== 'undefined') {
         }
         // the adapter-key asymmetry pin: exactly the covered layers' elements
         // (L2..L11 = 4094 − 2 at d12) are re-typed (no forkKey, bare-wire
-        // keys); the root + L1 (3) are standalone (forkKey = pathKey)
+        // keys); the root + L1 (3) are standalone (forkKey = pathKey). The
+        // count is `states − 3` at EVERY (depth, method) — including d2/link,
+        // where the re-typed set is the 4 synthetic def-fill children of the
+        // two childless level-1 def hosts (3 standalone + 4 = 7 = the ruled
+        // census; FD7-D2-LINK-CENSUS).
+        // the re-typed set = the standalone-emitted-minus-3 (root + the two
+        // level-1 hosts are standalone, `forkKey = pathKey`) PLUS the d2/link
+        // def-fill synthetics (also forkKey-less). Derived: `familyElements − 3`
+        // — which is `states − 3` (= 0 at d2/link, the stale formula) only when
+        // the shallow term is 0.
+        const expectedRetyped = familyElements - 3
         const retyped = els.filter((e) => e.forkKey === undefined)
-        if (retyped.length !== familyStates - 3) {
-          throw new Error(`link-derived: expected ${familyStates - 3} re-typed def-chain elements (no forkKey), got ${retyped.length}`)
+        if (retyped.length !== expectedRetyped) {
+          throw new Error(`link-derived: expected ${expectedRetyped} re-typed def-chain elements (no forkKey), got ${retyped.length}`)
         }
       })
     }
 
     // ---- treeFromOps reconstructs the binary shape --------------------------
-    await runner.check(`treeFromOps: one root; full binary tree (2 children per non-leaf); ${2 ** familyLayers} leaves at depth ${familyLayers}; ${familyStates} nodes total`, () => {
+    // THE EXPECTATION IS THE RULED ELEMENT CENSUS — `2^depth − 1` PLUS the
+    // childless-def-host def-fill term — never the stale
+    // `2^d − 1`-for-every-(depth, method) formula (FD7-D2-LINK-CENSUS, user
+    // ruling 2026-09-23; `docs/decisions.md`
+    // DERIVED-FAMILY-SHALLOW-DEF-FILL-EXCEPTION). Where the term is non-zero —
+    // d2/link ONLY — the 4 synthetic def-fill children are `<hostWire>:a|:b`
+    // children of the two level-1 def hosts (`src/core/render-helpers.ts:743-746`;
+    // contract `docs/specs/render.md:224` DFC-1), so `treeFromOps` grows them
+    // UNDER those hosts: the level-1 hosts STOP being leaves and the tree's
+    // leaves become the 4 fills, one level below `familyLayers`
+    // (measured 2026-09-23: root → 2 hosts → 2 fills each = 7 nodes, 4 leaves at
+    // depth 2). At every other (depth, method) the term is 0 and this check is
+    // the plain full-binary-shape assertion it always was — the correction is
+    // the ruled census, NOT a relaxation: the total is pinned to the census
+    // (7 at d2/link, 3/7/4095 elsewhere) and the def-fill arm additionally pins
+    // the deepest level to the DOCUMENTED fill wires, so a DFC-1 phantom of the
+    // same node count (the numerically identical `2·(2^d − 1) + 1` = 7) cannot
+    // satisfy this check.
+    const treeDefFill = familyElements - familyStates
+    const expectedLeafDepth = familyLayers + (treeDefFill > 0 ? 1 : 0)
+    const expectedLeaves = treeDefFill > 0 ? treeDefFill : 2 ** familyLayers
+    await runner.check(`treeFromOps: one root; full binary tree (2 children per non-leaf); ${expectedLeaves} leaves at depth ${expectedLeafDepth}; ${familyElements} nodes total`, () => {
       if (trees.length !== 1 || trees[0].wire !== 'root') throw new Error(`expected a single root tree, got ${trees.length}`)
       let leaves = 0
       let total = 0
@@ -542,15 +814,33 @@ if (typeof document !== 'undefined') {
         total += 1
         if (t.children.length === 0) {
           leaves += 1
-          if (d !== familyLayers) throw new Error(`leaf at depth ${d}, expected ${familyLayers}`)
+          if (d !== expectedLeafDepth) throw new Error(`leaf at depth ${d}, expected ${expectedLeafDepth}`)
           return
         }
         if (t.children.length !== 2) throw new Error(`non-leaf at depth ${d} with ${t.children.length} children`)
         for (const c of t.children) walk(c, d + 1)
       }
       walk(trees[0], 0)
-      if (total !== familyStates) throw new Error(`tree total: expected ${familyStates}, got ${total}`)
-      if (leaves !== 2 ** familyLayers) throw new Error(`leaves: expected ${2 ** familyLayers}, got ${leaves}`)
+      if (total !== familyElements) {
+        throw new Error(`tree total: expected ${familyElements} (the ruled element census: ${familyStates} path-states + ${treeDefFill} def-fill), got ${total}`)
+      }
+      if (leaves !== expectedLeaves) throw new Error(`leaves: expected ${expectedLeaves}, got ${leaves}`)
+      if (treeDefFill > 0) {
+        // the deepest level must BE the documented def-fill children, not merely
+        // the right number of anonymous leaves: every `<hostWire>:a|:b`
+        // synthetic, and NOT ONE a path-state wire (a phantom re-emission would
+        // carry real path-state wires — the DFC-1 signature this arm separates).
+        const fillWires = new Set(els.filter((e) => !stateByWire.has(e.wire)).map((e) => String(e.wire)))
+        const deepest = []
+        const collect = (t, d) => {
+          if (d === expectedLeafDepth) deepest.push(String(t.wire))
+          for (const c of t.children) collect(c, d + 1)
+        }
+        collect(trees[0], 0)
+        if (deepest.length !== fillWires.size || deepest.some((w) => !fillWires.has(w))) {
+          throw new Error(`the depth-${expectedLeafDepth} leaves are [${deepest.join(', ')}] — expected exactly the ${fillWires.size} documented def-fill synthetics [${[...fillWires].join(', ')}]`)
+        }
+      }
     })
 
     // ---- PAR-5 parity against the builder's SSR snapshot --------------------
@@ -597,7 +887,7 @@ if (typeof document !== 'undefined') {
       `load=${f(PROFILE.loadMs)}ms compile=${f(PROFILE.compileMs)}ms ` +
       `emit=${f(PROFILE.emitMs)}ms diff=${f(PROFILE.diffMs)}ms apply=${f(PROFILE.applyMs)}ms checks=${f(PROFILE.checksMs)}ms ` +
       `renders=${PROFILE.renderCount} ` +
-      `census(registered=${PROFILE.registered} inTree=${PROFILE.inTree} unplaced=${PROFILE.unplaced} destroyed=${PROFILE.destroyed} cloneOps=${PROFILE.cloneOps}) ` +
+      `census(registered=${PROFILE.registered} inTree=${PROFILE.inTree} unplaced=${PROFILE.unplaced} destroyed=${PROFILE.destroyed} cloneOps=${PROFILE.cloneOps} journalCloneOps=${PROFILE.journalCloneOps} cloneOpKinds=${JSON.stringify(PROFILE.cloneOpKinds)} journal=${PROFILE.journalEntries}) ` +
       `covered=${f(PROFILE.coveredMs)}ms total=${f(PROFILE.totalMs)}ms ` +
       `unmeasured=${f(PROFILE.totalMs - PROFILE.coveredMs)}ms`,
     )

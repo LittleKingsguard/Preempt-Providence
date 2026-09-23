@@ -129,7 +129,9 @@ the serialized doc path. This is the last silent translate drop: the "never
 silent" K4 family (`payload-shape-obsolete`, `children-shape-invalid`,
 `children-entry-invalid`, `placement-entry-invalid`, `handler-phase-unknown`,
 …, translate.md TR-F2) covers every other boundary, and DEFECT #15's fix
-policy was exactly "no longer SILENT" (defects.md:24). Note the drop is
+policy was exactly "no longer SILENT" (✎ **2026-09-23 citation repair — cite the row
+BY NAME, not by line: `defects.md` **DEFECT #15**, now `defects.md:157`; the
+former `defects.md:24` pointed at row N1**). Note the drop is
 currently DOCUMENTED contract ("unknown fields … ignored", placement-path-
 spec.md:38; TR-F2) — so the warn is a **contract amendment**, not a bug fix,
 and needs the user gate.

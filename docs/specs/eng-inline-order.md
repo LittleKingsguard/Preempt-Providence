@@ -46,7 +46,10 @@ the content text.
 **NEVER change `content`'s meaning.** `content` stays the concatenated plain
 text — the scalar invariant relied on by `node.ts:613` (content getter),
 `node.ts:968/976` (layer merge), `derived.ts:210` (whitelisted scalar root),
-`validation.ts:18`, `resolve.ts:68`, `translate.ts:327/1181`. The new ordering
+`validation.ts:18`, ✎ `resolve.ts` **BY SYMBOL** (`providerValueFor` `:25`, call
+sites `:39`/`:44` — **2026-09-23 citation repair, `STALE-RESOLVE-ANCHORS`: the
+previously cited `resolve.ts:68` now lands inside `isDefShapedValue`, an
+unrelated construct**), `translate.ts:327/1181`. The new ordering
 is an ADDITIVE, OPT-IN field that coexists with scalar `content` and degrades a
 single-text (no-interleaving) body to EXACTLY today's render (byte-identical,
 no behavior change).
@@ -266,7 +269,9 @@ recorded so a future markdown-interleaving need can extend the four sites
 explicitly. (Astrographer's consumer need is HTML/DOM rendering, not the
 markdown export adapter.)
 
-## 9b. Recommended alternative for the trivial case (2026-08-31 gate)
+## 9b. Recommended alternative for the trivial case (2026-08-31 gate; STATUS AMENDED 2026-09-22)
+
+> **⚠ STATUS AMENDED (2026-09-22 — UR-2/W2, `docs/specs/ur-2026-09-17-review.md` §4 UR-2 + §7 AC-16; `docs/decisions.md` BODYRUNS-REMOVABILITY + BARE-TEXT-EMIT rows):** the sentence below that read *"there is no wire-less bare-text node"* is **SUPERSEDED** — it became FALSE at **0.4.0**. The **BARE-TEXT-EMIT** `text` child IS a wire-less-element bare-text node (SSR `isText` + empty `openTag`/`closeTag`, `childHtml` → `contentText` only, `adapters.ts:452-459`/`:622-627`; DOM `createEl` → `document.createTextNode('')`, `:143-159`), so a `text` type renders **bare text**, not `<text>…</text>`. **What still holds:** the *mid-line* limitation — a child of ANY kind renders only AFTER the parent's own scalar `content` (`escapeText(state.text) + body`, `adapters.ts:524`), never between children; `bodyRuns` remains the sole carrier of the parent-scalar-content-interleave, and `bodyRuns` itself is **deprecated-but-present for `>=0.3.0 <1.0.0` and REMOVED at the 1.0.0 major** (branch (b), versioned ruling). ✎ **VERSION-SCOPE UNIFORMITY (2026-09-22 — adversarial finding 9):** the FEATURE's window is `>=0.3.0 <1.0.0`; its **deprecation WARN** (`bodyruns-deprecated`) is a **0.4.0 addition** and is therefore scoped **`>=0.4.0 <1.0.0`** (`src/core/translate.ts:962-964`) — the two scopes must not be quoted interchangeably. The `<span>` recommendation here stays valid for the after-content-only case; the new `text`-child contract lives in `docs/specs/adapters.md` §3.1/§3.2/§4.1/§4.3/§4.4, `docs/specs/render.md` and `docs/specs/node.md` §2, scoped **`>=0.4.0 <1.0.0`**.
 
 For placing literal text **beside** children where the text only needs to come
 AFTER the parent's own content, a `<span>` child in `children[]` avoids `bodyRuns`:
@@ -274,9 +279,13 @@ a node `{ content: 'Title ', children: [{ type: 'span', content: 'note', props:
 { id: 't1' } }] }` renders `Title <span id="t1">note</span>`. **Limitation:** a
 `<span>`/`text`-node child cannot interleave text BETWEEN children (the mid-line
 `Some <strong>bold</strong> text` case) — the parent's `content` always renders
-before all children (`escapeText(content) + children`, adapters.ts:524), and there
-is no wire-less bare-text node. Use `bodyRuns` for any interleaving needed between
-children. See `docs/specs/content-xor-children-review.md`.
+before all children (`escapeText(content) + children`, adapters.ts:524), and
+~~there is no wire-less bare-text node~~ **[SUPERSEDED 2026-09-22 — a wire-less
+bare-text node EXISTS since 0.4.0: the BARE-TEXT-EMIT `text` child; see the
+status block above]**. Use `bodyRuns` for any interleaving needed between
+children — until the **1.0.0 major** removes it (`docs/decisions.md`
+BODYRUNS-REMOVABILITY row). See `docs/specs/content-xor-children-review.md`
+(§2 premise + PARK row annotated 2026-09-22).
 
 ## 10. Happy-path states (TestWriter red set — valid paths)
 

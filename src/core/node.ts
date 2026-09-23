@@ -853,9 +853,17 @@ export class Node {
     this.ensureWritable()
     let dissolved = false
     for (const a of [...this.anchors]) {
-      if (a.role !== 'child') continue
-      linkOf(a).destroy()
-      dissolved = true
+      if (a.role === 'child') {
+        linkOf(a).destroy()
+        dissolved = true
+      } else if (a.role === 'content' || a.role === 'container') {
+        // ENG-DESTROY-PLACEMENT-ANCHOR-RESIDUE — detach THIS node's placement
+        // anchors from the SHARED per-name Link. NEVER link.destroy(): other
+        // producers/consumers share the Link; destroying it would dissolve
+        // their anchors too.
+        this.removeAnchor(a)
+        dissolved = true
+      }
     }
     if (dissolved || this.childAnchor() === null) markPending(this)
   }

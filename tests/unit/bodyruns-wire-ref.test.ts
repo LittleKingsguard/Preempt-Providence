@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   encodeRuns,
   decodeRuns,
@@ -27,6 +27,15 @@ function makeNode(id: string, props: Record<string, unknown>) {
   NODE_PROPS.set(id, { base: { props } })
   return id
 }
+
+// N4 (2026-09-22 — closed by the gate-8 doc review of the W4 landing): the case
+// below is named "warn-and-drop", so it must assert BOTH halves. The W4 diagnostic
+// layer (docs/specs/bodyruns-drop-diagnostics.md §9) now makes the drop class it
+// carries emit a real `bodyruns-child-unresolved` warn on `console.warn`, so the
+// name is no longer a promise the file does not test.
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 function emit(children: string[], bodyRuns: BodyRun[]): { childOrder: string[]; text: string } {
   const els = emitElements(
@@ -66,10 +75,19 @@ describe('ENG-BODYRUNS-WIRE-REF emit-boundary authoredId→wire (gate §3)', () 
     expect(childOrder).toEqual(['node-7'])
   })
 
-  it('warn-and-drop: an authored id absent from the node own children is dropped (§3)', () => {
+  it('warn-and-drop: an authored id absent from the node own children is DROPPED **and** warns (§3 C3/C4)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     makeNode('node-9', { id: 'present-inline' })
     const { text } = emit(['node-9'], [{ child: 'missing-inline' }, { text: ' only' }])
+    // the DROP half (authored-id ref absent from the element's own childOrder)
     expect(decodeRuns(text)).toEqual([{ text: ' only' }])
+    // the WARN half (N4 — the name promises it; the C3 catalogue mandates it).
+    // NOTE: a `console.warn` spy is a call-boundary spy, so C4's module-level
+    // signature dedup cannot suppress this assertion for a NEW signature — this
+    // pair's (code, wire, id) is unique inside the file (spec §8.4 invariant H2).
+    const lines = warn.mock.calls.map((c) => String(c[0]))
+    expect(lines.filter((l) => l.includes('bodyruns-child-unresolved'))).toHaveLength(1)
+    expect(lines.filter((l) => l.includes('missing-inline'))).toHaveLength(1)
   })
 
   it('base/bodyRuns is NOT mutated (the emitted string is the only rewrite)', () => {

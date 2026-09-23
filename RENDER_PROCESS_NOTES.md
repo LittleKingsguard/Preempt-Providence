@@ -1432,3 +1432,174 @@ list (specs + skill + summary + migration citations) is recorded there.
   runtime within the 3× tripwire).
   Encoding: `docs/decisions.md` UNDO-REDO-REPORT row, `docs/specs/ops.md` §6
   Host report row, `docs/specs/undo-redo-report.md`.
+
+### 10.10.11 BARE-TEXT-EMIT — the bare `text` child node + its emit rule (DECIDED, 2026-08-31; contract FOLDED into the behaviour specs 2026-09-22)
+
+- **DECIDED: a `text` child node renders its escaped text with NO wrapper
+  element, positioned by `childOrder` (Shape A1).** A node authored
+  `{type:'text', content:'…'}` is a real DOM `Text` node in the wires map on the
+  client and a fragment descriptor with `isText: true` + empty
+  `openTag`/`closeTag` on the server. `[text, strong, text]` renders
+  `A <strong>bold</strong> text`. A2 (parent-owned text runs) REJECTED — it
+  recreates the `bodyRuns` cross-node coupling. Three-agent gate
+  PROCEED-AS-RESHAPED (docs/specs/bare-text-emit-review.md).
+- **DECIDED: the emit rule is CONTENT-ONLY and it is a SILENT FILTER.**
+  `emitOne`'s `s.type === 'text'` early return (`src/core/render-helpers.ts:
+  1155-1162`) emits ONLY `props['text']`
+  (`scalarBinding(s.bindings) ?? s.content`), performs no `prop:`/`css:`/`on:`/
+  `data:` mapping, skips `stampNodeId`, and hard-codes `childOrder: []` — so an
+  auto-minted `props.id` is never rendered. **There is NO emit-time
+  `text-content-only` warn**: that warn is TRANSLATE-time and legacy-JSON-only
+  (`translate.ts:956-958`); a programmatic `text` node warns never (N6).
+- **DECIDED: the adapter cascade is CONTAINED.** DOM `createEl` mints
+  `document.createTextNode('')` (shim fallback: a `span`) BEFORE the
+  `dataset.wire` write, which would throw on a `Text`; `setProp` guards every
+  non-`text` name on a `nodeType === 3` owner with an early return, and writes
+  `el.data = bakeValue(val)` for the `text` name. SSR: `isVoid = isText ? true :
+  isVoid`, `childHtml` returns `contentText` alone for an `isText` child, and the
+  `isText` case is EXCLUDED from the void rule — with the consequence that a
+  `text` node as the SSR ROOT serializes `''` (the `rootHtml` void branch; pinned
+  as intended, not a defect).
+- **DECIDED: the `text`-node content-only rule applies to `>=0.4.0 <1.0.0`**,
+  with the 1.0.0 revisit (XOR render enforcement + `bodyRuns` removal +
+  the producer-migration guide).
+- **DECIDED (2026-09-22 — the item-6 archival FOLD, docs/specs/ur-2026-09-17-review.md
+  §4 UR-1 / §7 AC-1..AC-12):** the contract now lives in the BEHAVIOUR specs —
+  `docs/specs/render.md` §3.2b (the register entry + `BT-REG-1`/`BT-EMIT-1..7`,
+  the OWNING rule), `docs/specs/adapters.md` §3.1 step 0 / §3.2 Text-owner rows /
+  §3.2 silent-filter note / §4.1 / §4.3 / §4.4 / §6 (SSR-F5) / §10.1 DOM-H31 /
+  §10.2 FRG-H14/FRG-H28/FRG-H29, `docs/specs/node.md` §2.1 (the type register).
+  The five pre-0.4.0 DENIALS are retired with SUPERSEDED annotations, never
+  deleted: `docs/specs/content-xor-children-review.md` §2 + its PARK row,
+  `docs/specs/eng-inline-order.md` §9b,
+  `docs/use-case-placement-native-interleave.md` §5b, the
+  `docs/decisions.md` CONTENT-XOR-CHILDREN row, `docs/pending.md`.
+- **DECIDED (2026-09-22, UR-2): `bodyRuns` removability is VERSIONED — branch
+  (b), removed at the 1.0.0 major.** The shipped `bodyruns-deprecated` warn
+  ("removed at the next major") STANDS; `bodyRuns` is deprecated-but-present for
+  `>=0.4.0 <1.0.0` (uniform with the W2/W3 annotations — the `bodyruns-deprecated`
+  warn is a 0.4.0 addition, so the lower bound is 0.4.0 everywhere; adversarial
+  audit finding 9) and is NOT redundant (it is the sole carrier of the
+  parent-scalar-content interleave). `docs/decisions.md`
+  BODYRUNS-REMOVABILITY row.
+- **DEFERRED (recorded, NOT built):** `content-with-children-recommended`
+  (`translate.ts:965-970`, comment-only — N5) and the XOR render enforcement —
+  both land at the 1.0.0 major with the migration guide
+  (`docs/decisions.md` BARE-TEXT-EMIT + CONTENT-XOR-FREE-PARENT-NO-OP rows;
+  `docs/pending.md` 1.0.0-XOR batch row).
+- **Encoding:** `docs/decisions.md` BARE-TEXT-EMIT row,
+  `docs/specs/bare-text-emit-review.md` (§3 carries the enforcement-site
+  ERRATUM), `docs/specs/render.md` §3.2b, `docs/specs/adapters.md`
+  §3.1/§3.2/§4.1/§4.3/§4.4/§6/§10, `docs/specs/node.md` §2.1,
+  `tests/unit/bare-text-emit.test.ts` + `tests/unit/bare-text-warns.test.ts`.
+  Trio green at landing: 1275.
+
+### 10.10.12 BODYRUNS-DROP-DIAGNOSTICS — the emit-boundary drop diagnostic + the C2 containment clamp (DECIDED, 2026-09-22 — W4 LANDED)
+
+- **DECIDED (user ruling, UR-3(b) Q2 option (i)): the diagnostic channel is
+  `console.warn` at the emit resolver** (`src/core/ops.ts:401` precedent), NOT a
+  `RenderWarning[]` return/out-param (an own-gate public-surface widening) and
+  **NOT** in the adapters (they stay pure silent consumers — NVA-3,
+  `docs/specs/adapters.md:561`; a diagnostic there would fire once per DOM rebuild
+  and once per SSR re-materialize). Message shape
+  `[bodyruns] <code> at <elementWire>: <detail>`. Codes:
+  `bodyruns-child-unresolved`, `bodyruns-child-duplicate` (with the `<n>` count),
+  `text-node-children-ignored` (with the `children`/`bodyRuns`/`children+bodyRuns`
+  literal). Warn-never-throw, everywhere.
+- **DECIDED: the C4 repetition bound is a MODULE-level signature-dedup set, never
+  cleared per pass** — key `` `${code}\u0000${elementWire}\u0000${value}` ``, short
+  strings only (no graph references; the `findElScans` module-state discipline).
+  The per-`emitElements`-call set is **REJECTED**: `emitElements` runs once per
+  render pass (a live editor renders per keystroke), so a per-call bound is exactly
+  the P2 flood hazard. Consequence: **one warn per distinct signature for the life
+  of the process** — precisely: **one warn per `(code, elementWire, value)` per
+  PROCESS, never per document** (the wire is not document-scoped), so a host
+  rendering several documents in one process can be **silently denied a diagnostic
+  it never saw** (a collision across documents is reachable when the wire/id values
+  come from a loaded/serialized payload) and the set **grows unbounded — no clamp**.
+  **This is the recorded residual R-W4-5** (spec §9.6b + §3 C4's hazard block; parked
+  in `docs/pending.md`; tracked in `docs/defects.md`): the behaviour matches this
+  clause, and a host needing per-document completeness must route/wrap
+  `console.warn` per document or accept the suppression — never read an absent line
+  as "nothing was dropped". It cannot trip `warningsMain === 0` — that value is
+  `translated.warnings.length` (the K4 translate channel), not a console counter —
+  and no census/derived-fork guard changes (no new `MinimalElement` field, no extra
+  ops, no per-element scan).
+- **DECIDED: the C2 containment clamp is a `childOrder` MEMBERSHIP test**
+  (`childWires.has(globalWire)`), **never** a `nodeById` membership test. A run
+  whose only index resolution lies outside the element's own final `childOrder` is
+  **DROPPED + warned**, never rewritten to the foreign wire (defect **N1**: the DOM
+  `appendChild` MOVES the foreign element; SSR DUPLICATES its HTML).
+- **DECIDED (the one place the implementation had to CHOOSE — spec §9.3):** C1's
+  step order is own-child local map first, **except** that a contained global
+  candidate which is a def-fill **synthetic** wire (no `nodeById` entry) resolves
+  first. Rationale: the def-fill element's `childOrder` carries BOTH the synthetic
+  def-child wire and the same child's real path-state wire (the landed GREEN control
+  **A+6b**), so local-first resolves to the wrong, twice-materialized child and
+  re-breaks the 0.3.2 def-fill contract. Recorded as defect row **W4-SPEC-1** and
+  as an explicit `AMENDED 2026-09-22 (W4)` marker on the spec's C2 precedence pin.
+  **SCOPE (recorded by the gate-8 doc review, W4 audit finding 2):** the exception
+  fires **only** where the local map is structurally BLIND (the contained candidate
+  has no `nodeById` entry), so it is **NOT** a general defeat of the local-first pin;
+  its one consequence is that the synthetic branch returns **before** the C3
+  duplicate check, so A+6b emits **0** diagnostics and that count is pinned as a
+  regression guard (spec §8.1 A+6b; the warn-on-the-synthetic-branch alternative is
+  recorded as an open choice, spec §3 C2).
+- **DECIDED: the C5 `text`-node trigger is the DROP CRITERION** — authored
+  `children` (non-empty) **or** a `{ child }` run — never the run count /
+  `isInterleaving` (a normalization flag): a childless, `{ child }`-free multi-`{ text }`
+  node drops nothing and stays silent.
+- **Residuals carried:** R-A1 (the `:234` empty-map bail's dead half — W4 anchor;
+  pre-W4 it was `:188`), R-W4-1 (an authored-id ref naming a fork arm's BASE node
+  cannot resolve — a single run cannot name all adopted arms (`:716-720`) and the
+  base wire is foreign; dropped + warned, C3 already specifies it; the author-facing
+  workaround — name the explicit arm wire — is now in
+  `docs/skills/designing-pages.md` §2), R-W4-2 (four §5 register rows are unsatisfiable
+  as generated — TEST/ORACLE defects ORACLE-1..4; **RESOLVED W5, test-side**),
+  R-W4-3 (`A+7a`'s silence half is now false by contract — a test re-point is pending;
+  **RESOLVED W5, test-side**), R-W4-4 (`package.json` stays
+  0.5.0; the 0.5.1 bump + the `docs/releases.md` row are the release pass's item),
+  **R-W4-5 (the C4 dedup is PROCESS-level, never per document — one warn per
+  `(code, wire, id)` per process; a second document can be silently denied a
+  diagnostic, and the set grows unbounded with no clamp. SPEC-PERMITTED —
+  observability/documentation debt, not a code bug; spec §9.6b + §3 C4, parked in
+  `docs/pending.md`, tracked in `docs/defects.md`).**
+- **Encoding:** `docs/specs/bodyruns-drop-diagnostics.md` **§9** (the implementation
+  record: clause→code map, exact templates, the dedup key, the choice, the flip, the
+  oracle findings), §1.1 rows W4-1/W4-2 **+ the gate-8 row G8-W4**, §3 C1/C2 `AMENDED
+  2026-09-22 (W4)` markers, §3 C3's corrected **resolvable** duplicate trigger, §3 C4's
+  R-W4-5 hazard block, §5 + §8.1 re-points, **§8.4's harness invariants H1/H2**,
+  **§9.6b (R-W4-5)**; `docs/decisions.md` BODYRUNS-DROP-DIAGNOSTICS row +
+  **BODYRUNS-DIAGNOSTIC-DEDUP-SCOPE (R-W4-5)**; `docs/defects.md` FIXED row
+  BODYRUNS-DROP-DIAGNOSTICS (closes N1/N2/N3) + OPEN rows W4-SPEC-1 / R-W4-5 (+ the
+  parallel-harness row SMOKE-TRIPWIRE-INERT) + the W5-FIXED ORACLE-1..4 /
+  W4-A+7A-REPOINT / **N4**; `docs/skills/designing-pages.md` §2 + §11. Code (W4 anchors,
+  re-derived 2026-09-22): `src/core/render-helpers.ts:158-190` (the diagnostic channel)
+  / `:206-305` (the resolver) + `:1242-1275` (`emitOne`'s `text` clause). Suite at
+  landing: **1314 passing / 5 failing** (the 5 = the 4 oracle rows + the A+7a flip);
+  after the W5 test-side re-point: **1319 / 0**; after the blind-greens set: **1340 / 0**.
+  typecheck + build clean. **`demo:smoke` — ⚠ see the harness correction below.**
+- **✎ SMOKE HARNESS CORRECTION (2026-09-22 — parallel unit, independent of this
+  landing; cross-referenced, not fixed here):** the `demo:smoke` SMOKE-OK line recorded
+  at landing was read with the **runtime 3× tripwire structurally INERT** — the guard
+  compared `d12Totals['placement']` (populated only by the DERIVED loop) against the
+  placement-derived baseline, i.e. derived-vs-derived (~1.0× by construction), so the
+  RUNTIME `fork-stress-d12.html` page was never measured against it. The repaired
+  harness now reads the runtime total and **prints it every run**
+  (`[runtime-fork:tripwire]`); the honest runtime:derived reading at d12 is
+  **9.4-10.4×** (3 runs), so the **3× tripwire now FAILS** and the 3× BOUND (or the
+  pass-2 cost it exposes — `docs/pending.md:45`) is a supervisor/user decision that was
+  deliberately **NOT** re-baselined. **✎ SUPERSEDED 2026-09-23 (record kept):**
+  the guard was subsequently **RETIRED and REPLACED** by the user's ruling — the
+  cross-family operand pair was ruled a **mis-scoped comparison** (page totals
+  over different construction methods) and the live failing scaling signal is now
+  the runtime-vs-runtime **`runtime-fork-growth-guard`** (`docs/decisions.md`
+  RUNTIME-FORK-GROWTH-GUARD, superseding RUNTIME-FORK-TRIPWIRE-BOUND); the
+  `[runtime-fork:tripwire]` line survives as an **INFORMATIONAL** print and
+  `npm run demo:smoke` is GREEN. The unit evidence below is unaffected.
+  **Consequence for this unit's evidence:** the
+  derived-fork per-region pins (all inside the asserted 2.5×) and `warningsMain === 0`
+  remain valid — the diagnostic is not on the hot path of a page with no drops — but
+  **any runtime-ratio/tripwire reading is unusable until the bound is decided.**
+  Row: `docs/defects.md` OPEN **SMOKE-TRIPWIRE-INERT**; `AGENTS.md` item 4's HARNESS
+  CORRECTION block.

@@ -18,10 +18,23 @@ Context management guidelines for agents working in this repository:
    tests are written, run the suite and confirm green before finishing:
 
    ```
-   npm test           # vitest — full suite
+   npm test           # vitest — full suite (TWO phases: see below)
    npm run typecheck  # tsc --noEmit
    npm run demo:smoke # headless run of all demo checks
    ```
+
+   **`npm test` runs TWO sequential Vitest phases** (2026-09-23; defect row
+   `FLAKE-NOCLONE-SMOKE-IN-PARALLEL`): **(A)** the parallel unit phase
+   (`vitest.config.ts` — every test file EXCEPT the smoke-spawning ones), then
+   **(B)** the serialised smoke-ops phase (`vitest.smoke.config.ts`,
+   `fileParallelism: false`). **RULE: a unit file that spawns the full smoke
+   (`scripts/demo-smoke.mjs`) — or an equivalently heavy page-worker harness —
+   must be listed in `SMOKE_SPAWNING_TEST_FILES` (`vitest.config.ts`) and
+   therefore run ONLY in phase B, never inside the parallel phase; and such a
+   case must never be "fixed" by skipping it or gating it behind a default-off
+   env flag** (that would drop the enforcement from CI, which runs plain
+   `npm test`). Rationale + measurements: `docs/decisions.md` row
+   `NO-CLONE-TEST-PHASE-ISOLATION`.
 
    Only report work as complete when all three pass (and `npm run build`
    emits cleanly for the full build).
@@ -46,9 +59,16 @@ Context management guidelines for agents working in this repository:
    (`[derived-fork:pin]`) — NOT totals, which are compile-enumeration-
    dominated (~2.8s baseline) and insensitive to EMIT-side blow-ups. The
    runtime fork-stress pages keep the ~1.5× method-ratio watch (totals,
-   asserted 2.5×) + the 3× tripwire against the placement-derived total
-   (re-baselined 2026-08-16 — the isolated-subprocess measurement exposes the
-   honest ~2.1-2.7× runtime:derived ratio; see the d14 paragraph below).
+   asserted 2.5×). **✎ SUPERSEDED 2026-09-23 — the clause that stood here ("+ the 3× tripwire against the placement-derived total (re-baselined
+   2026-08-16 — the isolated-subprocess measurement exposes the honest
+   ~2.1-2.7× runtime:derived ratio)", is RETIRED AS AN ASSERTION by the user's
+   ruling:** the cross-family 3× tripwire is replaced by the
+   **runtime-vs-runtime growth guard** (see the GROWTH GUARD block at the end of
+   this item). The `~2.1-2.7×` band was never a real runtime reading (it was the
+   derived-vs-derived artefact — DEFECT `SMOKE-TRIPWIRE-INERT`), so
+   RE-BASELINING the cross-family bound is now MOOT: the cross-family ratio is
+   printed as INFORMATIONAL only, labelled a construction-cost ratio over two
+   different construction methods.
    **d14 pages (2026-08-16): BUILT-BUT-NOT-SMOKE-RUN.** The depth-14 pages
    (2^14 − 1 = 16383 nodes/states) are built for every fork-family set
    (fork-stress-d14.html, fork-stress-data-d14.html,
@@ -58,8 +78,8 @@ Context management guidelines for agents working in this repository:
    fixes) are too fast to expose pipeline scaling in the automated smoke, so
    the d14 pages exist for the browser-based scaling watch. They do NOT run
    in the automated smoke (re-scoped 2026-08-16: the d12 family is the
-   automated tripwire — an O(n²) return still flags there; the d14 pages only
-   made the automated smoke ~2m longer). **Smoke harness isolation (kept):**
+   automated scaling watch — an O(n²) return still flags there; the d14 pages
+   only made the automated smoke ~2m longer). **Smoke harness isolation (kept):**
    the fork pages run in an isolated subprocess each (scripts/smoke-page-
    worker.mjs — every page module retains its ~50MB+ frame, and stacked
    frames balloon the heap into GC-storm territory) — the guards are
@@ -70,6 +90,62 @@ Context management guidelines for agents working in this repository:
    still trips). Watch the d12 pass2/compile multiples in the smoke output —
    the probe's purpose is exposing that scaling shape; for the depth-14 shape
    open the d14 pages manually in a browser.
+   **✎ HARNESS CORRECTION (2026-09-22 — DEFECT SMOKE-TRIPWIRE-INERT, fixed
+   this pass; the BOUND itself is unchanged and still the user's):** the
+   sentence above describes what this item's tripwire MEANS; until 2026-09-22
+   the harness did not implement it — the guard read `d12Totals['placement']`,
+   i.e. the PLACEMENT-DERIVED page's total, so the comparison it executed was
+   derived-vs-derived (~1.0×) and the runtime page was never measured (its
+   profile was discarded by the runtime loop). The `~2.1-2.7×` band above is
+   therefore NOT a reproducible runtime reading — it is that derived-vs-derived
+   quantity. The repair reads the RUNTIME `fork-stress-d12.html` total
+   (`runtimeForkTotals[12]`) vs the placement-derived baseline × 3 and PRINTS
+   it every run (`[runtime-fork:tripwire]`); the honest reading is **9.4-10.4×**
+   at d12 (3 runs: 1544.6/163.5 = 9.45×, 1589.9/161.0 = 9.88×, 1525.7/146.2 =
+   10.44× — pass2 ≈84% of the runtime total, scaling ≈2.2-3.4×/depth), so the
+   smoke now FAILS at the tripwire. The 3× bound was deliberately NOT raised:
+   re-baselining it (or fixing the pass-2 cost it exposes — `docs/pending.md`
+   :45, the 2026-08-20 efficiency lead) is a supervisor/user decision with that
+   measurement as its evidence (`docs/defects.md` OPEN row
+   SMOKE-TRIPWIRE-INERT).
+   **✎✎ GROWTH GUARD — THE USER'S 2026-09-23 RULING (the block above is KEPT as
+   superseded history; THIS is what the smoke now asserts):** the failing
+   scaling signal is **runtime-vs-runtime**, not cross-family. The ruling's
+   facts (measured 2026-09-23 through the isolated page worker): the derived
+   operand (`demo/path-fork-data.html`, `method=placement`) holds **23 real
+   nodes** and makes **4095 path-states/wires** in **ONE bootstrap enumeration
+   pass** (`passes=1`, 1 render, 0 handlers, 0 flush yields, `compile=33.1ms`),
+   page total **168.6ms**; the runtime operand (`demo/fork-stress-d12.html`)
+   holds **4095 real nodes** built **INCREMENTALLY** through the four layer
+   mechanisms (`new Node(...)` per node; 10 renders, 137 handlers, 11 flush
+   yields, `pass2=700.7ms` + `compile=469.8ms`), page total **1367.8ms**. The
+   two operands are therefore page totals over **different construction
+   methods**, so the cross-family ratio (~8.1× post-R1) measures the
+   construction-path difference, **not** engine scaling — and the original 3×
+   bound had been calibrated on a derived-vs-derived reading (~1.0×), which is
+   why it could never be met honestly. **THE GUARD:** `runtime-fork-growth-guard`
+   (`scripts/demo-smoke.mjs`) compares the **same runtime page family timed
+   against itself** at d10 (1023 nodes) and d12 (4095 nodes — **×4**), both
+   already smoke-run, same construction path. **Statistic = the pass-2 ratio**
+   (the most stable of the three candidates: ±1.5% across repeats vs ±3.0% for
+   the page total, ±4.6% per-node). **Bound = 10×**, a **1.30× margin** over the
+   measured envelope (6.07-7.70× over three runs); an O(n²)-era return (~20× per
+   depth) reads ≈105× and a ×4 per-node degradation reads ≈26×, so a breach
+   still means **per-node pass-2 cost is degrading super-linearly** (the failure
+   message says exactly that). It prints its own envelope every run
+   (`[runtime-fork:growth] STATISTIC=pass2-ratio … pass2-ratio A× / total-ratio
+   B× over 4× the nodes … bound 10×; margin C×`), and the retired cross-family
+   measurement is still printed as **`[runtime-fork:tripwire] INFORMATIONAL
+   (construction-cost ratio, NOT a like-workload metric — no longer asserted)`**
+   with both sets' composition stated in the line. **CONSEQUENCE: the smoke's
+   ONLY failing guard is retired, so `npm run demo:smoke` is expected GREEN
+   unless the growth bound trips** (the pass-2 residual itself stays OPEN work —
+   `docs/defects.md` `RUNTIME-FORK-PASS2-RATIO`, `docs/pending.md`
+   `PASS-2-BOUND-CHOICE`). Every other guard and bound is unchanged (the 2.5×
+   derived per-region pins, the derived in-family totals pin, the
+   residual/coverage guards and the census guards incl. shallow-census and the
+   no-clone pins). Contract: `docs/decisions.md` **RUNTIME-FORK-GROWTH-GUARD**,
+   which SUPERSEDES `RUNTIME-FORK-TRIPWIRE-BOUND`.
 
 5. **Specs and decision records**: behavior contracts live in
    `docs/specs/*.md`; design decisions are recorded in
@@ -222,10 +298,21 @@ Context management guidelines for agents working in this repository:
     model override), PAUSE and wait for the user to manually switch the model
     before running the loop — never run it with a different (lighter) model.
 
-12. **CI / pre-release publish constraints (learned 2026-08-25 — the publish
-    workflow `.github/workflows/publish-prerelease.yml`)**: the publish runs in
+12. **CI / pre-release publish constraints (learned 2026-08-25 — the
+    GitHub-Packages pre-release workflow, since REMOVED)**: the publish runs in
     a CLEAN checkout, so three things that work locally will fail in CI if
     changed. Keep them pinned:
+    > **N8 CORRECTION (2026-09-22):** the workflow this item was learned from,
+    > `.github/workflows/publish-prerelease.yml` (+ the whole `.github/`
+    > directory, the `publishConfig.registry` block and the committed `.npmrc`),
+    > **does not exist in this repository** — it was removed at the 0.2.0 public
+    > flip (`docs/next-steps.md` §"PUBLIC RELEASE CHECKLIST" step 3 + STATUS;
+    > `docs/pending.md` PENDING row; `docs/decisions.md` NPM-PACKAGING row).
+    > **Do NOT cite it as a live artifact and do NOT restore it** — the lessons
+    > below survive as constraints for whatever CI surface a future publish
+    > adopts. Today's publish surface is `package.json` on the default npm
+    > registry (`prepack` clean+build, `prepublishOnly: npm test &&
+    > npm run typecheck`).
     a. **`dist/` is gitignored.** The demo-driven tests
        (`tests/unit/fork-stress-data.test.ts` → `demo/fork-stress-data.js`)
        import `../dist/core/*`. The workflow MUST run `npm run build` before
@@ -242,3 +329,14 @@ Context management guidelines for agents working in this repository:
     Any new CI test failure referencing a gitignored path is fixed by
     skip-when-absent (fixture) or build-first (dist) — never by committing the
     gitignored file. See README §"CI / publish troubleshooting".
+
+    **Release-provenance landing duty (UR-5, added 2026-09-22):** every release
+    pass — tag cut, publish, or a version bump that ships — MUST **add or
+    update that version's row in `docs/releases.md`** in the SAME pass: the
+    tag, the **full 40-char commit**, the commit date, the contents **by
+    reference** to the owning gate record / decision row (never a restated
+    contract), and the owning gate-record path. A row left on
+    `UNTAGGED`/`UNVERIFIED` is a debt to be corrected in place once the tag is
+    resolvable (`docs/releases.md` §"Landing duty" + §"Verification status").
+    `docs/releases.md` is **index-only** — it is never a second copy of any
+    contract (AGENTS.md item 6).

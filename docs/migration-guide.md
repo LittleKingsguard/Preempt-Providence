@@ -141,6 +141,53 @@ realizes for resolution, the packet compiles + emits NESTED under the zone
 (the full root-down chain match — P-EMIT-8/10). Pre-DEFECT-#24 such packets
 compiled 0 actionable path-states and silently dropped.
 
+### 3.1 `DRAFT — PENDING 1.0.0 GATE` — the content-XOR data-shape change (PLACEHOLDERS ONLY)
+
+> **STATUS: `DRAFT — PENDING 1.0.0 GATE`.** This section is a **stub**, deliberately
+> unfinished. The semantics it will describe **do not exist yet**: XOR render
+> enforcement ("children win"), the `bodyRuns` removal, and this migration section
+> itself are the three COUPLED deliverables of the **1.0.0 major**
+> (`docs/decisions.md` BARE-TEXT-EMIT + BODYRUNS-REMOVABILITY rows;
+> `docs/pending.md` + `docs/next-steps.md` 1.0.0-XOR batch rows;
+> `docs/specs/ur-2026-09-17-review.md` §9 Q4 option A — the major is **NOT in
+> scope** and must not start before a user semantics ruling). **This stub asserts
+> NO post-1.0.0 behaviour beyond the ONE already-confirmed clause below** — every
+> other line is a `[PLACEHOLDER]`. Do not act on anything marked
+> `[PLACEHOLDER]`; do not fill it in before the major's gate.
+
+**The one thing that IS settled today (and the only non-placeholder claim here):**
+
+| Data shape | Today (`>=0.4.0 <1.0.0`) | At the 1.0.0 gate |
+| --- | --- | --- |
+| a parent with **NO `content`** and text/element `children` | renders **unchanged** — `[text, strong, text]` → `A <strong>bold</strong> text`, bare text children in `childOrder` position | **the XOR "children win" rule is a NO-OP here**: there is no content to drop or reject. Pinned + test-encoded (`docs/decisions.md` CONTENT-XOR-FREE-PARENT-NO-OP row; `tests/unit/xor-content-free-parent.test.ts`) |
+| a parent with **`content` AND `children`** | `escapeText(content) + children` — content first, then children, **both** rendered (the documented rich-text decomposition) | `[PLACEHOLDER — the XOR enforcement's exact disposition of the parent's `content`: dropped? rejected with a warn? migrated to a leading `text` child? RULED AT THE GATE, not here.]` |
+| a parent with **`content` AND a placement zone**, rendered empty | EMPTY-OWNER escape hatch: authored content keeps the empty drop-zone **visible** | `[PLACEHOLDER — the EMPTY-OWNER / content+placement COLLISION is an OPEN QUESTION and must be ruled BEFORE the enforcement is implemented: if content is dropped, does the placement owner become empty (→ `display: none`) or keep its authored non-emptiness? See `docs/decisions.md` EMPTY-OWNER row + `docs/pending.md` 1.0.0-XOR batch row.]` |
+| a producer authored with **`bodyRuns`** | works (deprecated-but-present) — `bodyruns-deprecated` warn at translate, behaviour unchanged | `bodyRuns` is **REMOVED** at this major (branch (b)). `[PLACEHOLDER — the mechanical rewrite of an author's `bodyRuns` producer: the run list → `text` children (`{text:'Some '},{child:b},…` → `[{type:'text',content:'Some '}, b, {type:'text',content:' text'}]`); the caveat for a producer whose OWN scalar `content` was interleaved — that content has no `text`-child home unless the XOR ruling says otherwise.]` |
+
+> **MIGRATION TRAP (PLACEHOLDER — PENDING THE 1.0.0 GATE):** `[PLACEHOLDER]`
+> The §1-style trap box belongs here: the **symptom** a migrated page will show
+> when the 1.0.0 enforcement meets a `content`+`children` node that was never
+> re-expressed, the **warn code** that will report it, and the **fix**.
+> **Written at the major, not now** — inventing it here would publish semantics
+> that do not exist (the §1 traps are *shipped* behaviours; this one is not).
+
+**§6 checklist step (PLACEHOLDER — do NOT add it to §6 until the major):**
+`[PLACEHOLDER]` — *"Step N: audit every `content`+`children` node (the §1 audit
+channel already lists them once the deferred `content-with-children-recommended`
+warn ships) and re-express the interleaving as `text` children before bumping to
+1.0.0."* — the step number, the audit tooling and the warn code are all
+gate-dependent.
+
+**§8 residual (PLACEHOLDER — PENDING THE 1.0.0 GATE):** `[PLACEHOLDER]` — the
+known-gaps entry that will record what a migrated page still cannot express after
+the enforcement (the EMPTY-OWNER collision's accepted resolution, the
+`nodeToLegacy` round-trip caveat for re-expressed nodes, and any expressiveness
+the `text`-child shape does not reach). **Not written now.**
+
+**Explicitly NOT claimed by this stub:** no warn code, no engine behaviour, no
+enforcement timing, no automatic migration — beyond the single `content`-free-parent
+no-op recorded above.
+
 ## 4. Surface migration maps
 
 ### 4.1 Boot / render

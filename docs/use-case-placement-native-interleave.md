@@ -1,11 +1,22 @@
 # Use Case — Interleaving Placement Zones and Native Children in One Node's Body
 
 - **Status:** **CONFIRMED WORKING (2026-08-31).** Verified by direct probe against
-  the engine (provident-ssr 0.3.2). This document explains the configuration that
+  the engine. This document explains the configuration that
   lets a single node's rendered body interleave **plain text**, **native (family)
   child elements**, and **placement-routed content** in one ordered run.
+  **✎ VERSION HEADER CORRECTED 2026-09-22 (was "provident-ssr 0.3.2"):** the probe
+  ran against **0.3.2**, but the current released version is **0.5.0**
+  (`package.json`; `docs/releases.md` top row) and the document's claims still hold
+  there — the `bodyRuns` capability landed at 0.3.0 and has not changed since
+  (0.3.1 authored-id child-ref resolution, 0.3.2 def-fill/component-prototype
+  `bodyRuns`). `bodyRuns` remains **deprecated-but-present** and is **removed at
+  the 1.0.0 major** (`docs/decisions.md` BODYRUNS-REMOVABILITY row — the shipped
+  `bodyruns-deprecated` warn). §5b additionally carries a **SUPERSEDED** annotation
+  for its "no wire-less bare-text node" premise (false since 0.4.0).
 - **Applies to:** provident-ssr 0.3.0+ (`bodyRuns`), 0.3.1 (authored-id child-ref
-  resolution), 0.3.2 (def-fill/component-prototype `bodyRuns`).
+  resolution), 0.3.2 (def-fill/component-prototype `bodyRuns`), 0.4.0+ (the bare
+  `text` child coexists — see §5b's annotation), and **up to but excluding 1.0.0**
+  (`bodyRuns` removal + XOR render enforcement).
 - **Related specs:** `docs/specs/eng-inline-order.md` (the `bodyRuns` capability),
   `docs/specs/placement-path-spec.md` (placement zones), `docs/specs/
   eng-bodyruns-wire-ref-pathstate-review.md` (the def-fill/placement emit fix).
@@ -142,12 +153,28 @@ parent's own content), a `<span>` child in `children[]` works without `bodyRuns`
 
 renders `Title <span id="t1">inline note</span>`.
 
-> **Limitation (per the 2026-08-31 gate, `docs/specs/content-xor-children-review.md`):**
+> **⚠ SUPERSEDED — the "no wire-less bare-text node" premise (2026-09-22, UR-2/W2/W3; `docs/specs/ur-2026-09-17-review.md` §4 UR-1/UR-2 + §7 AC-10; `docs/decisions.md` BARE-TEXT-EMIT + BODYRUNS-REMOVABILITY rows):**
+> the sentence below that read *"There is no wire-less bare-text node (every element
+> gets a wrapper); a `text` type renders `<text>`, not bare text"* was **TRUE at the
+> 2026-08-31 gate and became FALSE at 0.4.0**. Since **0.4.0** a `text` child IS a
+> wire-less-element bare-text node (SSR `isText` + empty `openTag`/`closeTag`,
+> `childHtml` → `contentText`; DOM `document.createTextNode('')`), so it renders
+> **bare text**. **What still holds here:** a `<span>`/`text`-node child can express
+> text **only after** the parent's own `content` — it cannot interleave text
+> **between** children (e.g. `Some <strong>bold</strong> text`); the mid-line case
+> still needs `bodyRuns`, which is **deprecated-but-present for `>=0.3.0 <1.0.0` and
+> REMOVED at the 1.0.0 major**. ✎ **Version-scope uniformity (2026-09-22 — adversarial
+> finding 9):** the deprecation **WARN** itself (`bodyruns-deprecated`) is a **0.4.0
+> addition**, so the warn's own scope is **`>=0.4.0 <1.0.0`** (`src/core/translate.ts:962-964`).
+> **The new contract rows:** `docs/specs/adapters.md`
+> §3.1 step 0 / §3.2 Text-owner rows / §4.1 / §4.3 / §4.4 / §6, `docs/specs/render.md`
+> §3.2b, `docs/specs/node.md` §2.1 — all scoped **`>=0.4.0 <1.0.0`**.
+
+> **Limitation (per the 2026-08-31 gate, `docs/specs/content-xor-children-review.md` — its §2 premise + PARK row are annotated 2026-09-22):**
 > a `<span>`/`text`-node child can express text **only after** the parent's own
 > content — it cannot interleave text **between** children (e.g. the
 > `Some <strong>bold</strong> text` case where text precedes AND follows a child).
-> That mid-line case requires `bodyRuns`. There is no wire-less bare-text node
-> (every element gets a wrapper); a `text` type renders `<text>`, not bare text.
+> That mid-line case requires `bodyRuns` (until the 1.0.0 major removes it).
 
 ## 6. Consumer note (Astrographer)
 

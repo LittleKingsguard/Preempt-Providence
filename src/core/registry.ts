@@ -384,8 +384,20 @@ export function drainPendingDestroy(scope?: GraphScope): void {
 type FinalizeHook = (node: Node) => void
 const finalizeHooks: FinalizeHook[] = []
 
-export function onNodeFinalized(hook: FinalizeHook): void {
+export function onNodeFinalized(hook: FinalizeHook): () => void {
   finalizeHooks.push(hook)
+  // ENG-SUPERVISOR-HOOK-ACCUMULATION — return an idempotent unsubscribe so a
+  // discarded Supervisor can deregister its hook (Supervisor.dispose()).
+  return () => {
+    const i = finalizeHooks.indexOf(hook)
+    if (i !== -1) finalizeHooks.splice(i, 1)
+  }
+}
+
+/** ENG-SUPERVISOR-HOOK-ACCUMULATION — the module finalize-hook registry size
+ *  (leak watch; mirrors `findElScanCount`). */
+export function finalizeHookCount(): number {
+  return finalizeHooks.length
 }
 
 function finalizeDestroyed(node: Node, flag?: { prototypeRooted: boolean }): void {

@@ -135,24 +135,24 @@ async function emitPage(templateName, outName, doc, serverData) {
 
 // ---- pages 10-17: fork stress, DATA-DRIVEN variant --------------------------
 // Same depths (+ the d14 scaling probe); the page input is a LEGACY envelope
-// (root + two prototypes per layer, handlers declared by NAME in the data) —
-// the browser module supplies the handler bodies and assembles the tree via
-// the clone-instance op.
+// (root + two prototypes per layer, the R2.2 shared owner-name placement
+// topology) — the browser module translates it at runtime and compiles the tree
+// by ONE PATH ENUMERATION (fork-stress-data-p3.md): 2·depth − 1 nodes,
+// 2^depth − 1 path-states/elements, ZERO clone-instance ops.
 {
   for (const depth of [2, 4, 6, 8, 9, 10, 11, 12, 14]) {
     const { html } = await buildForkStressDataPage(depth)
     await writeFile(join(ROOT, 'demo', `fork-stress-data-d${depth}.html`), html)
-    console.log(`built demo/fork-stress-data-d${depth}.html (${2 ** depth - 1} nodes, legacy envelope)`)
+    console.log(`built demo/fork-stress-data-d${depth}.html (${2 * depth - 1} nodes / ${2 ** depth - 1} path-states, legacy envelope)`)
   }
   // single-method variants: the whole tree relies on ONE mechanism
-  // (placement-only / values-only / link-only — spec §4). d12 (original pins)
-  // + d14 (the scaling probes — the d12 totals are too fast to expose the
-  // pass-2 scaling shape, AGENTS.md item-4 watch).
+  // (placement-only / values-only / link-only), declared as pure DATA on the
+  // prototypes. d12 (the pinned family) + d14 (the scaling probes).
   for (const depth of [12, 14]) {
     for (const method of ['placement', 'values', 'link']) {
       const { html } = await buildForkStressDataPage(depth, method)
       await writeFile(join(ROOT, 'demo', `fork-stress-data-${method}-d${depth}.html`), html)
-      console.log(`built demo/fork-stress-data-${method}-d${depth}.html (${2 ** depth - 1} nodes, ${method}-only legacy envelope)`)
+      console.log(`built demo/fork-stress-data-${method}-d${depth}.html (${2 * depth - 1} nodes / ${2 ** depth - 1} path-states, ${method}-only legacy envelope)`)
     }
   }
 }

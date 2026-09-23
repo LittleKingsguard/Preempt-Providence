@@ -155,15 +155,54 @@ function emitTextProp(props: Record<string, unknown>, content: unknown, bodyRuns
   else if (content !== undefined) props['text'] = content
 }
 
+/** BODYRUNS-DROP-DIAGNOSTICS §3 C3/C4 (W4, 0.5.1) — the emit-boundary
+ *  diagnostic channel: `console.warn` ONLY (the `ops.ts:401` precedent; the K4
+ *  `translated.warnings` array is a DIFFERENT seam and is never touched — the
+ *  smoke's `warningsMain === 0` is that array). Never a throw (§3 C3), and the
+ *  adapters stay pure silent consumers (NVA-3, `adapters.md:561`).
+ *
+ *  C4 — the REPETITION BOUND (hazard P2): `emitElements` runs once per render
+ *  pass (a live editor renders per keystroke), so an unguarded diagnostic would
+ *  re-print the same line every pass. The dedup set is MODULE-level and is
+ *  NEVER cleared per pass (the per-`emitElements`-call set is REJECTED in §3 C4
+ *  — it bounds only within a pass, which is exactly the per-keystroke hazard).
+ *  It holds SIGNATURES only (short strings) — never element/node/run objects,
+ *  so it retains no graph references (the `findElScans` module-state
+ *  discipline). Signature = `` `${code}\u0000${elementWire}\u0000${value}` ``,
+ *  where `value` is the run's authored-id value (or the literal `children` for
+ *  the §3 C5 `text`-node clause). */
+const emitDiagnosticSignatures = new Set<string>()
+
+/** BODYRUNS-DROP-DIAGNOSTICS §3 C3 — one `console.warn` per diagnostic
+ *  signature, message shape `[bodyruns] <code> at <elementWire>: <detail>`
+ *  (the `translate.ts:227-232` precedent). Deterministic + contained: a repeat
+ *  signature is silently suppressed (C4), never re-warned, never thrown. */
+function warnBodyRunsDiagnostic(
+  code: string,
+  elementWire: string,
+  value: string,
+  detail: string,
+): void {
+  const signature = `${code}\u0000${elementWire}\u0000${value}`
+  if (emitDiagnosticSignatures.has(signature)) return
+  emitDiagnosticSignatures.add(signature)
+  console.warn(`[bodyruns] ${code} at ${elementWire}: ${detail}`)
+}
+
 /** ENG-BODYRUNS-WIRE-REF (2026-08-31 — gate §3 approved shape) — a POST-EMIT
  *  pass that rewrites `bodyRuns` `{ child: <authoredId> }` runs to the child's
  *  MINTED WIRE, using the element's OWN final `childOrder` (the H2/order-
  *  faithful set — so a run can NEVER reference a non-child) + nodeById (a
- *  child's authored `props.id`) + the path-state nodeId lookup. Resolution:
- *  a ref that is ALREADY a child wire passes through unchanged; an authored-id
- *  ref rewrites to the mapped wire; anything else is dropped — deterministic,
- *  never a throw. `base.bodyRuns` is NEVER mutated (round-trip idempotent —
- *  only the emitted `props['text']` string is rewritten). */
+ *  child's authored `props.id`) + the path-state nodeId lookup. Resolution
+ *  (§3 C1, W4 = the C2 containment clamp): a ref that is ALREADY a child wire
+ *  passes through unchanged; an authored-id ref naming one of the element's OWN
+ *  children rewrites to that wire FIRST (the C2 precedence pin — the local map
+ *  wins over the global index); a run whose only index resolution is a wire
+ *  OUTSIDE `el.childOrder` is DROPPED, never rewritten to the foreign wire
+ *  (defect N1); anything else is dropped — deterministic, never a throw. The
+ *  drops/duplicates emit the §3 C3 diagnostic (C4-bounded). `base.bodyRuns` is
+ *  NEVER mutated (round-trip idempotent — only the emitted `props['text']`
+ *  string is rewritten). */
 function resolveBodyRunsChildWires(
   el: MinimalElement,
   nodeById: Map<string, EmitNodeSource> | null,
@@ -175,14 +214,21 @@ function resolveBodyRunsChildWires(
   const runs = decodeRuns(text)
   if (!runs.some((r) => 'child' in r)) return
   const childWires = new Set(el.childOrder)
-  // authored props.id → child wire, first-match-in-order over the node's OWN childOrder
+  // authored props.id → child wire, first-match-in-order over the node's OWN
+  // childOrder, PLUS the per-id count of childOrder wires carrying it (the §3
+  // C3 `bodyruns-child-duplicate` `<n>` detail — a duplicate authored id is
+  // legal, `:184` keeps the first).
   const authoredIdToWireLocal = new Map<string, string>()
+  const authoredIdChildCount = new Map<string, number>()
   for (const w of el.childOrder) {
     const nodeId = pathCtx?.pathNodeOf.get(w) ?? w
     const node = nodeById?.get(nodeId)
     const authored = (node as { base?: { props?: Record<string, unknown> } } | undefined)?.base?.props?.id
-    if (typeof authored === 'string' && authored !== '' && !authoredIdToWireLocal.has(authored)) {
-      authoredIdToWireLocal.set(authored, w)
+    if (typeof authored === 'string' && authored !== '') {
+      authoredIdChildCount.set(authored, (authoredIdChildCount.get(authored) ?? 0) + 1)
+      if (!authoredIdToWireLocal.has(authored)) {
+        authoredIdToWireLocal.set(authored, w)
+      }
     }
   }
   if (authoredIdToWireLocal.size === 0 && !authoredIdToWire) return
@@ -191,23 +237,64 @@ function resolveBodyRunsChildWires(
   for (const r of runs) {
     if ('child' in r) {
       if (childWires.has(r.child)) {
-        // already a real child wire — passes through unchanged
+        // C1 step 1 — already a real child wire: passes through unchanged (a
+        // component fork ARM wire lands here: the parent's remapped childOrder
+        // carries `nodeId#<i>` and the run keeps it verbatim)
         rewritten.push(r)
-      } else if (authoredIdToWire?.has(r.child)) {
-        // the GLOBAL index first: a def-fill SYNTHETIC wire (or a real
-        // actionable child's wire) — the def-fill element's own childOrder
-        // carries the synthetic wire, so its bodyRuns must resolve to it
-        // (the local nodeById lookup below would map the same authored id to
-        // the real standalone wire, which is NOT the def-fill's child).
+        continue
+      }
+      // C1 step 3's candidate — the global index, CLAMPED TO CONTAINMENT (§3
+      // C2): a membership test on `el.childOrder`, never on `nodeById`.
+      const globalWire = authoredIdToWire?.get(r.child)
+      const contained = globalWire !== undefined && childWires.has(globalWire)
+      // A def-fill SYNTHETIC wire (`<host>:<bind>` / `<host>:<index>`,
+      // registered at the def-fill sites) has NO nodeById entry, so the
+      // per-element childOrder map can never attribute the authored id to it —
+      // and the def-fill registration deliberately OVERWRITES the real node's
+      // wire so the def-fill element's OWN synthetic child wins. A contained
+      // global entry that is such a synthetic wire therefore takes precedence
+      // (the landed A+6b shape: the def-fill element's childOrder carries the
+      // synthetic wire AND the real child's path-state wire, so the local map
+      // alone would pick the wrong child — the same node materialized twice).
+      const synthetic =
+        contained &&
+        nodeById?.get(pathCtx?.pathNodeOf.get(globalWire!) ?? globalWire!) === undefined
+      if (synthetic) {
         changed = true
-        rewritten.push({ child: authoredIdToWire.get(r.child)! })
+        rewritten.push({ child: globalWire! })
       } else if (authoredIdToWireLocal.has(r.child)) {
-        // authored-id ref → its child's wire (first-match-in-order)
+        // C1 step 2 — this element's OWN children first (the §3 C2 precedence
+        // pin; its observable is the legal duplicated-authored-id shape), with
+        // the C3 `bodyruns-child-duplicate` diagnostic when the referenced id
+        // is carried by ≥2 wires in THIS element's childOrder.
+        const dupCount = authoredIdChildCount.get(r.child) ?? 1
+        if (dupCount > 1) {
+          warnBodyRunsDiagnostic(
+            'bodyruns-child-duplicate',
+            el.wire,
+            r.child,
+            `authored id "${r.child}" resolves to ${dupCount} children of this element; the first in childOrder is used`,
+          )
+        }
         changed = true
         rewritten.push({ child: authoredIdToWireLocal.get(r.child)! })
+      } else if (contained) {
+        // C1 step 3 — the containment-clamped global fallback (§3 C2): the
+        // indexed wire IS a member of this element's own final childOrder.
+        changed = true
+        rewritten.push({ child: globalWire! })
       } else {
-        // dangling ref (absent id / def-child synthetic / foreign): drop the
-        // run deterministically (gate §3 — never a throw, never a wrong-child)
+        // C1 step 4 — DROP (§3 C2/C3): an absent/dangling id, a FOREIGN id
+        // (a placement sibling / another subtree / another element's child),
+        // or a def-child synthetic wire belonging to another element. Never
+        // rewritten to the foreign wire (N1: the DOM MOVES it, SSR DUPLICATES
+        // its HTML), never a throw.
+        warnBodyRunsDiagnostic(
+          'bodyruns-child-unresolved',
+          el.wire,
+          r.child,
+          `the { child } run references authored id "${r.child}", which is not a child of this element; the run is dropped`,
+        )
         changed = true
       }
     } else {
@@ -1153,6 +1240,32 @@ function emitOne(
   // placement are ignored deterministically (the DomAdapter `instanceof Text`
   // guard is the defensive backstop).
   if (s.type === 'text') {
+    // BODYRUNS-DROP-DIAGNOSTICS §3 C5 (defect N2) — WARN-AND-DROP. A `text`
+    // node's authored `children` and/or a `{ child }` run are lost by this
+    // early return (`childOrder: []` below, and the runs are never encoded into
+    // `props['text']` on this path — the scalar content expression wins
+    // verbatim). The DROP CRITERION (C5.3, the F2 correction) is authored
+    // `children` (non-empty) OR at least one `{ child }` run — NEVER the run
+    // count / `isInterleaving`, which is only the NORMALIZATION flag: a
+    // `{ child }`-free run set of ANY length normalizes into the scalar `text`
+    // prop and names no element, wire or child, so it drops NOTHING and stays
+    // silent. The diagnostic is C4-bounded; the element below is emitted
+    // EXACTLY as before (no synthesis, no throw).
+    const authoredChildren = (s.children ?? []).length > 0
+    const childRun = (s.bodyRuns ?? []).some((r) => 'child' in r)
+    if (authoredChildren || childRun) {
+      const detail = authoredChildren && childRun
+        ? 'children+bodyRuns'
+        : authoredChildren
+          ? 'children'
+          : 'bodyRuns'
+      warnBodyRunsDiagnostic(
+        'text-node-children-ignored',
+        wire,
+        'children',
+        `a "text" node carries authored ${detail}; the bare-text emit ignores them; no element is created`,
+      )
+    }
     const props: Record<string, unknown> = {}
     const content = scalarBinding(s.bindings) ?? s.content
     if (content !== undefined) props['text'] = content

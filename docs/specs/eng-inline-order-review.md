@@ -84,7 +84,9 @@ and do not compose. The hard pins:
    > `bodyRuns` in the implementation spec. `content` stays the concatenated plain text (the
    scalar invariant consumers rely on: `node.ts:613` content getter,
    `node.ts:968/976` layer merge, `derived.ts:210`, `validation.ts:18`,
-   `resolve.ts:68`, `translate.ts:327/1181`). A new optional
+   ✎ `resolve.ts` **BY SYMBOL** (`providerValueFor` `:25`, call sites `:39`/`:44`
+   — **2026-09-23 citation repair, `STALE-RESOLVE-ANCHORS`: the previously cited
+   `resolve.ts:68` now lands inside `isDefShapedValue`**), `translate.ts:327/1181`). A new optional
    `body?: Array<{ text: string } | { child: <wire> }>` carries position. A
    node with no `body` renders identically today.
 2. **Single-text normalization.** A `body` of exactly one `{ text }` segment
