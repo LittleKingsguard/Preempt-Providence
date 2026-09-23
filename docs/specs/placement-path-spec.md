@@ -232,7 +232,7 @@ safety"). The path enumeration (§2) carries a **per-walk visit set**:
   api.md §7 `diagnostic` events, line 312).
 - The visit set is per-walk (never shared across walks), mirroring
   `chainRoot`'s per-walk `seen` (`node.ts:69-85`) and resolve's per-arm
-  `path` set (`resolve.ts:179-198`).
+  `path` set (`resolve.ts`'s `fallbackTermination` — cite BY SYMBOL: `:167-203`, the cited `:179-198` lands inside it; ✎ 2026-09-23 citation repair, defect row `STALE-RESOLVE-ANCHORS`).
 - The ancestor-name veto (§1.3) is the translate-time half; the visit set is
   the compile-time half; op-time attach/move keep their `findCycle`
   test-and-rollback (S3.4, `node.ts:861-871`) — which is extended to walk
@@ -266,7 +266,7 @@ compilePath(node /* a content node or the root */):
 ```
 
 - The per-name placement Link IS the zone registry, exactly as the per-name
-  component Link is the provider registry (`resolve.ts:96-120` — anchors
+  component Link is the provider registry (`resolve.ts`'s `providersOn` — cite BY SYMBOL: `:102-114`; the cited `:96-120` straddled the preceding closure's tail; ✎ 2026-09-23 citation repair, defect row `STALE-RESOLVE-ANCHORS` — anchors
   carry their `owner` backref, `src/core/types.ts:69-73`): enumeration reads
   producers straight off the Link, never sweeping the graph. Hub-less trees
   fall back to the status-quo slice scan (same rule as today,

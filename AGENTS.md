@@ -87,7 +87,13 @@ Context management guidelines for agents working in this repository:
    runtime:derived ratio is ~2.1-2.7× at d12 (the old 1.39× d12 reading was
    the accumulated-process GC asymmetry suppressing the later derived pages),
    so the tripwire is pinned at 3× (the O(n²)-era ~20× blow-up signature
-   still trips). Watch the d12 pass2/compile multiples in the smoke output —
+   still trips). **⛔ SUPERSEDED 2026-09-23 — DO NOT ACT ON THE SENTENCE
+   ABOVE: the cross-family 3× tripwire is RETIRED as an assertion (the
+   `~2.1-2.7×` band was never a real runtime reading), and the asserted
+   scaling signal is now the runtime-vs-runtime GROWTH GUARD — see the
+   ✎✎ GROWTH GUARD block at the end of this item
+   (`docs/decisions.md` `RUNTIME-FORK-GROWTH-GUARD`, superseding
+   `RUNTIME-FORK-TRIPWIRE-BOUND`).** Watch the d12 pass2/compile multiples in the smoke output —
    the probe's purpose is exposing that scaling shape; for the depth-14 shape
    open the d14 pages manually in a browser.
    **✎ HARNESS CORRECTION (2026-09-22 — DEFECT SMOKE-TRIPWIRE-INERT, fixed
