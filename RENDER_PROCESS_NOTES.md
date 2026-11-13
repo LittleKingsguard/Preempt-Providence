@@ -1603,3 +1603,129 @@ list (specs + skill + summary + migration citations) is recorded there.
   **any runtime-ratio/tripwire reading is unusable until the bound is decided.**
   Row: `docs/defects.md` OPEN **SMOKE-TRIPWIRE-INERT**; `AGENTS.md` item 4's HARNESS
   CORRECTION block.
+
+### 10.10.13 VALUE-PROVIDER-RENDER-DISPOSITION — an AUTHORED provider IS an element; only runtime-minted VALUE RECORDS are dropped as values, and the residual drop WARNS (DECIDED, 2026-11-13 — LANDED)
+
+- **DECIDED (the owner's ruling, 2026-11-13 — the PROVENANCE RULE): an
+  AUTHORED provider consumed by name in the compile slice IS an ordinary
+  ELEMENT and renders** (with its children nested under it — they are no
+  longer orphaned/flattened and the parent's `childOrder` entry resolves to a
+  real wire). **Only a RUNTIME-MINTED value record is dropped as a value.**
+  The emit gate's drop is therefore `hasAnyTarget && isResolutionParticipant(node)
+  && !seamExempt && node.valueRecord === true`, with the seam test **HOISTED
+  into a local and evaluated BEFORE any provenance test** (§2 C1 / AM-2):
+  `adoptDefChildren` sets `runtimeMinted` on children that **are** elements and
+  the `[6]` root-clobber pin (`tests/e2e/legacy-shape.test.ts:357-363`) depends
+  on the exemption, so a conjunction that reads the marker first is a contract
+  violation even when the outputs coincide. Scope is honest: the rule releases
+  in-tree **family-tree** providers only — a content-root provider is still
+  dropped EARLIER as `owner-terminated`, children under a minted parent still
+  flatten, and **no position index is supplied** (§2 C5), so a downstream
+  position-based styling need stays **UNMET**.
+- **DECIDED: the discriminator is a DEDICATED `valueRecord: boolean` field on
+  `Node` (default `false`)**, set at the value-record mint sites and by nothing
+  else — `mintRowNode` (`src/core/ops.ts:499-511`; one write covers both the
+  batch path `:350` and the keyed path `:440`) — preserved by keyed reuse
+  (`reconcileRowFields` reconciles in place and never re-mints), copied by
+  `clone()` (beside `runtimeMinted`, `src/core/node.ts:904-910`), **KEPT by
+  survivor promotion** (which clears `originLayer` only), and **never
+  serialized** (`parseNodeState` is an explicit key whitelist — a crafted
+  document cannot set `valueRecord`/`originLayer`/`runtimeMinted`, so a
+  `loadState`-seeded provider is AUTHORED and renders). `layerApply` is **not**
+  a mint site (its A5 veto rejects seeded `anchors`), stated so that a future
+  "set it everywhere a node is minted" reflex is a contract violation, not an
+  interpretation. **`originLayer` was REJECTED** as the discriminator: it
+  already means teardown ownership and promotion CLEARS it, so an
+  `originLayer`-keyed rule would materialise a promoted raw data row as an
+  element — exactly the outcome `rowsTeardown`'s no-promotion override forbids.
+  **`runtimeMinted` was REJECTED**: `adoptDefChildren` sets it on children that
+  ARE elements, and it already carries reverse (`translate.ts:1459`), serialize
+  (`serialize.ts:123`, `:190`) and destroy-retention (`registry.ts:418-429`)
+  semantics — keying render disposition on it would make seam adopter children
+  vanish and entangle four unrelated contracts. The minimal alternative
+  `runtimeMinted && !adoptedDefChild` is on record with its cost (no such
+  discriminator exists; the seam child anchor at `node.ts:1870` is its only
+  trace, and it cannot separate an adopted def child from a clone).
+- **DECIDED: the residual drop is DIAGNOSED, and the channel is `console.warn`
+  ONLY** — code `value-record-drop`, message
+  `value-record-drop at <pathKey>: runtime-minted value record "<name>" is
+  consumed in this compile slice — not rendered as an element` (the compile
+  gate's existing `code at pathKey` shape; `<name>` = the FIRST consumed
+  `source`/`duplex` name in anchor order, deterministic). **No `ArmDropReason`
+  member** (the union is closed — `docs/specs/contract.md:92` +
+  `docs/specs/node.md:109-111`), **no `CompileResult.warnings` code** (that
+  union is closed too, `types.ts:299`, and ~20 `warnings).toEqual([])`
+  assertions hold it), and **no `dropped` entry** — so FS-1's
+  `dropped`-completeness half (`docs/specs/node.md:412`) is **NOT discharged**
+  (`R-VPD-4`; the spec carries an explicit "not discharged by this unit" note
+  on FS-1, and the warn must never be read as a substitute). Dedup is a
+  **module-level, NEVER-cleared** `` `${code}\u0000${nodeId}\u0000${name}` ``
+  set — exactly the C4 shape of §10.10.12 above, as recorded in
+  `docs/decisions.md:41` — the emit is wrapped in the existing
+  `shouldWarn(node)` focus gate (`node.ts:1048-1049`) so a pass-2 compile whose
+  `focusNodeId` is a descendant stays quiet, and **R-W4-5 is INHERITED
+  VERBATIM**: one warn per `(code, nodeId, name)` per **PROCESS**, never per
+  document — a second document in one process can be silently denied a
+  diagnostic it never saw, the set is **unbounded (no clamp)**, and an absent
+  line must NEVER be read as "nothing was dropped". Recorded visibility limit
+  (`R-VPD-5`): `demo/fork-stress.js:239` silences `console.warn` for that
+  page's bootstrap render window, so the diagnostic is not observable there —
+  no demo may be altered to work around it and no test may assert warn counts
+  through that window. Channel choice is the §10.10.12 precedent (widening the
+  return surface as an own-gate `X.Y.X` public-surface change was already
+  rejected once for the identical problem class).
+- **DECIDED: implementation site = the `compile()` emit gate ONLY — never
+  translate time, never graph mutation.** A hard constraint WITH its rationale:
+  the drop existed only at the emit gate, which is why `reverseTranslate` /
+  `serializeNode` output is unaffected (their exclusions key on
+  `originLayer`/`runtimeMinted` — `translate.ts:1447-1466`,
+  `serialize.ts:123`/`:190`); a graph-level "fix" (minting, re-parenting or
+  flagging nodes at compile time) would change reversed envelopes and break
+  `demo/translate-showcase`'s K5/N1 round-trip and
+  `tests/unit/reverse.test.ts:180`. Also unchanged by this unit: the mixed
+  provider+consumer node keeps emitting **per arm** (its state count is fixed
+  by its arm count — never a second standalone state), `compilePath()` (which
+  never had the drop), the `dropped` array and its closed reason union, and
+  every public signature — so the landing is an **`X.X.Y` defect patch
+  (`0.5.2`)**, not a minor.
+- **DECIDED: the drift's ROOT CAUSE was a MISSING DECISION ROW, and that is
+  what this entry exists to close.** The predicate shipped in the **initial
+  commit `996ca7f` (2026-08-10) with no decision record and no spec clause**;
+  the justification text (*"a value holder, never an element"*) was written
+  into the code five days later in **`6eb1cb4` (2026-08-15)**, after Blind test
+  #1 classified an author's surprise as a data error (row **F3**, class
+  *"A (data, semi-surprising)"*, of
+  `archive/findings/2026-08-15/2026-08-15-test-findings.md`). **No decision row
+  for the old behaviour ever existed** (grep over `docs/decisions.md` for
+  `VALUE-PROVIDER` / `value-provider` / `provider-render` returned nothing
+  before this pass), while `docs/specs/node.md:288` stated its OPPOSITE the
+  whole time (*"`in-tree` … fully actionable (the only render-eligible
+  state)"*) — so `docs/skills/designing-pages.md` §14.10 item 1 became the
+  ONLY normative author-facing statement of the drop, i.e. the docs taught the
+  defect, and a blind test had already reclassified the symptom as author
+  error. The repo also SHIPPED it in a tracked artefact:
+  `demo/feature-showcase.expected.html` carried **zero** occurrences of
+  `showcase-root` before this pass (it now reads
+  `<app id="showcase-root">4242<header …` — the §4.1 regeneration). **Lesson,
+  recorded for future units: a behaviour with no decision row has no owner —
+  it drifts against the specs and then gets documented as intended.**
+- **Encoding:** `docs/decisions.md` VALUE-PROVIDER-RENDER-DISPOSITION row;
+  `docs/specs/value-provider-render-disposition.md` (§2 C1–C5, §3
+  FS-VPD-1…10, §4 re-pins, §5 rewrite list, §6 AM-1…AM-8, §7 residuals
+  R-VPD-1…5, §8 register `VPD-1…VPD-12`); `docs/specs/node.md` §7.1 `in-tree`
+  row (true again for authored nodes, with the residual exception) + FS-1's
+  "not discharged" note; `docs/skills/designing-pages.md` §11 (the contract
+  row), §12 (`hooks-scenarios` / `rows-scenarios` page descriptions) + §14.10
+  item 1; `docs/defects.md` (the FIXED row + the three residual OPEN rows);
+  code `src/core/node.ts` (the marker + the emit gate + the diagnostic) and
+  `src/core/ops.ts` (`mintRowNode`); tests
+  `tests/unit/value-provider-render-disposition.test.ts` (12/12) plus the
+  contract-mandated re-pins `tests/unit/render.test.ts` (FRK-H1,
+  `actionable` 1 → 2) and `tests/unit/pass2-fit-reference-scope.test.ts`
+  (`FROZEN_GOLDEN` + 4 `slot` provider states); demo rewrites
+  `demo/hooks-scenarios.js`, `demo/rows-scenarios.js`,
+  `demo/translate-showcase.js` + `demo/translate-showcase.template.html`,
+  `demo/fork-stress.js`, `tests/unit/hooks.test.ts` (comment only). **Guards
+  UNMOVED:** the
+  runtime-vs-runtime growth guard (10×), the derived `2.5×` per-REGION pins,
+  the rows census / fan-out (the marker falsifier) and `warningsMain === 0`.

@@ -101,9 +101,16 @@
       (array form at template.component, translate.ts:257 fix). The five
       providers rootValue / arrConsumer / dupRef / dupTgt / dotted.ref.name are
       each consumed exactly once -> no forks (S-R2.6 depth-0 resolution).
-      NOTE: the root itself is NOT actionable (S-R2.5/F3 — each provider has a
-      same-name consumer in scope; the provider serves its consumers and emits
-      no standalone element), so the rendered tree is the 9 cards.
+      NOTE: the root IS actionable — it is an AUTHORED provider, and under
+      docs/specs/value-provider-render-disposition.md §2 C1 an authored
+      provider consumed by name IS an element: the render is ONE
+      <app id="showcase-root"> element carrying the root's published scalar as
+      its text, with the 9 cards nested under it. (The former claim — "the
+      root itself is NOT actionable, S-R2.5/F3: each provider has a same-name
+      consumer in scope, so the provider serves its consumers and emits no
+      standalone element" — is SUPERSEDED: C1 released authored providers and
+      only RUNTIME-MINTED value records are still dropped as values, with the
+      `value-record-drop` warn (§2 C2/C3).)
 
   Warnings channel (K4): TranslatedTree.warnings: [{code, path}] is rendered
   into <pre id="warnings"> so the guards are visible. Expected set (6 warns,

@@ -498,6 +498,17 @@ function mintRowNode(
   }
   const node = new Node({ ...fields, type: (fields.type as string) ?? shape.type, css: (fields.css as Record<string, unknown>) ?? shape.css } as NodeBaseData, hub, undefined, false, scope)
   node.originLayer = layerId
+  // VALUE-PROVIDER-RENDER-DISPOSITION §2 C2 (AM-1) — the ONE value-record mint
+  // site: a minted row publishes its fields as provider VALUES, so it is a
+  // value RECORD and the compile emit gate will not render it as an element
+  // (and will warn `value-record-drop` when a node in the same compile slice
+  // consumes one of those names). Deliberately its OWN marker: `originLayer`
+  // is teardown ownership (survivor promotion CLEARS it) and `runtimeMinted`
+  // is set on adopted def children that ARE elements. Both rows-mint paths
+  // (batch at :350 and keyed at :440) funnel through this function, so this
+  // single write covers both; the keyed-reuse reconcile path never re-mints
+  // and must not clear or re-derive the flag.
+  node.valueRecord = true
   registerMinted(node.id, layerId, scope)
   node.addAnchor('child', node, { priority }, fam)
   // the row's fields as VALUE-BEARING source anchors (per-row provider

@@ -353,6 +353,43 @@ function applyDerivedBake(node: Node, cs: CompiledState): void {
   if (baked?.css !== undefined) cs.css = baked.css
 }
 
+/** VALUE-PROVIDER-RENDER-DISPOSITION §2 C3 — the RESIDUAL drop's diagnostic
+ *  signatures. MODULE-level and NEVER cleared (mirrors the C4 pattern of
+ *  `BODYRUNS-DROP-DIAGNOSTICS`, render-helpers.ts): `emitElements`-style
+ *  repetition is bounded per PROCESS, not per document. Signature =
+ *  `` `${code}\u0000${nodeId}\u0000${name}` `` — the code, the node's `id`
+ *  (the wire the emit side would have used) and the consumed provider name
+ *  (the value identity). Short strings only, no graph references, and NO
+ *  clamp (R-W4-5 is inherited verbatim: a second document in one process can
+ *  be silently denied a line it never saw, and an ABSENT line must never be
+ *  read as "nothing was dropped"). */
+const valueRecordDropSignatures = new Set<string>()
+
+/** The drop's `<name>`: the FIRST consumed `source`/`duplex` name in ANCHOR
+ *  order (deterministic — a record may publish several fields). */
+function firstConsumedProviderName(node: Node, consumed: ReadonlySet<string>): string | undefined {
+  for (const a of node.anchors) {
+    if (typeof a.target === 'string' && (a.role === 'source' || a.role === 'duplex') && consumed.has(a.target)) {
+      return a.target
+    }
+  }
+  return undefined
+}
+
+/** §2 C3 — `console.warn` ONLY (one string argument), code `value-record-drop`,
+ *  deduped per `(code, nodeId, name)`. The caller applies the `shouldWarn`
+ *  focus gate BEFORE this call, so a pass-2 compile focused on a descendant
+ *  stays quiet AND does not consume the signature. */
+function warnValueRecordDrop(node: Node, name: string): void {
+  const code = 'value-record-drop'
+  const signature = `${code}\u0000${node.id}\u0000${name}`
+  if (valueRecordDropSignatures.has(signature)) return
+  valueRecordDropSignatures.add(signature)
+  console.warn(
+    `value-record-drop at ${node.pathKey}: runtime-minted value record "${name}" is consumed in this compile slice — not rendered as an element`,
+  )
+}
+
 export class Node {
   readonly isNode = true as const
   readonly id: string
@@ -365,6 +402,28 @@ export class Node {
    *  placement/component logic — clone-instance is a legacy artifact guard).
    *  Runtime-only; never serialized. */
   runtimeMinted = false
+  /** VALUE-PROVIDER-RENDER-DISPOSITION (`docs/specs/value-provider-render-disposition.md`
+   *  §2 C2) — the VALUE-RECORD provenance marker: TRUE only for a
+   *  runtime-minted value record, i.e. a node minted by the rows-mint family
+   *  (`mintRowNode`, ops.ts) whose fields are published as provider VALUES.
+   *  The compile emit gate keys its ONE residual drop on this flag (`node.ts`
+   *  `compile()` — `hasAnyTarget && isResolutionParticipant &&
+   *  !seamExempt && valueRecord`): an AUTHORED provider IS an element and
+   *  renders; a value record consumed by name in the compile slice is not
+   *  rendered as an element and its drop is warned (`value-record-drop`, §2
+   *  C3). Deliberately NOT derived from `originLayer` (teardown ownership —
+   *  survivor promotion CLEARS it, `teardownMinted`) nor from `runtimeMinted`
+   *  (reverse/serialize/destroy-retention marker set on adopted def children,
+   *  which ARE elements). Runtime-only: never serialized, never compiled into
+   *  a `CompiledState`, never settable through a document (`parseNodeState`'s
+   *  key whitelist). Set at the mint site, preserved by keyed reconcile,
+   *  carried by `clone()`, and never cleared by survivor promotion.
+   *  Declared WITHOUT an initializer on purpose: on an authored node the field
+   *  is ABSENT (`undefined`), not an own `false` — the gate reads `=== true`,
+   *  and absence is what makes "this node was not minted by the value-record
+   *  site" observable on a `loadState`-seeded node (a document cannot forge
+   *  it, and a default value could not be told apart from a seeded one). */
+  valueRecord: boolean | undefined
   /** ORIGIN-OWNER (archive/reviews/2026-08-16/2026-08-16-legacy-handler-reuse-review §12.4.3) — the per-node
    *  origin marker: the layer id that minted this node via `layer-apply`.
    *  Doubles as the reverse-exclusion marker (nodeToLegacy's filter, like
@@ -842,6 +901,13 @@ export class Node {
       }
     }
     copy.runtimeMinted = true
+    // VALUE-PROVIDER-RENDER-DISPOSITION §2 C2: a clone of a value record IS
+    // a value record (copy the marker, never re-derive it) — otherwise a
+    // cloned row would materialise as a duplicate data element. A clone of an
+    // authored provider is NOT a value record (it stays `undefined`, never
+    // `true`): its clone-time `runtimeMinted` governs reverse exclusion only,
+    // never render disposition.
+    copy.valueRecord = this.valueRecord
     return copy
   }
 
@@ -1174,13 +1240,29 @@ export class Node {
         (a.role === 'source' || a.role === 'duplex') &&
         consumedNames.has(a.target),
       )
-    // F3 discipline: a PURE provider (a source-only node) consumed by name
-    // is dropped from render — it is a value holder, never an element.
-    // EXCEPTION (D7 — the [6] root-clobber pin): a provider whose value is
-    // SEAM-consumed (a seam-target anchor — options.seam — consumes the
-    // name) is a def HOST — the seam wrapper renders the def's children, so
-    // the provider node itself must render its own real children (the root
-    // both provides `auth` and carries its wrapper children).
+    // VALUE-PROVIDER-RENDER-DISPOSITION §2 C1/C2/C3 (supersedes the former
+    // "F3 discipline" comment — "a value holder, never an element" is NO
+    // LONGER the rule): a provider consumed by name in this compile slice is
+    // an ORDINARY ELEMENT — it emits through the target-less branch below —
+    // UNLESS it is a runtime-minted VALUE RECORD (`valueRecord`, set only by
+    // the rows-mint site, never by `layerApply`, never derivable from a
+    // document). Provenance, not child count, decides: an authored provider
+    // with children renders and keeps its children; an authored leaf provider
+    // renders childless.
+    // The ONE residual drop (a slice-consumed value record) is diagnosed at
+    // the emit gate — `console.warn` code `value-record-drop`, deduped per
+    // `(code, nodeId, name)`, gated by the pass-2 focus `shouldWarn` — and it
+    // is deliberately NOT pushed into `CompiledResult.dropped` (FS-1's
+    // `dropped`-completeness half is not discharged here; `ArmDropReason` and
+    // the `warnings` union stay closed, `types.ts`).
+    // EXCEPTION (D7 — the [6] root-clobber pin, unchanged and still true): a
+    // provider whose value is SEAM-consumed (a seam-target anchor —
+    // options.seam — consumes the name) is a def HOST — the seam wrapper
+    // renders the def's children, so the provider node itself must render its
+    // own real children (the root both provides `auth` and carries its wrapper
+    // children). The exemption is evaluated BEFORE any provenance test, so a
+    // runtime-minted seam host (an adopted def child) keeps rendering exactly
+    // as before.
     const seamConsumedNames = new Set<string>()
     for (const n of slice) {
       for (const a of n.anchors) {
@@ -1250,7 +1332,26 @@ export class Node {
         .map(a => a.target as string)
 
       if (!hasAnyTarget || targetNames.length === 0) {
-        if (hasAnyTarget && isResolutionParticipant(node) && !isSeamProvider(node)) continue
+        // §2 C1 — disposition, in the CONTRACT ORDER (AM-2): `hasAnyTarget`
+        // and `isResolutionParticipant` first, then the seam exemption HOISTED
+        // into a local and evaluated BEFORE any provenance test, and only then
+        // the marker. Reading `valueRecord` before the seam test is a contract
+        // violation even when the outputs coincide.
+        if (hasAnyTarget && isResolutionParticipant(node)) {
+          const seamExempt = isSeamProvider(node)
+          if (!seamExempt && node.valueRecord === true) {
+            // §2 C3 — the RESIDUAL drop: the diagnostic is this class's only
+            // record (never `dropped`, never a `warnings` code), and it is
+            // focus-gated so a pass-2 compile aimed at a descendant is quiet.
+            if (shouldWarn(node)) {
+              const name = firstConsumedProviderName(node, consumedNames)
+              if (name !== undefined) warnValueRecordDrop(node, name)
+            }
+            continue
+          }
+        }
+        // the released provider flows through the UNCHANGED branch body — its
+        // own pathKey, no forkKey, its real child ids; nothing special-cased
         const cs = makeCs(node)
         publishOwn(node, cs)
         // derived bake (§4): the copy is what lands — the pass-1 canon is

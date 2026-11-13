@@ -56,9 +56,14 @@ function providerConsumerEnvelope(hooks?: string[] | unknown) {
 
 /** Provide-and-self-apply provider root: a DUPLEX anchor
  *  (`{reference, value, target: 'props.<key>'}` — K1/K2) so the node is BOTH
- *  the provider AND a state-carrying node (a pure provider is F3-dropped
- *  from render when its name is consumed elsewhere — the self-seed read is
- *  observed through the duplex, whose name nobody else consumes). */
+ *  the provider AND a state-carrying node, and the self-seed read is observed
+ *  through the duplex. Under VALUE-PROVIDER-RENDER-DISPOSITION §2 C1 an
+ *  AUTHORED provider IS an ordinary element: this root's own element ALSO
+ *  emits (the pre-2026-11-13 note — "a pure provider is F3-dropped from render
+ *  when its name is consumed elsewhere" — is SUPERSEDED, and only RUNTIME-
+ *  MINTED value records are dropped as values, warned `value-record-drop`,
+ *  §2 C2/C3). The fixture needs no change: the duplex self-seed assertions
+ *  below read the node's own compiled state, which C1 leaves intact. */
 function duplexProviderEnvelope(hooks?: string[] | unknown) {
   return {
     template: {

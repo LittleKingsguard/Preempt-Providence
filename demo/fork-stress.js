@@ -454,9 +454,17 @@ async function main() {
       return e.getAttribute?.('data-wire') ?? e.dataset?.wire ?? ''
     }
     const allWires = [...adapter.wires.values()]
-    // the app root is a consumed PROVIDER (provides the values/link sources),
-    // so it is not emitted — walk from the placement zone (the first rendered
-    // element), and verify every zone-descendant nests under its graph parent.
+    // The app root IS emitted now — it is an AUTHORED provider, and
+    // docs/specs/value-provider-render-disposition.md §2 C1 makes an authored
+    // provider an ordinary ELEMENT (the pre-contract comment here said "the
+    // app root is a consumed PROVIDER … so it is not emitted"; that rule is
+    // SUPERSEDED and the citation is retracted). The walk still starts at the
+    // PLACEMENT ZONE: fs-zone is the root of the layer subtree this check is
+    // about and every layer node hangs BELOW it, while the emitted app root is
+    // the zone's PARENT — one level above — so it neither enters the walk nor
+    // moves its count. Walk from the placement zone (the first rendered
+    // element of the layer tree) and verify every zone-descendant nests under
+    // its graph parent.
     const zoneEl = allWires.find((e) => e && wireOf(e) === 'fs-zone')
     if (!zoneEl) throw new Error('placement zone element missing')
     let checked = 0
@@ -474,7 +482,14 @@ async function main() {
       for (const c of Array.from(el.children ?? [])) walk(c)
     }
     walk(zoneEl)
-    // zone + all layer nodes (root is a non-emitted provider)
+    // DERIVATION (reason corrected 2026-11-13, arithmetic UNCHANGED): the walk
+    // starts at the placement zone, so the count is the ZONE + every layer
+    // node = 2^depth - 1. The old reason for this literal — "(root is a
+    // non-emitted provider)" — is SUPERSEDED by VALUE-PROVIDER-RENDER-
+    // DISPOSITION §2 C1: the app root now emits an element, but it is the
+    // zone's PARENT, never a zone descendant, so it is outside this walk.
+    // MEASURED after the disposition change: `checked` is unchanged at every
+    // depth (all 9 checks per depth pass) — hence the literal does not move.
     if (checked !== 2 ** depth - 1) throw new Error(`nesting check visited ${checked} nodes, expected ${2 ** depth - 1} (zone + layers)`)
   })
 

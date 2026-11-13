@@ -768,6 +768,13 @@ async function runScenario41() {
     reSup.getResolvedStates(reApply.id)[0]?.props?.label === 'resolved-value' &&
     reSup.getResolvedStates(reSelf.id)[0]?.props?.self === 'svval' &&
     deepEq(rev, rev2)
+  // ✎ ANNOTATION 2026-11-13 — the record string below still says "F3-dropped from
+  // render": that LABEL is superseded by VALUE-PROVIDER-RENDER-DISPOSITION
+  // (docs/specs/value-provider-render-disposition.md, 0.5.2) — an AUTHORED provider
+  // now IS an element, and only runtime-minted value records drop. The measured
+  // claim is unaffected (reverse emission is emit-gate-independent, held
+  // byte-identical by that decision's §2 C4 / AM-6), and frozen round-4 output is
+  // annotated rather than rewritten.
   record('41', ok, d, [
     'PASS — R-3 (the ONE sanctioned leak) HOLDS: user edits reverse from the LIVE merged state (content/props/css edited, css.style string serialized back to the {color:\'blue\'} OBJECT — F7), the reversed doc carries NO slice-* residue, and the edited values are the new base truth on re-translate (second reverse identical — no seesaw). N1 strip works exactly on the key+shape discriminator: the synthesized props.label bake (key matches the props.label applyPath suffix AND value is {$: \'bindings.src\'}) is stripped; the duplex self-apply\'s own props.self bake is stripped the same way — the RESOLVED value never leaks as a prop or as a consumer value. K5 emission: apply-node reverses {reference, target}, the duplex {reference, value, target}; wrap (F3-dropped from render) still reverses as the source-only provider.',
   ])

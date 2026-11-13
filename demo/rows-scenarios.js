@@ -23,11 +23,19 @@
  *     assert: the 8 minted rows in the family tree, the per-row source
  *     anchors, the fan-out census (states-per-consumer = 8 ≤ 2×8 — the
  *     linearity pin) with NO fan-out-blowup warn, the rows' DOM
- *     materialization (the consumers' per-row arms — the F3 letter: minted
- *     rows are pure providers, "value holders, never elements"; their
- *     rendered output IS the cross-row fan-out, hooks-array-injection-review
- *     §3), the node-scoped layer + Option-C batch record (DEFECT #23), the
- *     re-mint no-accumulation, and the Feature 1a ROUND-TRIP arm (serialize
+ *     materialization (the consumers' per-row arms — the rows-mint family is
+ *     the compile's RESIDUAL drop class: `mintRowNode` sets the dedicated
+ *     `Node.valueRecord === true` marker (src/core/ops.ts,
+ *     `docs/specs/value-provider-render-disposition.md` §2 C2), so a
+ *     slice-consumed row is dropped as a VALUE, is never materialized as an
+ *     element, and its drop warns `value-record-drop` (§2 C3). Their rendered
+ *     output IS the cross-row fan-out, hooks-array-injection-review §3. The
+ *     former "F3 letter — minted rows are pure providers, value holders,
+ *     never elements" reading is SUPERSEDED: §2 C1 released AUTHORED
+ *     providers (an authored provider IS an element) and left exactly this
+ *     runtime-minted class dropped), the node-scoped layer + Option-C batch
+ *     record (DEFECT #23), the re-mint no-accumulation, and the Feature 1a
+ *     ROUND-TRIP arm (serialize
  *     → loadState → seed → reconcile → reRegisterDefPrototypes → the host
  *     re-mint per the `batches[hookName]` record → the row count unchanged,
  *     replace-in-place via the round-tripping layerId).
@@ -326,14 +334,24 @@ if (typeof document !== 'undefined') {
     for (const k of ['registered', 'inTree', 'unplaced', 'destroyed', 'prototypes', 'cloneOps']) PROFILE[k] = census[k]
 
     // ---- S1 — the mint drive + the rendered row count -----------------------
-    // DATA-FIX NOTE (the F3 letter): a minted row is a PURE PROVIDER — the
-    // compile's F3 discipline drops source-only nodes consumed by name from
-    // render (node.ts compile — "a value holder, never an element";
+    // WHY THE ROWS ARE NOT COUNTED AS ELEMENTS — the RESIDUAL VALUE-RECORD
+    // class, NOT the retired "F3" rule: a minted row is a RUNTIME-MINTED
+    // VALUE RECORD. `mintRowNode` sets `Node.valueRecord = true`
+    // (src/core/ops.ts; `docs/specs/value-provider-render-disposition.md` §2
+    // C2), and the compile emit gate drops such a record when its field name
+    // is consumed in the slice, warning `value-record-drop` (§2 C3 — a
+    // console.warn, deduped per (code, nodeId, name) per process; it is NOT
+    // an entry in `CompiledResult.dropped`). §2 C1 released AUTHORED
+    // providers (an authored provider IS an element), so this exclusion is
+    // provenance-based, never "pure provider"-based: the citation that stood
+    // here ("node.ts compile — a value holder, never an element") pointed at
+    // an in-code comment, never at a clause, and is SUPERSEDED — which is
+    // why the CHECK RESULT below is unchanged while its reason is not.
     // hooks-array-injection-review §3: the rows' rendered output IS the
-    // cross-row consumers). "8 rows rendered" therefore pins the 8 minted
-    // rows in the family tree (the batch layer's set) + the consumers'
-    // per-row arms (S5) — the rows materialize in the DOM THROUGH the
-    // fan-out, which is the feature's actual story.
+    // cross-row consumers. "8 rows rendered" therefore pins the 8 minted rows
+    // in the family tree (the batch layer's set) + the consumers' per-row
+    // arms (S5) — the rows materialize in the DOM THROUGH the fan-out, which
+    // is the feature's actual story.
     await runner.check('S1: the mint control (function-STRING body) drives rows-mint through clientAPI.apply — 8 product rows minted into the family tree', () => {
       if (PROFILE.rowsMinted !== 8) throw new Error(`rowsMinted=${PROFILE.rowsMinted}`)
       const rec = rowsListLive.batches?.['product-list']

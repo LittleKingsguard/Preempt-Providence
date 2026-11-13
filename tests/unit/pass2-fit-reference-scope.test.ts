@@ -587,7 +587,20 @@ function viableFor(t: GoldenTree): ReadonlySet<NodeId> {
  *  arm keys are numbered by the DESCENT sequence — h3 first, then y2, g, x2 —
  *  i.e. child-subtree-first LIFO, which is NOT flat child order. An implementer
  *  who "preserves child order" by re-sorting the hits breaks this while
- *  believing they satisfied S2. */
+ *  believing they satisfied S2.
+ *
+ *  RE-FROZEN (VALUE-PROVIDER-RENDER-DISPOSITION §4.1 / AM-7, contract-mandated
+ *  re-pin): the four target-less `slot` providers `x2`, `g`, `y2`, `h3` are
+ *  AUTHORED providers, so §2 C1 releases them from the render drop — each now
+ *  carries its OWN state at its own `pathKey`, in its own `slice` position
+ *  (`x2` after `x`, `g` after `x2`, `y2` after `y`, `h3` after `h2`), with its
+ *  own published `slot` binding and its real child ids (`g` keeps `['g2']`).
+ *  RE-VERIFIED in the same pass: the `#f:<owner>#<i>` arm numbering is
+ *  UNCHANGED (h3#0, y2#1, g#2, x2#3 — resolution is untouched by C1), the
+ *  `focus` arm states are byte-identical (values, `trace`, `children`) and
+ *  `dropped` / `warnings` stay `[]` (the released providers were never in
+ *  `dropped`). Every new line is attributable to C1: one state per released
+ *  authored provider, nothing else. */
 const FROZEN_GOLDEN: ResultProjection = {
   actionable: [
     { nodeId: 'root', pathKey: 'root', bindings: {}, unresolved: [], state: 'in-tree', children: ['focus'] },
@@ -596,11 +609,15 @@ const FROZEN_GOLDEN: ResultProjection = {
     { nodeId: 'focus', pathKey: 'root/focus#f:g#2', forkKey: 'root/focus#f:g#2', bindings: { slot: 'slot-g' }, unresolved: [], trace: ['g'], state: 'in-tree', children: ['x', 'y', 'z'] },
     { nodeId: 'focus', pathKey: 'root/focus#f:x2#3', forkKey: 'root/focus#f:x2#3', bindings: { slot: 'slot-x2' }, unresolved: [], trace: ['x2'], state: 'in-tree', children: ['x', 'y', 'z'] },
     { nodeId: 'x', pathKey: 'root/focus/x', bindings: {}, unresolved: [], state: 'in-tree', children: ['x2', 'g'] },
+    { nodeId: 'x2', pathKey: 'root/focus/x/x2', bindings: { slot: 'slot-x2' }, unresolved: [], state: 'in-tree', children: [] },
+    { nodeId: 'g', pathKey: 'root/focus/x/g', bindings: { slot: 'slot-g' }, unresolved: [], state: 'in-tree', children: ['g2'] },
     { nodeId: 'g2', pathKey: 'root/focus/x/g/g2', bindings: {}, unresolved: [], state: 'in-tree', children: [] },
     { nodeId: 'y', pathKey: 'root/focus/y', bindings: {}, unresolved: [], state: 'in-tree', children: ['y2'] },
+    { nodeId: 'y2', pathKey: 'root/focus/y/y2', bindings: { slot: 'slot-y2' }, unresolved: [], state: 'in-tree', children: [] },
     { nodeId: 'z', pathKey: 'root/focus/z', bindings: {}, unresolved: [], state: 'in-tree', children: ['h1'] },
     { nodeId: 'h1', pathKey: 'root/focus/z/h1', bindings: {}, unresolved: [], state: 'in-tree', children: ['h2'] },
     { nodeId: 'h2', pathKey: 'root/focus/z/h1/h2', bindings: {}, unresolved: [], state: 'in-tree', children: ['h3'] },
+    { nodeId: 'h3', pathKey: 'root/focus/z/h1/h2/h3', bindings: { slot: 'slot-h3' }, unresolved: [], state: 'in-tree', children: [] },
   ],
   dropped: [],
   warnings: [],

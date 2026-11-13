@@ -526,17 +526,26 @@ describe('§10.1 Serialization round-trip (SER-H1..H2, SER-F1..F6)', () => {
 // ---------------------------------------------------------------------------
 
 describe('§10.2 Fork keys & non-actionable dropping (FRK-H1..H3, FRK-F1..F6)', () => {
-  it('FRK-H1 — a single source for a referenceName yields one actionable state, no fork', () => {
+  it('FRK-H1 — a single source for a referenceName yields exactly one consumer state (no fork) plus the authored provider’s own element state', () => {
     const root = makeRoot({ type: 'root' })
     const leaf = childOf(root, makeNode({ type: 'leaf' }), 0)
     addComponentSource(root, 'slot', 'v')
     targetAnchor(leaf, 'slot')
 
     const res = root.compile([root, leaf])
-    expect(res.actionable).toHaveLength(1)
+    // VALUE-PROVIDER-RENDER-DISPOSITION §4.1 / AM-7 contract re-pin (1 → 2):
+    // `root` is an AUTHORED provider of `slot`, so §2 C1 releases it — it emits
+    // its own element state beside the consumer's. The FORK clause is unchanged:
+    // the consumer still has exactly ONE state, with no forkKey.
+    expect(res.actionable).toHaveLength(2)
     expect(res.dropped).toHaveLength(0)
     const st = compiledFor(res, leaf.id)
     expect(st?.bindings['slot']).toBe('v')
+    expect(st?.forkKey).toBeUndefined()
+    const providerState = compiledFor(res, root.id)
+    expect(providerState).toBeDefined()
+    expect(providerState!.pathKey).toBe('root')
+    expect(providerState!.bindings['slot']).toBe('v')
     expect(res.warnings.filter((w) => w.code === 'circular-source')).toHaveLength(0)
   })
 

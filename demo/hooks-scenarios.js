@@ -20,11 +20,18 @@
  *     letter; hooks-map-review §7.2 pin 1). A use case that needs an
  *     outside script/function is a data-authoring mistake (blind-test rule).
  *
- *     The root is a PURE provider — F3-dropped from render ("a value
- *     holder, never an element", node.md) — so it carries no element; the
- *     cards (its family children) render. The control bodies walk the
- *     FAMILY chain up to the root (`while (provider.parent) ...`) to find
- *     the provider id — the hook write target.
+ *     The root is an AUTHORED provider: under
+ *     `docs/specs/value-provider-render-disposition.md` §2 C1 an authored
+ *     provider IS an ordinary ELEMENT — the root EMITS its own element
+ *     (`hooks-root`) and the cards (its family children) NEST under it. (The
+ *     former reading — "the root is a PURE provider, F3-dropped from render,
+ *     a value holder, never an element" — is SUPERSEDED, and its `node.md`
+ *     citation is RETRACTED: no `node.md` clause ever said it; the drop was a
+ *     bare `continue` in the compile emit gate with no contract behind it.
+ *     Only RUNTIME-MINTED value records are dropped as values now, and that
+ *     residual drop warns `value-record-drop` — §2 C2/C3.) The control bodies
+ *     walk the FAMILY chain up to the root (`while (provider.parent) ...`) to
+ *     find the provider id — the hook write target.
  *
  *  2. NODE side (`hooksScenariosServerData`): the builder's expected
  *     census — the SAME core pipeline the page runs (translate → register →

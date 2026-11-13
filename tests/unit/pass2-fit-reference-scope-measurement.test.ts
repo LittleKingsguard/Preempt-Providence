@@ -43,6 +43,14 @@
  *           fabricated, stale, label-swapped and decorative values — each must be
  *           REJECTED, the live envelope's own values ACCEPTED, and a one-decimal
  *           print must derive a ±0.05 window (a fixed constant would not).
+ *   FRS-9h  the printed-precision window is PROVABLY sufficient: the SHIPPED
+ *           window is swept over the plausible true value of every derived form
+ *           this file compares (margin, per-node, pass2-ratio) and must cover the
+ *           worst honest rounding gap at EVERY step — the epsilon is MEASURED, not
+ *           hand-tuned — while every FRS-9g fabricated arm's gap must stay ≥10× the
+ *           window at its point (a window that grew toward a fabricated value
+ *           fails here). This is the deterministic regression pin for the
+ *           2026-09-23 operand-`weight` defect (see the header's ✎ note below).
  *
  * ── NO TIMING THRESHOLD IS ASSERTED (§5 omissions row 1) ──────────────────
  * The ORD-P1 flake lesson: a wall-clock assertion encodes machine state as a
@@ -73,6 +81,20 @@
  * harness never emitted. Hard-coding an expected ratio remains forbidden (that
  * is the falsifiability this case exists for; see the FALSIFICATION note per
  * assertion).
+ *
+ * ✎ THE WINDOW'S OPERAND TERM IS THE EXACT PARTIAL DERIVATIVE (2026-09-23, the
+ * follow-up defect — a TEST-side bug, not a harness one). `Math.abs(expected /
+ * op.value)` IS `∂q/∂operand` for every quotient this file compares
+ * (`a/b` w.r.t. `a` is `1/b`; w.r.t. `b` it is `a/b²` — both `|q / operand|`).
+ * The margin and per-node call sites then ALSO passed `1 / divisor` as the
+ * operand's `weight`, multiplying the correct term down: a margin window 6×
+ * too small, a per-node window 4× too small — i.e. tighter than the printed
+ * precision — so FRS-9b (and the matching FRS-9g arms) failed on ~1 run in 10,
+ * when a true ratio such as 6.0449 rounded to `6.04` and its rounded margin
+ * `1.65` sat 0.00563 from `10 / 6.04` inside a 0.00523 window. Every weight is
+ * now `1`; the node multiple is a DERIVED constant, not a printed operand, so it
+ * contributes no term at all. FRS-9h proves the corrected window is sufficient
+ * (and not widened into a fudge factor) by sweeping each form's plausible band.
  *
  * ── EXPECTED STATUS ───────────────────────────────────────────────────────
  * GREEN-AS-REPORTED after the harness lands the envelope print (P-SM-1: "HELD" =
@@ -254,12 +276,39 @@ type ExpectWithin = (actual: number, message: string) => { toBeLessThanOrEqual(b
  *  assertion in this file).
  *
  *  `printed` is a value the harness formatted (`toFixed`), so it may legitimately
- *  differ from the true value by up to half its last printed unit. `expected` is
- *  the quotient of values that were THEMSELVES printed, so it carries its own
- *  rounding: each `derivedFrom` operand was printed with half-unit error `e`, and
- *  an operand error `e` moves a quotient by at most `e × |expected / operand|` —
- *  folded in by passing that fraction as the operand's `weight` (`1` for a
- *  ratio's own operand; `1 / divisor` for a quotient of a quotient).
+ *  differ from the true value by up to half its last printed unit. That half unit
+ *  is added SEPARATELY (`printHalfUnit(printedText)`) and is never folded into a
+ *  weight.
+ *
+ *  `expected` is the quotient of values that were THEMSELVES printed, so it
+ *  carries their rounding too: an operand printed with half-unit error `e` moves
+ *  the quotient by `e × |∂q / ∂operand|`. For EVERY quotient this file compares —
+ *  `highPass2 / lowPass2`, `10 / pass2Ratio`, `pass2Ratio / nodeMultiple` — that
+ *  partial derivative is EXACTLY `|expected / op.value|`, already evaluated at
+ *  the printed operands (`∂(a/b)/∂a = 1/b` and `∂(a/b)/∂b = a/b²` both collapse
+ *  to `|q / operand|`). So the operand term is
+ *  `Σ printHalfUnit(op.text) × |expected / op.value|`, with NO extra factor.
+ *
+ *  `weight` stays in the signature — it is the public shape of the lifted
+ *  FRS9-EXTRACT block, and the offline falsifier drives it — for the one case it
+ *  can ever be needed: an operand that is NOT independent of the others, where
+ *  its rounding propagates differently from the local derivative. Every call site
+ *  in this file passes `1`. A constant divisor is NOT a derived operand and must
+ *  not be passed at all: the node multiple is the DERIVED `2^(highDepth −
+ *  lowDepth)`, not a printed reading, so it contributes no rounding term (it is
+ *  excluded rather than weighted — `printHalfUnit('4')` would be 0.5, i.e. a
+ *  wholly invented term).
+ *
+ *  ✎ DEFECT NOTE (2026-09-23 — this paragraph replaces the sentence that CAUSED
+ *  the flake): passing the divisor as a weight on top of the already-exact
+ *  derivative (`1 / nodeMultiple`, `1 / pass2Ratio`) multiplied the operand term
+ *  DOWN — 4× too small for a per-node quotient, 6× too small for a margin — so
+ *  the window came out TIGHTER than the printed precision it exists to model.
+ *  FRS-9b's margin arm and FRS-9g's margin/per-node arms then failed
+ *  intermittently (~1 run in 10) exactly when the true ratio's third decimal
+ *  pushed the correctly rounded print just past that too-small window. FRS-9h
+ *  below now PROVES the corrected window covers the worst honest rounding gap
+ *  over each form's plausible band (measured, not hand-tuned).
  *
  *  Returns the window AND asserts the comparison, so every call site states the
  *  window in its failure message. The window is derived from the printed digits —
@@ -389,6 +438,117 @@ function liftPrintedPrecisionBlock(): {
     ReturnType<typeof liftPrintedPrecisionBlock>
 }
 
+/** THE FABRICATED ARMS the printed-precision window must reject (FRS-9g), kept in
+ *  ONE place and shared with FRS-9h's teeth check, so "every fabricated arm" is
+ *  enumerated BY CONSTRUCTION rather than by a second, drift-prone copy. Each arm
+ *  is a real failure mode: a fabricated literal, a stale number from another
+ *  run/level, the wrong labelled quantity, and a decorative margin that does not
+ *  track its inputs.
+ *
+ *  Every operand's `weight` is `1` — `|expected / op.value|` is ALREADY the exact
+ *  partial derivative of each quotient (see `assertPrintedDerivation`), so passing
+ *  the divisor again (`1 / nodeMultiple`, `1 / pass2Ratio`) multiplied the window
+ *  down below the printed precision; that was the 2026-09-23 FRS-9b/9g flake.
+ *  The node multiple is deliberately NOT a derived operand here for the same
+ *  reason: it is derived (`2^(high − low)`), not printed, so it carries no
+ *  rounding. */
+interface FabricatedArm {
+  arm: string
+  fabricated: number
+  label: string
+  text: string
+  q: number
+  deriv: ReadonlyArray<{ text: string; value: number; weight: number }>
+}
+
+function fabricatedArms(e: GrowthEnvelope): FabricatedArm[] {
+  const pass2Deriv = [
+    { text: e.text.highPass2, value: e.highPass2, weight: 1 },
+    { text: e.text.lowPass2, value: e.lowPass2, weight: 1 },
+  ]
+  const totalDeriv = [
+    { text: e.text.highTotal, value: e.highTotal, weight: 1 },
+    { text: e.text.lowTotal, value: e.lowTotal, weight: 1 },
+  ]
+  const ratioDeriv = [{ text: e.text.pass2Ratio, value: e.pass2Ratio, weight: 1 }]
+  return [
+    {
+      arm: 'pass2-ratio', fabricated: 10, label: 'a fabricated literal (10.00)', text: e.text.pass2Ratio,
+      q: e.highPass2 / e.lowPass2, deriv: pass2Deriv,
+    },
+    {
+      arm: 'pass2-ratio', fabricated: 3, label: 'a stale ratio from another run (3.00)', text: e.text.pass2Ratio,
+      q: e.highPass2 / e.lowPass2, deriv: pass2Deriv,
+    },
+    {
+      arm: 'total-ratio', fabricated: e.pass2Ratio, label: 'the PASS2 ratio re-printed under the total-ratio label', text: e.text.totalRatio,
+      q: e.highTotal / e.lowTotal, deriv: totalDeriv,
+    },
+    {
+      arm: 'per-node', fabricated: 2, label: 'a per-node ratio not derived from pass2-ratio ÷ the node multiple (2.00)', text: e.text.perNode,
+      q: e.pass2Ratio / e.nodeMultiple, deriv: ratioDeriv,
+    },
+    {
+      arm: 'margin', fabricated: 9.99, label: 'a decorative margin that is not bound ÷ the printed ratio (9.99)', text: e.text.margin,
+      q: e.bound / e.pass2Ratio, deriv: ratioDeriv,
+    },
+    {
+      arm: 'margin', fabricated: 1, label: 'a stale margin left over from a 10× ratio (1.00)', text: e.text.margin,
+      q: e.bound / e.pass2Ratio, deriv: ratioDeriv,
+    },
+  ]
+}
+
+/** A RECORDING (never throwing) drive of the shipped printed-precision window —
+ *  the FRS-9h sweep harness. The window itself is computed by the SHIPPED code
+ *  (lifted out of this file by `liftPrintedPrecisionBlock`, never re-typed), and
+ *  each comparison is collected rather than thrown so a sweep can report the WORST
+ *  honest gap and where it occurred: the point of the proof is that maximum, not
+ *  the first violation. A violation is never swallowed — the case fails on a
+ *  non-empty `violations`. */
+interface WindowSweepStat {
+  label: string
+  comparisons: number
+  violations: string[]
+  maxGap: number
+  maxGapAt: string
+  windowAtMaxGap: number
+  maxGapOverWindow: number
+  maxGapOverWindowAt: string
+}
+
+function makeWindowSweep(label: string): {
+  stat: WindowSweepStat
+  /** Describe the CURRENT sweep point. A thunk, so a million-point sweep does not
+   *  allocate a million description strings — it is only called when a violation
+   *  or a new worst gap is recorded. */
+  where: (point: () => string) => void
+  expectWithin: ExpectWithin
+} {
+  const stat: WindowSweepStat = {
+    label, comparisons: 0, violations: [], maxGap: 0, maxGapAt: '', windowAtMaxGap: 0,
+    maxGapOverWindow: 0, maxGapOverWindowAt: '',
+  }
+  let at: () => string = () => '(unset)'
+  return {
+    stat,
+    where: (point: () => string) => { at = point },
+    expectWithin: (actual, message) => ({
+      toBeLessThanOrEqual: (bound: number) => {
+        stat.comparisons += 1
+        if (!Number.isFinite(actual) || !Number.isFinite(bound)) {
+          stat.violations.push(`[${at()}] NON-FINITE comparison — ${message}`)
+        } else if (actual > bound) {
+          stat.violations.push(`[${at()}] ${message}`)
+        }
+        if (actual > stat.maxGap) { stat.maxGap = actual; stat.maxGapAt = at(); stat.windowAtMaxGap = bound }
+        const fraction = actual / bound
+        if (fraction > stat.maxGapOverWindow) { stat.maxGapOverWindow = fraction; stat.maxGapOverWindowAt = at() }
+      },
+    }),
+  }
+}
+
 interface GuardEntry { id: string; index: number; status?: string }
 
 function enteredGuards(): GuardEntry[] {
@@ -469,11 +629,15 @@ describe('FRS-9 — the S4 measurement set is produced and reported (§3 S4/S5, 
     )
     // FALSIFIES: a per-node ratio that is not the printed pass2-ratio over the
     // printed node multiple (the value the guard exists to report per node).
+    // NB the weight is `1`: `∂(ratio / 4)/∂ratio = 1/4 = |expected / ratio|`
+    // already — the node multiple is a DERIVED constant, not a printed operand,
+    // so it contributes no rounding term (passing `1 / nodeMultiple` here was the
+    // 2026-09-23 defect: a 4×-too-small window).
     assertPrintedDerivation(
       expect,
       e!.perNode, e!.text.perNode, e!.pass2Ratio / e!.nodeMultiple,
       `${e!.pass2Ratio} / ${e!.nodeMultiple}`, [
-        { text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 / e!.nodeMultiple },
+        { text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 },
       ],
       `the printed per-node ratio (${e!.perNode}×) must be the printed pass2-ratio ÷ the node multiple = ${e!.pass2Ratio} / ${e!.nodeMultiple}`,
     )
@@ -506,11 +670,14 @@ describe('FRS-9 — the S4 measurement set is produced and reported (§3 S4/S5, 
     // is not derived from its inputs — a literal, a stale margin from a previous
     // bound, or a headline number that does not move when the ratio moves (i.e.
     // a silently re-baselined bound reported with a decorative margin).
+    // NB the weight is `1`: `∂(bound / ratio)/∂ratio = bound / ratio²` is exactly
+    // `|expected / ratio|` — passing `1 / pass2Ratio` as well was the 2026-09-23
+    // defect (a 6×-too-small window, and the intermittent FRS-9b failure).
     assertPrintedDerivation(
       expect,
       e!.margin, e!.text.margin, e!.bound / e!.pass2Ratio,
       `${e!.bound} / ${e!.pass2Ratio}`, [
-        { text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 / e!.pass2Ratio },
+        { text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 },
       ],
       `the printed margin (${e!.margin}×) must be the bound ÷ the printed ratio = ${e!.bound} / ${e!.pass2Ratio}`,
     )
@@ -721,36 +888,9 @@ describe('FRS-9 — the S4 measurement set is produced and reported (§3 S4/S5, 
     // (2) EVERY RE-POINTED ARM IS FALSIFIABLE. Each fabricated value is a real
     // failure mode: a literal, a stale number from another run/level, the wrong
     // labelled quantity, and a decorative margin that does not track its inputs.
-    const arms: Array<{ arm: string; fabricated: number; label: string; text: string; q: number; deriv: ReadonlyArray<{ text: string; value: number; weight: number }> }> = [
-      {
-        arm: 'pass2-ratio', fabricated: 10, label: 'a fabricated literal (10.00)', text: e!.text.pass2Ratio, q: twoDp.q,
-        deriv: [{ text: e!.text.highPass2, value: e!.highPass2, weight: 1 }, { text: e!.text.lowPass2, value: e!.lowPass2, weight: 1 }],
-      },
-      {
-        arm: 'pass2-ratio', fabricated: 3, label: 'a stale ratio from another run (3.00)', text: e!.text.pass2Ratio, q: twoDp.q,
-        deriv: [{ text: e!.text.highPass2, value: e!.highPass2, weight: 1 }, { text: e!.text.lowPass2, value: e!.lowPass2, weight: 1 }],
-      },
-      {
-        arm: 'total-ratio', fabricated: e!.pass2Ratio, label: 'the PASS2 ratio re-printed under the total-ratio label', text: e!.text.totalRatio,
-        q: e!.highTotal / e!.lowTotal,
-        deriv: [{ text: e!.text.highTotal, value: e!.highTotal, weight: 1 }, { text: e!.text.lowTotal, value: e!.lowTotal, weight: 1 }],
-      },
-      {
-        arm: 'per-node', fabricated: 2, label: 'a per-node ratio not derived from pass2-ratio ÷ the node multiple (2.00)', text: e!.text.perNode,
-        q: e!.pass2Ratio / e!.nodeMultiple,
-        deriv: [{ text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 / e!.nodeMultiple }],
-      },
-      {
-        arm: 'margin', fabricated: 9.99, label: 'a decorative margin that is not bound ÷ the printed ratio (9.99)', text: e!.text.margin,
-        q: e!.bound / e!.pass2Ratio,
-        deriv: [{ text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 / e!.pass2Ratio }],
-      },
-      {
-        arm: 'margin', fabricated: 1, label: 'a stale margin left over from a 10× ratio (1.00)', text: e!.text.margin,
-        q: e!.bound / e!.pass2Ratio,
-        deriv: [{ text: e!.text.pass2Ratio, value: e!.pass2Ratio, weight: 1 / e!.pass2Ratio }],
-      },
-    ]
+    // The arms live in the module-level `fabricatedArms` helper so FRS-9h's teeth
+    // check enumerates EXACTLY this list (no second copy to drift).
+    const arms = fabricatedArms(e!)
     for (const a of arms) {
       expect(
         () => drive(a.fabricated, a.text, a.q, 'the printed operands', a.deriv, `FRS-9g ${a.arm}`),
@@ -791,6 +931,270 @@ describe('FRS-9 — the S4 measurement set is produced and reported (§3 S4/S5, 
     ).toBeNull()
     console.log(
       `[frs-9g:printed-precision] window 1dp=±${oneDpWindow} (accepts an on-boundary honest print) · live ${twoDp.text}→±${twoDpWindow.toFixed(6)} | fabricated/stale/relabelled/label-swapped rejected: ${arms.length} | live control accepted: 4 | partial envelope → null`,
+    )
+  })
+
+  // ==========================================================================
+  // FRS-9h — the printed-precision window is PROVABLY sufficient (swept)
+  // ==========================================================================
+
+  it('FRS-9h — the printed-precision window is PROVABLY sufficient (swept, offline)', () => {
+    // WHY THIS CASE EXISTS — THE REGRESSION PIN FOR THE 2026-09-23 WEIGHT DEFECT.
+    // FRS-9b's margin arm and FRS-9g's margin/per-node arms used to pass
+    // `1 / divisor` as an operand `weight` ON TOP OF `|expected / op.value|`,
+    // which is already the exact partial derivative of every quotient this file
+    // compares. The result was a window 6× too small (margin) and 4× too small
+    // (per-node) — TIGHTER THAN THE PRINTED PRECISION it exists to model — so
+    // FRS-9b failed on roughly one run in ten, exactly when the true ratio's third
+    // decimal pushed a correctly rounded print just past that too-small window.
+    //
+    // This case converts the epsilon from a HAND-TUNED CONSTANT into a MEASURED
+    // BOUND: the SHIPPED window (lifted out of this file by the same FRS9-EXTRACT
+    // lifter FRS-9g uses — never re-typed here) is swept over the plausible true
+    // value of EVERY derived form this file compares, and the worst HONEST
+    // rounding gap must fit inside it at EVERY step. Tighten the window back (the
+    // defect) and this goes RED deterministically instead of intermittently in
+    // FRS-9b; widen it into a fudge factor and the tightness assertions below go
+    // RED (a window that no honest gap approaches is not a proof of anything).
+    //
+    // Forms A–C need NO smoke run — they are pure arithmetic on the shipped code,
+    // so the pin runs even on a checkout without the demo artifacts. Only the
+    // TEETH half (the last block) needs the live envelope, and it is skipped with
+    // the same documented reason FRS-9a/9g are (a partial envelope already fails
+    // FRS-9a, so that skip is never a hole in this case).
+    const { assertPrintedDerivation: shippedAssert, printHalfUnit: shippedHalfUnit } = liftPrintedPrecisionBlock()
+    const BOUND = RUNTIME_GROWTH_BOUND_MULTIPLE
+    const liveEnvelope = SKIP ? null : parseGrowthEnvelope(linesWith(GROWTH_MARKER)[0] ?? '')
+    /** The harness's node multiple, `2^(highDepth − lowDepth)` (FRS-9a pins the live
+     *  value at 4). Taken from the live envelope when there is one, else derived. */
+    const nodeMultiple = liveEnvelope?.nodeMultiple ?? 2 ** (12 - 10)
+    /** A drive that computes (and returns) the shipped window WITHOUT throwing:
+     *  used wherever this case needs the window's VALUE rather than a pass/fail —
+     *  the sweep's own recording harness, the factor-free identity check, and the
+     *  teeth magnitudes (a fabricated value legitimately throws in FRS-9g, which is
+     *  why the teeth check weighs magnitudes instead of re-asserting rejection). */
+    const silentExpectWithin: ExpectWithin = () => ({ toBeLessThanOrEqual: () => { /* window only */ } })
+
+    // ---- form A: `margin = bound / pass2Ratio` (FRS-9b's arm and both margin arms
+    //      of FRS-9g). The harness prints `margin = round2(bound / trueRatio)` and
+    //      `pass2-ratio = round2(trueRatio)`, so the honest gap is
+    //      `|round2(10/r) − 10/round2(r)|` — the form that was failing. -------------
+    const marginSweep = makeWindowSweep('A margin = bound / ratio')
+    for (let step = 40_000; step <= 120_000; step += 1) {
+      const trueRatio = step / 10_000
+      const ratioText = trueRatio.toFixed(2)
+      const printedRatio = Number(ratioText)
+      const marginText = (BOUND / trueRatio).toFixed(2)
+      marginSweep.where(() => `true ratio ${trueRatio.toFixed(4)} (printed ${ratioText} → margin ${marginText})`)
+      shippedAssert(
+        marginSweep.expectWithin, Number(marginText), marginText, BOUND / printedRatio,
+        `${BOUND} / ${ratioText}`, [{ text: ratioText, value: printedRatio, weight: 1 }],
+        'FRS-9h form A: the printed margin must be the bound ÷ the printed ratio',
+      )
+    }
+
+    // ---- form B: `per-node = pass2Ratio / nodeMultiple` (FRS-9a's third arm and
+    //      FRS-9g's per-node arm): `round2(r / 4)` vs `round2(r) / 4`. -------------
+    const perNodeSweep = makeWindowSweep('B per-node = ratio / nodeMultiple')
+    for (let step = 40_000; step <= 120_000; step += 1) {
+      const trueRatio = step / 10_000
+      const ratioText = trueRatio.toFixed(2)
+      const printedRatio = Number(ratioText)
+      const perNodeText = (trueRatio / nodeMultiple).toFixed(2)
+      perNodeSweep.where(() => `true ratio ${trueRatio.toFixed(4)} (printed ${ratioText} → per-node ${perNodeText})`)
+      shippedAssert(
+        perNodeSweep.expectWithin, Number(perNodeText), perNodeText, printedRatio / nodeMultiple,
+        `${ratioText} / ${nodeMultiple}`, [{ text: ratioText, value: printedRatio, weight: 1 }],
+        'FRS-9h form B: the printed per-node ratio must be the printed pass2-ratio ÷ the node multiple',
+      )
+    }
+
+    // ---- form C: `pass2-ratio = highPass2 / lowPass2` (FRS-9a's first two arms and
+    //      FRS-9g's two pass2-ratio arms): the operands are printed to ONE decimal
+    //      and the ratio to two, so both operands contribute a half-unit term. The
+    //      band is the runtime readings' plausible range (d10 pass2 ≈ 100-140ms,
+    //      d12 pass2 ≈ 600-900ms); the base grid is 0.1ms, PLUS a sub-tenth phase
+    //      per grid row so each operand carries a rounding residue — an
+    //      aligned-tenths grid would make `toFixed(1)` exact, leaving this form's
+    //      whole operand term untested and the sweep vacuous. -----------------------
+    const ratioSweep = makeWindowSweep('C pass2-ratio = high / low')
+    for (let hStep = 6_000; hStep <= 9_000; hStep += 1) {
+      const high = hStep / 10 + (hStep % 10) * 0.00973
+      const highText = high.toFixed(1)
+      const printedHigh = Number(highText)
+      for (let lStep = 1_000; lStep <= 1_400; lStep += 1) {
+        const low = lStep / 10 + (lStep % 10) * 0.00931
+        const lowText = low.toFixed(1)
+        const printedLow = Number(lowText)
+        const ratioText = (high / low).toFixed(2)
+        ratioSweep.where(() => `high ${high.toFixed(4)} / low ${low.toFixed(4)} (printed ${highText} / ${lowText} → ${ratioText})`)
+        shippedAssert(
+          ratioSweep.expectWithin, Number(ratioText), ratioText, printedHigh / printedLow,
+          `${highText} / ${lowText}`, [
+            { text: highText, value: printedHigh, weight: 1 },
+            { text: lowText, value: printedLow, weight: 1 },
+          ],
+          'FRS-9h form C: the printed pass2-ratio must be the quotient of the printed operands',
+        )
+      }
+    }
+
+    // ---- THE PROOF: no honest, correctly rounded print falls outside the window ---
+    for (const stat of [marginSweep.stat, perNodeSweep.stat, ratioSweep.stat]) {
+      expect(
+        stat.violations.length,
+        `${stat.label}: the shipped printed-precision window is INSUFFICIENT at ${stat.violations.length} of ${stat.comparisons} swept points — an HONEST, correctly rounded print falls outside it (this is the FRS-9b/FRS-9g flake, now deterministic). First violation: ${stat.violations[0]}`,
+      ).toBe(0)
+      expect(stat.comparisons, `${stat.label}: the sweep made no comparisons`).toBeGreaterThan(1_000)
+      expect(stat.windowAtMaxGap, `${stat.label}: the window at the worst point must be a positive bound`).toBeGreaterThan(0)
+    }
+
+    // ---- ... AND NOT VACUOUS (the anti-widen half of the pin): at its worst point
+    //      each form's honest gap comes CLOSE to the window, so the window can be
+    //      neither tightened below the printed precision (that is the defect) nor
+    //      widened into a fudge factor (these fractions would collapse). The values
+    //      are pure arithmetic — they do not move run to run. --------------------
+    const tightness: Array<[string, number, number]> = [
+      [marginSweep.stat.label, marginSweep.stat.maxGapOverWindow, 0.9],
+      [perNodeSweep.stat.label, perNodeSweep.stat.maxGapOverWindow, 0.7],
+      [ratioSweep.stat.label, ratioSweep.stat.maxGapOverWindow, 0.5],
+    ]
+    for (const [label, fraction, floor] of tightness) {
+      expect(
+        fraction,
+        `${label}: the worst honest gap reaches only ${(fraction * 100).toFixed(1)}% of the window — the window is at least ${(1 / fraction).toFixed(2)}× wider than the printed precision requires, i.e. a fudge factor rather than a derivation (the sweep would accept ANY printed value)`,
+      ).toBeGreaterThan(floor)
+      expect(fraction, `${label}: the gap can never exceed the window (asserted above); a fraction ≥ 1 is a measurement error`).toBeLessThan(1)
+    }
+
+    // ---- THE WINDOW IS THE EXACT-DERIVATIVE SUM, FACTOR-FREE. Sufficiency alone
+    //      cannot see a weight factor that SHRINKS the operand term but still stays
+    //      above the worst honest gap (the per-node `1 / nodeMultiple` error was
+    //      exactly that: 4× too small, yet still wider than the printed half-unit,
+    //      so it never actually failed a live run) — so the window is also checked
+    //      against an INDEPENDENT recomputation of the claim it models: the printed
+    //      value's own half-unit PLUS, per printed operand, that operand's half-unit
+    //      times the absolute partial derivative `|expected / op.value|`, with NO
+    //      factor. A reintroduced `weight` divisor disagrees by exactly that factor
+    //      here, deterministically. The sampled points are the sweeps' own
+    //      worst-case ratios (any point would do — the identity is algebraic, not
+    //      data-dependent, so these do not re-tune anything). --------------------
+    const exactWindow = (
+      printedText: string, expected: number, ops: ReadonlyArray<{ text: string; value: number }>,
+    ): number => ops.reduce(
+      (sum, op) => sum + shippedHalfUnit(op.text) * Math.abs(expected / op.value),
+      shippedHalfUnit(printedText),
+    )
+    const identityChecks: Array<{
+      form: string
+      printedText: string
+      expected: number
+      ops: ReadonlyArray<{ text: string; value: number }>
+      deriv: ReadonlyArray<{ text: string; value: number; weight: number }>
+    }> = [
+      {
+        form: 'A margin (true ratio 4.1751 → printed 4.18 / margin 2.40)',
+        printedText: (BOUND / 4.1751).toFixed(2), expected: BOUND / 4.18,
+        ops: [{ text: (4.1751).toFixed(2), value: Number((4.1751).toFixed(2)) }],
+        deriv: [{ text: (4.1751).toFixed(2), value: Number((4.1751).toFixed(2)), weight: 1 }],
+      },
+      {
+        form: 'B per-node (true ratio 8.0551 → printed 8.06 / per-node 2.01)',
+        printedText: (8.0551 / nodeMultiple).toFixed(2), expected: Number((8.0551).toFixed(2)) / nodeMultiple,
+        ops: [{ text: (8.0551).toFixed(2), value: Number((8.0551).toFixed(2)) }],
+        deriv: [{ text: (8.0551).toFixed(2), value: Number((8.0551).toFixed(2)), weight: 1 }],
+      },
+      {
+        form: 'C pass2-ratio (892.6584ms / 102.5465ms → printed 892.7 / 102.5)',
+        printedText: (892.6584 / 102.5465).toFixed(2), expected: 892.7 / 102.5,
+        ops: [{ text: '892.7', value: 892.7 }, { text: '102.5', value: 102.5 }],
+        deriv: [{ text: '892.7', value: 892.7, weight: 1 }, { text: '102.5', value: 102.5, weight: 1 }],
+      },
+    ]
+    for (const check of identityChecks) {
+      const window = shippedAssert(
+        silentExpectWithin, Number(check.printedText), check.printedText, check.expected,
+        'the identity sample', check.deriv, `FRS-9h identity ${check.form}`,
+      )
+      const independent = exactWindow(check.printedText, check.expected, check.ops)
+      expect(
+        window,
+        `form ${check.form}: the shipped window (${window.toFixed(6)}) is NOT the printed half-unit plus the exact-derivative sum (${independent.toFixed(6)}) — the ratio is ${(window / independent).toFixed(4)}, i.e. an extra factor on the operand term (the 2026-09-23 \`weight\` defect: \`1 / divisor\` shrinks that term by the divisor)`,
+      ).toBeCloseTo(independent, 12)
+    }
+
+    // ---- ... AND NO CALL SITE REINTRODUCES A FACTOR. The sweeps and the identity
+    //      check above pass the unit weight explicitly, i.e. they pin the SHIPPED
+    //      FORMULA — not the call sites that feed it, and the defect was a
+    //      CALL-SITE edit (the divisor passed as the operand weight). So every
+    //      numeric weight expression in this file is read back and must be exactly
+    //      `1`: the type annotations (`weight` of type number) carry no digit and
+    //      are therefore not in scope, which is the point of anchoring the scan on
+    //      a digit. This is the leg that goes RED on a re-introduced divisor even
+    //      where the printed half-unit term masks it (per-node was masked). ------
+    const weightExpressions = [...readThisFile().matchAll(/weight:\s*(\d[^,}\n]*)/g)].map(m => m[1]!.trim())
+    expect(
+      weightExpressions.length,
+      `the weight scan found ${weightExpressions.length} numeric \`weight\` expression(s) — it has lost its target (a refactor renamed the field?), so the call-site half of this pin is blind`,
+    ).toBeGreaterThan(10)
+    const nonUnitWeights = weightExpressions.filter(w => Number(w) !== 1)
+    expect(
+      nonUnitWeights,
+      `every operand weight must be the literal 1 — \`|expected / op.value|\` is ALREADY the exact partial derivative, so a divisor factor here shrinks the window below the printed precision (the 2026-09-23 flake). Found: [${nonUnitWeights.join(', ')}]`,
+    ).toEqual([])
+    console.log(
+      `[frs-9h:weights] ${weightExpressions.length} call-site weight expression(s) scanned, all 1 (no divisor factor)`,
+    )
+
+    console.log(
+      `[frs-9h:window] margin max gap ${marginSweep.stat.maxGap.toFixed(6)} at ${marginSweep.stat.maxGapAt} | window there ${marginSweep.stat.windowAtMaxGap.toFixed(6)} | worst gap/window ${marginSweep.stat.maxGapOverWindow.toFixed(4)} over ${marginSweep.stat.comparisons} steps`,
+    )
+    console.log(
+      `[frs-9h:window] per-node max gap ${perNodeSweep.stat.maxGap.toFixed(6)} at ${perNodeSweep.stat.maxGapAt} | window there ${perNodeSweep.stat.windowAtMaxGap.toFixed(6)} | worst gap/window ${perNodeSweep.stat.maxGapOverWindow.toFixed(4)} over ${perNodeSweep.stat.comparisons} steps`,
+    )
+    console.log(
+      `[frs-9h:window] pass2-ratio max gap ${ratioSweep.stat.maxGap.toFixed(6)} at ${ratioSweep.stat.maxGapAt} | window there ${ratioSweep.stat.windowAtMaxGap.toFixed(6)} | worst gap/window ${ratioSweep.stat.maxGapOverWindow.toFixed(4)} over ${ratioSweep.stat.comparisons} steps`,
+    )
+
+    // ---- THE FALSIFIABILITY WAS NOT WEAKENED. The corrected window IS wider than
+    //      the broken one, so this case must show it did not grow anywhere NEAR a
+    //      fabricated value's distance from the honest value. EVERY FRS-9g arm is
+    //      enumerated through the shared `fabricatedArms` helper (so this list
+    //      cannot drift from that case's), and each gap must exceed the window at
+    //      that point by at least 10×. A window that ever grows to within 10× of a
+    //      fabricated gap fails HERE instead of silently passing FRS-9g. ---------
+    const TEETH_MULTIPLE = 10
+    if (SKIP) {
+      console.warn(`[frs-9h:teeth] SKIPPED with the live arm — ${smoke.reason} (FRS-9g is skipped for the same reason, so there is no fabricated-arm list to weigh; forms A–C above still ran)`);
+      return
+    }
+    expect(
+      liveEnvelope,
+      'the live growth envelope must parse for the teeth check — without it there is no arm list to weigh (a partial envelope is FRS-9a\'s miss, never silently tolerated)',
+    ).not.toBeNull()
+    const teeth: Array<{ arm: string; gap: number; window: number; ratio: number }> = []
+    for (const a of fabricatedArms(liveEnvelope!)) {
+      // The window at THIS arm's point, from the shipped code (the silent drive
+      // returns the window without throwing — a fabricated value legitimately
+      // throws in FRS-9g, which is why the teeth check weighs magnitudes instead).
+      const window = shippedAssert(
+        silentExpectWithin, a.fabricated, a.text, a.q, 'the printed operands', a.deriv,
+        `FRS-9h teeth ${a.arm}`,
+      )
+      const gap = Math.abs(a.fabricated - a.q)
+      const ratio = gap / window
+      teeth.push({ arm: a.arm, gap, window, ratio })
+      expect(
+        ratio,
+        `the printed-precision window is no longer falsifiable against ${a.label}: its distance from the honest value (${gap.toFixed(6)}) is only ${ratio.toFixed(2)}× the window at that point (${window.toFixed(6)}) — the window grew toward a FABRICATED value and must stay ≥ ${TEETH_MULTIPLE}× below it`,
+      ).toBeGreaterThanOrEqual(TEETH_MULTIPLE)
+    }
+    console.log(
+      `[frs-9h:teeth] ${teeth.map(t => `arm=${t.arm} gap=${t.gap.toFixed(6)} window=${t.window.toFixed(6)} gap/window=${t.ratio.toFixed(1)}`).join(' | ')}`,
+    )
+    const weakest = teeth.reduce((a, b) => (b.ratio < a.ratio ? b : a))
+    console.log(
+      `[frs-9h:teeth] weakest arm ${weakest.arm} at ${weakest.ratio.toFixed(1)}× the window (floor ${TEETH_MULTIPLE}×, so ${(weakest.ratio / TEETH_MULTIPLE).toFixed(1)}× headroom)`,
     )
   })
 })

@@ -393,7 +393,11 @@ if (typeof document !== 'undefined') {
         if (!asAttr) throw new Error(`live DOM missing marker ${m}`);
       }
     });
-    runner.check('all 9 cards render under the mount (root non-actionable per S-R2.5/F3)', () => {
+    // The root IS actionable (it is an AUTHORED provider — VALUE-PROVIDER-
+    // RENDER-DISPOSITION §2 C1: it emits one element, and the cards nest
+    // under it); the former "root non-actionable per S-R2.5/F3" wording was
+    // the superseded rule and must not be re-asserted by a check NAME.
+    runner.check('all 9 cards render under the mount, nested under the emitted root element (the root IS actionable — VALUE-PROVIDER-RENDER-DISPOSITION §2 C1)', () => {
       const ids = ['array-card', 'consumer-card', 'dup-card', 'vacuous-card', 'empty-array-card',
         'unresolved-card', 'syntax-card', 'gap-card', 'dotted-card'];
       for (const id of ids) {

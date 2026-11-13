@@ -28,6 +28,7 @@ line added by the in-flight release pass 2026-09-23):**
 
 | Version line | Tag object in this clone | Commit in this clone | Date |
 | --- | --- | --- | --- |
+| **0.5.2** — **`PENDING (filled at commit time)`** — prepared by the 2026-11-13 release pass (`package.json` bumped `0.5.1 → 0.5.2`); **contents BY REFERENCE only**: `docs/decisions.md` **`RELEASE-0.5.2`** (the index row) → `VALUE-PROVIDER-RENDER-DISPOSITION` + the spec **`docs/specs/value-provider-render-disposition.md`** (the owning gate record: C1–C5, FS-VPD-1…10, register VPD-1…12, AM-1…AM-9) | **`PENDING`** — no tag exists; the tag, the commit and the date are the commit-time edits of the AGENTS item-12 landing duty | **`PENDING`** — no commit exists yet; the full 40-char hash is recorded at commit time | **`PENDING`** — no date is asserted before the commit exists |
 | **0.5.1** — **✅ PUBLISHED 2026-09-23** (registry `dist-tags.latest = 0.5.1`; tarball `provident-ssr-0.5.1.tgz` `200`, 276.3 kB, 103 files, shasum `edc8ad5749a183c05db51b428528fca2b64ab0e5`) | **`v0.5.1` — created** (annotated, on the release commit) | **`abd9a458fa26e11bb19c0c23420c2d89287e4b1c`** (full hash; release commit "release: provident-ssr@0.5.1 …") | **2026-09-22** (commit date; publish accepted `PUT … 202` then propagated 2026-09-23) |
 | 0.2.0 | **recorded** (tag `v0.2.0`, `docs/next-steps.md` §"PUBLIC RELEASE CHECKLIST") | `UNVERIFIED` | **recorded** — published 2026-08-25 |
 | 0.3.0 / 0.3.1 / 0.3.2 | **recorded** (tag names only; the commit is a **7-char prefix**) | `UNVERIFIED` (prefix only) | `UNVERIFIED` |
