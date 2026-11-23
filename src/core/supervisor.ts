@@ -19,7 +19,8 @@ import type { GraphScope } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
 import { serializeSlice, loadState, reRegisterDefPrototypes } from './serialize.js'
-import type { Anchor, CompiledState, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
+import { isPathState } from './render-helpers.js'
+import type { Anchor, CompiledState, CompileResult, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
 
 let journalSeq = 0
 
@@ -157,6 +158,41 @@ export interface DispatchReport {
   dirtied: NodeId[]
 }
 
+/**
+ * POST-BOOTSTRAP-EMIT-DROP (R-1 —
+ * `docs/specs/post-bootstrap-emit-drop-fix-review.md` §4.4): the TREE compile
+ * mode carried by a `Supervisor`. The invariant the mode delivers: *a node that
+ * has been minted in the path domain is always re-derived in the path domain.*
+ *
+ *  - `family` (default, and byte-identical to the pre-R-1 dispatch): a dirty
+ *    node's focused slice is compiled by `Node.compile` — family states, so
+ *    every slice member's wire is its `nodeId` wire.
+ *  - `path`: EVERY member of the dirty node's bounded focused slice is
+ *    re-derived by its own `Node.compilePath`, so a node that already holds a
+ *    path-state (the bootstrap's path states) is re-MINTED instead of being
+ *    overwritten by a family state. A re-mint of an unchanged path yields the
+ *    same wire, which is what makes path-domain identity sticky across renders.
+ *
+ * Entered at the documented bootstrap seam (`recordResolved`, which infers
+ * `path` from recorded path states) or DECLARED by the host through
+ * `new Supervisor({ compileMode })` / `setCompileMode()` for a bootstrap the
+ * supervisor never hears about. The mode lives on the Supervisor (never on a
+ * `Node`) so it survives `_restoreBase`'s node rebuild.
+ */
+export type CompileMode = 'family' | 'path'
+
+/** The `Supervisor` options object (the `{ hub, events, maxJournalLength,
+ *  graphScope, compileMode }` form passed to the constructor). */
+export interface SupervisorOptions {
+  hub?: LinkConfigNameHub
+  events?: EventBridge
+  maxJournalLength?: number
+  graphScope?: GraphScope
+  /** Explicit tree compile mode (R-1 §4.4(3)); an explicit value is never
+   *  overridden by `recordResolved`'s inference. */
+  compileMode?: CompileMode
+}
+
 /** Options for `dispatchAndReport` — the opt-in bounded `requestId` dedup. */
 export interface DispatchOptions {
   requestId?: string
@@ -191,6 +227,14 @@ export class Supervisor {
    *  (isolated opt-in, else null → the shared default). Threaded to ops so
    *  minted/registered nodes + the sweep stay scope-local. */
   readonly graphScope: GraphScope | null
+  /** POST-BOOTSTRAP-EMIT-DROP (R-1) — the tree compile mode (see
+   *  `CompileMode`). Carried on the SUPERVISOR, not on a `Node`, so it survives
+   *  `_restoreBase`'s graph-REPLACE node rebuild. Inferred at the documented
+   *  bootstrap seam (`recordResolved`) unless the host declared it explicitly. */
+  private compileMode: CompileMode = 'family'
+  /** True once a host DECLARED the mode (`{ compileMode }` / `setCompileMode`)
+   *  — an explicit declaration is never overridden by the inference. */
+  private compileModeExplicit = false
   private undoStack: JournalEntry[] = []
   private redoStack: JournalEntry[] = []
   private client: ClientAPI | null = null
@@ -204,7 +248,7 @@ export class Supervisor {
    *  returned by `onNodeFinalized`; called by `dispose()`. */
   private finalizeUnsub: () => void = () => {}
 
-  constructor(rootOrOpts: Node | { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number; graphScope?: GraphScope }, nodes?: Map<NodeId, Node>) {
+  constructor(rootOrOpts: Node | SupervisorOptions, nodes?: Map<NodeId, Node>) {
     this.hub = null
     this.events = null
     this.maxJournalLength = undefined
@@ -215,12 +259,16 @@ export class Supervisor {
       this.nodes.set(root.id, root)
       this.graphScope = root.graphScope ?? null
     } else {
-      const opts = rootOrOpts as { hub?: LinkConfigNameHub; events?: EventBridge; maxJournalLength?: number; graphScope?: GraphScope }
+      const opts = rootOrOpts as SupervisorOptions
       this.nodes = new Map<NodeId, Node>()
       this.hub = opts.hub ?? null
       this.events = opts.events ?? null
       this.maxJournalLength = opts.maxJournalLength
       this.graphScope = opts.graphScope ?? null
+      if (opts.compileMode !== undefined) {
+        this.compileMode = opts.compileMode
+        this.compileModeExplicit = true
+      }
     }
     // REQ-GAP-11 — the sweep-hook seam: cascade-finalized nodes (the sweep's
     // own finalization, terminal) leave this supervisor's scan surfaces too.
@@ -555,6 +603,26 @@ export class Supervisor {
     return focusedSliceFor(node, () => this.allNodes())
   }
 
+  /** POST-BOOTSTRAP-EMIT-DROP (R-1 §4.4(4)) — the `path`-mode slice compile:
+   *  merge the actionable states of EVERY member's own `compilePath`. A member
+   *  only ever mints its OWN path-states (`mintPathState` keys them by the
+   *  compiling node), so merging preserves the per-node overwrite semantics of
+   *  the pass-2 dispatch unchanged: a member compiled later supersedes an
+   *  earlier member's states for the same id. One compile per bounded-slice
+   *  member, inside the same coalesced tick — no whole-tree recompile. */
+  private compilePathSlice(node: Node): CompileResult {
+    const actionable: CompiledState[] = []
+    const dropped: CompileResult['dropped'] = []
+    const warnings: CompileResult['warnings'] = []
+    for (const member of this.focusedSlice(node)) {
+      const cr = member.compilePath()
+      actionable.push(...cr.actionable)
+      dropped.push(...cr.dropped)
+      warnings.push(...cr.warnings)
+    }
+    return { actionable, dropped, warnings }
+  }
+
   /** Compiled states produced by pass-2 since the last take — the renderer
    *  consumes these instead of recompiling (with the flush awaited, every
    *  dirty node's compile has already resolved). */
@@ -616,12 +684,36 @@ export class Supervisor {
     }
   }
 
+  /** POST-BOOTSTRAP-EMIT-DROP (R-1 §4.4(3)) — the compile-mode getter/setter:
+   *  the explicit `Supervisor` override for a host that bootstraps its tree by
+   *  a route this supervisor never hears about (never a `recordResolved` call),
+   *  so the mode cannot be inferred. Setting it DECLARES the mode: later
+   *  `recordResolved` calls no longer infer over it. */
+  getCompileMode(): CompileMode {
+    return this.compileMode
+  }
+
+  setCompileMode(mode: CompileMode): void {
+    this.compileMode = mode
+    this.compileModeExplicit = true
+  }
+
   /** Seed the resolved store from a bootstrap compile's actionable states —
    *  the demos' bootstrap compiles the root DIRECTLY (bypassing the
    *  supervisor), so callers must recordResolved(cr.actionable) after that
    *  full compile. Groups per node and writes through node.resolved. This
-   *  NEVER touches pass2States and never drains. */
+   *  NEVER touches pass2States and never drains.
+   *
+   *  POST-BOOTSTRAP-EMIT-DROP (R-1 §4.4(2)) — `recordResolved` IS the
+   *  documented bootstrap channel, so the recorded states also DECLARE the
+   *  tree's compile mode: a bootstrap that recorded PATH states puts this
+   *  supervisor in `path` mode (and it never infers back to `family` — a node
+   *  minted in the path domain is always re-derived in the path domain). A
+   *  host-declared mode is never overridden. */
   recordResolved(actionable: CompiledState[]): void {
+    if (!this.compileModeExplicit && actionable.length > 0 && actionable.every(isPathState)) {
+      this.compileMode = 'path'
+    }
     this.storeResolved(this.groupByNode(actionable))
   }
 
@@ -692,9 +784,16 @@ export class Supervisor {
           const chosenName = activePlacementOf(this.resolvedStates.get(nodeId) ?? [])
           if (placementChangeIrrelevant(node, chosenName, trigger.linkName)) continue
         }
-        const cr = placementRouted
-          ? node.compilePath()
-          : node.compile(this.focusedSlice(node), { focusNodeId: nodeId })
+        const cr = this.compileMode === 'path'
+          // POST-BOOTSTRAP-EMIT-DROP (R-1 §4.4(4)) — `path` mode: EVERY member
+          // of the bounded slice is re-derived in the PATH domain, so an
+          // ancestor holding a bootstrap path-state is re-minted (same wire
+          // while its topology is unchanged) rather than overwritten by a
+          // family state. `family` mode is untouched (byte-identical).
+          ? this.compilePathSlice(node)
+          : placementRouted
+            ? node.compilePath()
+            : node.compile(this.focusedSlice(node), { focusNodeId: nodeId })
         // hand the fresh compiled states to the renderer (no recompile there).
         // Group fork arms per compile result, then REPLACE per node — a later
         // dirty node's compile (e.g. a descendant's own pass) supersedes the

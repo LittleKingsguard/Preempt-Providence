@@ -21,11 +21,28 @@
  * the first `createEl` and never reset — matches no fragment.
  *
  * WHAT THIS FILE ASSERTS: the INVARIANTS a reader of the contract can rely on,
- * never the mechanism — the fix stance is still an OPEN contract decision
- * (RCA §5: (A) sticky path identity, (B) an explicit tree-level compile mode,
- * (C) adapter root re-capture — rejected as a fix alone). Every case below must
- * therefore stay green under ANY of (A)/(B), and no case reads `makeCs`,
- * `isPathState`, `forkKey`-minting internals or the internal op sequence:
+ * never the mechanism — no case reads `makeCs`, `isPathState`, `forkKey`-minting
+ * internals or the internal op sequence, and no case asserts a `forkKey`/state
+ * shape (the emit layer's public domain signal `forkKey === wire` is the only
+ * path-domain reading used; `Supervisor`, `apply`, `flush`, `takePass2States`,
+ * `recordResolved`, `undo`/`replay`, `renderProducingProcess`, the adapters and
+ * `translateLegacy` are the whole surface).
+ *
+ * **PBED-1..4 are stance-NEUTRAL — and that is exactly why the fix gate
+ * (`docs/specs/post-bootstrap-emit-drop-fix-review.md` §8 "Pricing note") ruled
+ * them INSUFFICIENT AS WRITTEN:** all four PASS under the owner's stance (A)
+ * read as a BAN ("a family compile must not re-key a node holding a path
+ * state"), because refusing the family compile freezes the ancestors — the
+ * document stops changing instead of changing wrongly — and PBED-3 iterates only
+ * nodes present in BOTH renders, so it cannot see the new node at all.
+ *
+ * **PBED-5..10 are the gate's §8 Phase-1 cases (P-1..P-6)** and they are the
+ * ones that SELECT the mechanism: the append half (a refusal never appends the
+ * new child), the refresh-channel CONTROL (a refusal silently freezes every
+ * non-placement node), the strong domain rule applied to NEW nodes, Z1 (the
+ * condensed base restored), Z2 (a drain-only host) and the
+ * `ORPHAN-EMIT-TOP-LEVEL-LEAK` scenario that a refusal makes permanent. A fix
+ * that only re-greens PBED-1..4 is not the sanctioned fix.
  *
  *  - **PBED-1** the document survives: the html stays non-empty and still
  *    carries the authored content (the root's id, the holder, the card).
@@ -41,13 +58,32 @@
  *    change to that node).
  *  - **PBED-4** the identical loss on `MarkdownAdapter`, which carries the same
  *    never-recomputed `rootKey` shape (FRG-H24 class).
+ *  - **PBED-5** (gate P-1, THE STANCE SELECTOR) the change is an APPEND: exactly
+ *    one `append` op from the host's wire to the new node's wire, and the
+ *    document shows the new element INSIDE its host (not as a sibling after the
+ *    root). A refusal keeps the host's mint-time `childOrder` and never appends.
+ *  - **PBED-6** (gate P-2, the CONTROL) a post-bootstrap `state-slice` write on a
+ *    NON-placement node (the root) still reaches emit. DELIBERATELY GREEN TODAY;
+ *    it turns red under a "refuse the family compile" fix, i.e. it catches
+ *    OVERSHOOT.
+ *  - **PBED-7** (gate P-3) the strong domain rule: every wire after the change is
+ *    a bootstrap wire, or a PATH-domain wire — applied to the NEW node as well.
+ *    No diagnostic channel exists for the other admissible branch.
+ *  - **PBED-8** (gate P-4, Z1) condense past `maxJournalLength` → `undo()` to the
+ *    base → the root still emits on `root` and the document is not empty; plus
+ *    the `replay()`/`_restoreBase` leg a per-`Node` carrier dies on.
+ *  - **PBED-9** (gate P-5, Z2) a host whose live map is REPLACED by each
+ *    `takePass2States()` drain still emits the root.
+ *  - **PBED-10** (gate P-6) the `ORPHAN-EMIT-TOP-LEVEL-LEAK` scenario: a
+ *    `placement-attach` into a FAMILY-routed container must still APPEND the
+ *    added node instead of serializing it as a detached top-level sibling.
  *
  * RED FIRST (AGENTS.md item 8): written before any fix, against a tree where
  * the defect is live. No `src/**` change accompanies this file.
  */
 import { describe, it, expect } from 'vitest'
 import { Supervisor, type Node } from '../../src/core/node.js'
-import { translateLegacy, type LegacyInitialData, type TranslatedTree } from '../../src/core/translate.js'
+import { translateLegacy, createLinkHub, type LegacyInitialData, type TranslatedTree } from '../../src/core/translate.js'
 import { renderProducingProcess } from '../../src/core/render-helpers.js'
 import { SSRFragmentAdapter, MarkdownAdapter } from '../../src/core/adapters.js'
 import type { MinimalElement, RenderAdapter, RenderOp } from '../../src/core/render.js'
@@ -167,14 +203,28 @@ interface Fixture {
   card: Node
 }
 
-function fixture(opts: { cardText?: string } = {}): Fixture {
-  const tree = translateLegacy(placementEnvelope(opts))
+function fixture(opts: { cardText?: string; maxJournalLength?: number; sharedHub?: boolean } = {}): Fixture {
+  // `sharedHub` gives the SUPERVISOR the tree's own `LinkConfigNameHub` — the
+  // documented host shape (`createLinkHub` is the public same-name shared-Link
+  // factory; idiom: tests/unit/journal-condensing.test.ts `makeSupervisor`).
+  // It is required only by the condensed-base restore path (`_restoreBase`
+  // re-seeds through the hub and bails out with the graph already evicted when
+  // the supervisor holds none), so it stays OPT-IN and PBED-1..4 keep the
+  // hub-less host they were written against.
+  const hub = opts.sharedHub ? createLinkHub() : undefined
+  const tree = translateLegacy(placementEnvelope(opts), hub ? { hub } : undefined)
   const authored = (cssId: string): Node => {
     const n = tree.nodes.find((x) => x.css?.id === cssId || x.props?.id === cssId)
     if (!n) throw new Error(`fixture: the envelope has no #${cssId} node`)
     return n
   }
-  const sup = new Supervisor({})
+  // `maxJournalLength` is the public condense trigger (`docs/specs/ops.md` §6;
+  // idiom: tests/unit/journal-condensing.test.ts). Absent ⇒ never condenses —
+  // exactly the shipped default the other cases run under.
+  const sup = new Supervisor({
+    ...(hub ? { hub } : {}),
+    ...(opts.maxJournalLength !== undefined ? { maxJournalLength: opts.maxJournalLength } : {}),
+  })
   for (const n of tree.nodes) sup.registerNode(n)
   return { sup, tree, root: tree.root, holder: authored('holder'), filler: authored('filler'), card: authored('card') }
 }
@@ -237,6 +287,79 @@ function removeWires(ops: RenderOp[]): NodeRef[] {
 
 function createWires(ops: RenderOp[]): NodeRef[] {
   return ops.flatMap((o) => (o.kind === 'create' ? [o.wire] : []))
+}
+
+/** The `append` ops of one diff as plain owner/child pairs (`render.ts` §10.3
+ *  structure pass: an append is emitted for a child created this pass or whose
+ *  order changed). Owner/child only — the pair IS the pin, and it is the only
+ *  public reading that tells "assembled into the host" from "created and never
+ *  appended" (`ORPHAN-EMIT-TOP-LEVEL-LEAK`). */
+function appendPairs(ops: RenderOp[]): Array<{ owner: NodeRef; child: NodeRef }> {
+  return ops.flatMap((o) => (o.kind === 'append' ? [{ owner: o.owner, child: o.child }] : []))
+}
+
+/**
+ * The html slice of the element carrying the authored `id`, from its opening tag
+ * to its matching close tag (same-tag depth counted, so a nested element of the
+ * same tag never truncates the slice). A text marker alone cannot tell a child
+ * assembled INSIDE its host from a fragment that was created, never appended,
+ * and therefore serialized top-level (`adapters.ts` `toString`'s `floating`
+ * branch) — which is exactly the difference PBED-5 and PBED-10 pin.
+ */
+function outerHtmlOfAuthoredId(html: string, cssId: string): string | undefined {
+  const marker = `id="${cssId}"`
+  const at = html.indexOf(marker)
+  if (at === -1) return undefined
+  const openAt = html.lastIndexOf('<', at)
+  if (openAt === -1) return undefined
+  const tag = /^<([\w-]+)/.exec(html.slice(openAt))?.[1]
+  if (!tag) return undefined
+  const open = new RegExp(`<${tag}(?=[\\s>])`, 'g')
+  const close = new RegExp(`</${tag}>`, 'g')
+  let depth = 0
+  let i = openAt
+  while (i < html.length) {
+    open.lastIndex = i
+    close.lastIndex = i
+    const nextOpen = open.exec(html)
+    const nextClose = close.exec(html)
+    if (!nextClose) return undefined // unbalanced — not a document we can read
+    if (nextOpen && nextOpen.index < nextClose.index) {
+      depth += 1
+      i = nextOpen.index + 1
+    } else {
+      depth -= 1
+      if (depth === 0) return html.slice(openAt, nextClose.index + nextClose[0].length)
+      i = nextClose.index + 1
+    }
+  }
+  return undefined
+}
+
+/** A node looked up by its authored id among a LIVE node set — needed after a
+ *  graph-REPLACE restore (`replay()` → `_restoreBase`), which replaces the
+ *  pre-base node objects, so the fixture's translate-time lookups are stale and
+ *  the minted ids are new. Public surface only (the node's own `css`/`props`). */
+function byAuthoredId(nodes: Node[], cssId: string): Node | undefined {
+  return nodes.find((n) => n.css?.id === cssId || n.props?.id === cssId)
+}
+
+/** A freshly translated placement CONSUMER (`targetPlacement` only — it never
+ *  produces a zone): the node a `placement-attach` adds to a container. */
+function consumerNode(cssId: string): Node {
+  return translateLegacy({
+    template: { root: { type: 'span', props: { id: cssId } } },
+    content: [],
+    clientConfig: { runInstantiation: true, runRendering: true },
+  }).root
+}
+
+/** Two macrotask turns — enough for the supervisor's DEFERRED condense
+ *  (`supervisor.ts` `scheduleCondense`, a `setTimeout(0)`) to run. Idiom
+ *  reused from `tests/unit/journal-condensing.test.ts` (`flushCondense`). */
+async function flushCondense(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 // ============================================================================
@@ -397,5 +520,359 @@ describe('POST-BOOTSTRAP-EMIT-DROP — a post-bootstrap structural change must n
       post.html,
       `the markdown document was ZEROED by one sanctioned structural change (bootstrap: ${JSON.stringify(boot.html)}; after: ${JSON.stringify(post.html)})`,
     ).toContain('card body')
+  })
+
+  // ==========================================================================
+  // PBED-5 — the APPEND half (gate §8 P-1) — THE STANCE SELECTOR
+  // ==========================================================================
+
+  it('PBED-5 the change is an APPEND into the host: exactly one append (#filler → the new node) and the new element sits INSIDE #filler', async () => {
+    const { sup, tree, root, filler } = fixture()
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    // ---- R1: bootstrap — the host's wire and the document's entry ----------
+    const boot = renderPass(sup, adapter, series)
+    const bootById = byNodeId(boot.els)
+    const hostWire = bootById.get(filler.id)?.wire
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+    expect(hostWire, 'FIXTURE: #filler must emit at bootstrap').toBeDefined()
+    expect(bootById.get(root.id)?.wire, 'FIXTURE: the bootstrap root emits on the conventional path wire "root"').toBe('root')
+
+    // ---- the sanctioned change, then the engine's own settled flush --------
+    const { extra, detach, attach } = attachOntoFiller(sup, filler)
+    expect(detach.status, 'FIXTURE: detach(extra) is a sanctioned applied op').toBe('applied')
+    expect(attach.status, 'FIXTURE: attach(extra → #filler) is a sanctioned applied op').toBe('applied')
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+
+    const post = renderPass(sup, adapter, series)
+    const extraEl = byNodeId(post.els).get(extra.id)
+    expect(extraEl, 'the added node stopped emitting after the change').toBeDefined()
+
+    // (a) THE APPEND. One op adds one child: the diff must APPEND it into the
+    // host's wire. A fix that REFUSES the family compile keeps the host's
+    // mint-time `childOrder` (`node.ts` mintPathState; placement-path-spec §4.2
+    // "childOrder is path-derived and attached AT MINT TIME"), so the new child
+    // is never appended at all and this list is empty.
+    expect(
+      appendPairs(post.ops),
+      `the change must append exactly the new child into #filler (host wire "${String(hostWire)}"): the host did not re-derive its childOrder, so the new node is created and never appended (ORPHAN-EMIT-TOP-LEVEL-LEAK)`,
+    ).toEqual([{ owner: hostWire, child: extraEl!.wire }])
+
+    // (b) …and the DOCUMENT shows it there — inside #filler, inside the root.
+    const hostHtml = outerHtmlOfAuthoredId(post.html, 'filler')
+    expect(hostHtml, '#filler is absent from the document — the page is not the authored one').toBeDefined()
+    expect(
+      hostHtml ?? '',
+      `the added node (${extra.id}) is NOT inside #filler: it was created but never appended into its host`,
+    ).toContain(`data-node-id="${extra.id}"`)
+    const rootHtml = outerHtmlOfAuthoredId(post.html, 'root')
+    expect(rootHtml, 'the document root is absent — the page is not assembled through it').toBeDefined()
+    expect(
+      rootHtml ?? '',
+      `the added node leaked OUTSIDE the document root — it renders as a sibling of the root, not as #filler's child`,
+    ).toContain(`data-node-id="${extra.id}"`)
+  })
+
+  // ==========================================================================
+  // PBED-6 — the refresh channel, the CONTROL against overshoot (gate §8 P-2)
+  // ==========================================================================
+
+  it('PBED-6 CONTROL — a post-bootstrap state-slice write on the NON-placement root still REACHES emit (deliberately green today)', async () => {
+    const { sup, tree, root } = fixture()
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    const boot = renderPass(sup, adapter, series)
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+
+    const res = sup.apply({
+      kind: 'state-slice',
+      node: root,
+      mutation: [{ targetProp: 'props.title', mode: 'replace', value: 'after-write' }],
+    })
+    expect(res.status, 'FIXTURE: the state-slice props write is a sanctioned applied op').toBe('applied')
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+
+    const post = renderPass(sup, adapter, series)
+    const postRoot = byNodeId(post.els).get(root.id)
+    expect(postRoot, 'the root stopped emitting after a props write').toBeDefined()
+
+    // THE CONTROL — DELIBERATELY GREEN TODAY. The root is a NON-placement node,
+    // so the pass-2 family compile is its ONLY refresh channel (`supervisor.ts`
+    // `runPass2AndFlush`: `placementRouted ? compilePath : compile(focusedSlice)`;
+    // the root carries no `content` anchor and the supervisor will never choose
+    // `compilePath` for it). A fix that REFUSES the family compile ("a family
+    // compile must not re-key a node holding a path state" read as a BAN) turns
+    // this write into a SILENT no-op with no diagnostic — the emitted element
+    // keeps its bootstrap value and the page silently freezes. That is the
+    // overshoot this case exists to catch.
+    //
+    // NOT asserted here: the html-level visibility of the same write. That is the
+    // rootKey/wire-domain defect itself (PBED-1…PBED-3), and repeating it here
+    // would make the control red on the OTHER defect — this case isolates the
+    // refresh channel, which is what a fix must not freeze.
+    expect(
+      postRoot!.props['prop:title'],
+      "a post-bootstrap props write on the non-placement root never reached emit — the tree's ONLY refresh channel is frozen (the (A)-refusal signature)",
+    ).toBe('after-write')
+  })
+
+  // ==========================================================================
+  // PBED-7 — the strong domain rule (gate §8 P-3), applied to NEW nodes
+  // ==========================================================================
+
+  it('PBED-7 every wire after the change is a bootstrap wire or a PATH-domain wire — applied to the NEW node too (no nodeId wire in a path document)', async () => {
+    const { sup, tree, root, filler } = fixture()
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    const boot = renderPass(sup, adapter, series)
+    const bootWires = new Set(boot.els.map((el) => String(el.wire)))
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+    expect(bootWires.size, 'FIXTURE: the bootstrap document must have wires').toBe(boot.els.length)
+
+    const { extra, detach, attach } = attachOntoFiller(sup, filler)
+    expect(detach.status, 'FIXTURE: detach(extra) is a sanctioned applied op').toBe('applied')
+    expect(attach.status, 'FIXTURE: attach(extra → #filler) is a sanctioned applied op').toBe('applied')
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+
+    const post = renderPass(sup, adapter, series)
+    const postById = byNodeId(post.els)
+
+    // (a) THE RULE, strong form: every wire the second render emits lies in the
+    // bootstrap wire set, OR is a NEW wire in the PATH domain. The rule's other
+    // admissible branch — "the new-domain wire is accompanied by a DIAGNOSTIC" —
+    // has no channel in this host (the fixture constructs no `EventBridge` for
+    // the supervisor), so a stranger wire is admissible only in the path domain.
+    // PBED-3 CANNOT SEE THIS: it iterates only the nodes present in BOTH renders
+    // and its wire list names only the three authored elements.
+    const strangers = post.els
+      .filter((el) => !bootWires.has(String(el.wire)))
+      .map((el) => ({
+        nodeId: String(el.props['data:node-id']),
+        wire: String(el.wire),
+        pathDomain: isPathDomain(el),
+      }))
+    expect(
+      strangers.filter((s) => !s.pathDomain),
+      'wire(s) emitted on a NODE-ID wire that the bootstrap path document never emitted — the document is silently mixed-domain',
+    ).toEqual([])
+
+    // (b) the rule APPLIED TO NEW NODES: the added node is not in the bootstrap
+    // wire set (it cannot be), so it must carry a PATH wire.
+    const extraEl = postById.get(extra.id)
+    expect(extraEl, 'the added node stopped emitting after the change').toBeDefined()
+    expect(bootWires.has(String(extraEl!.wire)), 'FIXTURE: the added node is a NEW wire (not a bootstrap wire)').toBe(false)
+    expect(
+      isPathDomain(extraEl!),
+      `the NEW node emits on a NODE-ID wire ("${String(extraEl!.wire)}") in a PATH document, with no diagnostic accompanying it`,
+    ).toBe(true)
+  })
+
+  // ==========================================================================
+  // PBED-8 — Z1: the condensed base (gate §8 P-4)
+  // ==========================================================================
+
+  it('PBED-8 Z1 — bootstrap → op → condense past maxJournalLength → undo() to base → the root still emits on "root" and the document is not empty', async () => {
+    // `sharedHub`: the condensed-base restore re-seeds the graph THROUGH the
+    // supervisor's hub (the documented host shape — the condense/restore tests
+    // construct their supervisor the same way); without it `_restoreBase`
+    // evicts the graph and returns before re-seeding, which would make the
+    // restore leg fail on the FIXTURE instead of on the defect.
+    const { sup, tree, root, filler } = fixture({ maxJournalLength: 1, sharedHub: true })
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    const boot = renderPass(sup, adapter, series)
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+    expect(byNodeId(boot.els).get(root.id)?.wire, 'FIXTURE: the bootstrap root emits on "root"').toBe('root')
+
+    // ---- the ONE post-bootstrap structural op (PBED-1's sanctioned change) ---
+    const { detach, attach } = attachOntoFiller(sup, filler)
+    expect(detach.status, 'FIXTURE: detach(extra) is a sanctioned applied op').toBe('applied')
+    expect(attach.status, 'FIXTURE: attach(extra → #filler) is a sanctioned applied op').toBe('applied')
+
+    // ---- drive the journal past `maxJournalLength` (the host's own writes) ---
+    // The condense is DEFERRED (a `setTimeout(0)`) and SIZE-GUARDED: a base
+    // >= the pre-base journal it would replace is skipped with
+    // `condense-skipped-size` (`supervisor.ts` `condense`). Two structural
+    // entries alone (~140B) never outweigh this tree's base (~940B), so the
+    // pre-base window is filled with ordinary post-bootstrap refresh writes
+    // until the rewrite is a memory win — then the base marker exists.
+    for (let i = 0; i < 20; i += 1) {
+      sup.apply({ kind: 'state-slice', node: filler, mutation: [{ targetProp: 'props.tick', mode: 'replace', value: String(i) }] })
+    }
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+    await flushCondense()
+
+    // ---- FIXTURE: the condense really happened (it rewrote the journal) -----
+    const view = sup.journalEntries()
+    expect(
+      view.basePresent,
+      "FIXTURE: the journal must carry the condensed base marker (if it does not, the D5 size guard skipped the rewrite with 'condense-skipped-size' and this case would test nothing)",
+    ).toBe(true)
+    expect(view.undoBaseBoundary, 'FIXTURE: the condense truncated the undoStack at the base').toBe(true)
+
+    // ---- undo() to base: the recorded base-boundary fail, never a restore ----
+    const undo = sup.undo()
+    expect(
+      undo.status,
+      'FIXTURE: undo to the condensed base is the recorded base-boundary fail (the base marker is never undo-able)',
+    ).toBe('base-boundary')
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+
+    const postUndo = renderPass(sup, adapter, series)
+    const rootAfterUndo = byNodeId(postUndo.els).get(root.id)
+    expect(rootAfterUndo, 'the root stopped emitting after a condense + undo-to-base').toBeDefined()
+    expect(
+      rootAfterUndo!.wire,
+      "Z1: the root's wire left the captured path domain across a condense + undo-to-base (the adapter's rootKey then matches no fragment)",
+    ).toBe('root')
+    expect(postUndo.html, 'Z1: the document is EMPTY after a condense + undo-to-base').not.toBe('')
+
+    // ---- Z1's `_restoreBase` leg --------------------------------------------
+    // The condensed base restored through the public `replay()` surface: a
+    // graph-REPLACE that rebuilds every `Node` object and schedules a FULL
+    // pass-2 refresh — the leg a per-`Node` carrier cannot survive, and the one
+    // that decides whether the mode is carried by the SUPERVISOR.
+    const beforeRestore = sup.getNode(root.id)
+    const replay = sup.replay()
+    expect(replay.status, 'FIXTURE: replay() restores the condensed base').toBe('applied')
+    await sup.flush()
+    expect(
+      sup.getNode(root.id),
+      'FIXTURE: the restore REPLACES the pre-base node objects (a per-Node marker cannot survive it)',
+    ).not.toBe(beforeRestore)
+    // the host's live map is invalidated with those objects (the probe's host
+    // recipe — docs/probes/post-bootstrap-emit-drop.mjs — prunes ids the graph
+    // no longer holds)
+    const live = new Set(sup.allNodes().map((n): string => n.id))
+    for (const id of [...series.prevStates.keys()]) if (!live.has(id)) series.prevStates.delete(id)
+    mergePass2(sup, series.prevStates)
+
+    const postRestore = renderPass(sup, adapter, series)
+    const restoredRoot = byAuthoredId(sup.allNodes(), 'root')
+    expect(restoredRoot, 'FIXTURE: the restored graph must still hold the authored root').toBeDefined()
+    const rootAfterRestore = byNodeId(postRestore.els).get(restoredRoot!.id)
+    expect(rootAfterRestore, 'the root stopped emitting after the condensed base was restored (_restoreBase)').toBeDefined()
+    expect(
+      rootAfterRestore!.wire,
+      "Z1: the root's wire left the captured path domain across a _restoreBase (the condensed base re-compiles the whole tree)",
+    ).toBe('root')
+    expect(postRestore.html, 'Z1: the document is EMPTY after the condensed base was restored').not.toBe('')
+  })
+
+  // ==========================================================================
+  // PBED-9 — Z2: the drain-only host (gate §8 P-5)
+  // ==========================================================================
+
+  it('PBED-9 Z2 — a host whose live map is REPLACED by each takePass2States() drain still emits the root', async () => {
+    const { sup, tree, root, filler } = fixture()
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    const boot = renderPass(sup, adapter, series)
+    const bootRootWire = byNodeId(boot.els).get(root.id)?.wire
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+    expect(bootRootWire, 'FIXTURE: the bootstrap root emits on "root"').toBe('root')
+
+    const { detach, attach } = attachOntoFiller(sup, filler)
+    expect(detach.status, 'FIXTURE: detach(extra) is a sanctioned applied op').toBe('applied')
+    expect(attach.status, 'FIXTURE: attach(extra → #filler) is a sanctioned applied op').toBe('applied')
+    await sup.flush()
+
+    // THE Z2 HOST: the settled drain is the ONLY carrier — the live map is
+    // REPLACED by it, never merged into (`takePass2States` is the caller's
+    // drain, `resolvedStates` stays non-draining; ops.md §5/§6, and
+    // tests/integration/resolved-exposure.test.ts for the non-draining half).
+    const drained = sup.takePass2States()
+    expect(drained.size, "FIXTURE: the settled pass-2 must carry states — it is this host's only carrier").toBeGreaterThan(0)
+    expect(
+      [...drained.keys()],
+      "Z2: this host's ONLY carrier of render state does not hold the ROOT's state — a drain-only host silently loses the root and the whole document",
+    ).toContain(root.id)
+    series.prevStates = new Map(drained)
+
+    const post = renderPass(sup, adapter, series)
+    const postRoot = byNodeId(post.els).get(root.id)
+    expect(postRoot, 'Z2: the root stopped emitting on a drain-only host').toBeDefined()
+    expect(
+      postRoot!.wire,
+      "Z2: the root's wire left the captured path domain on a drain-only host",
+    ).toBe(bootRootWire)
+    expect(post.html, 'Z2: the document is EMPTY on a drain-only host').not.toBe('')
+  })
+
+  // ==========================================================================
+  // PBED-10 — the ORPHAN-EMIT-TOP-LEVEL-LEAK scenario (gate §8 P-6)
+  // ==========================================================================
+
+  it('PBED-10 a placement-attach into a FAMILY-routed container still APPENDS the added node (no detached top-level sibling)', async () => {
+    const { sup, tree, root, filler } = fixture()
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    const boot = renderPass(sup, adapter, series)
+    const bootById = byNodeId(boot.els)
+    const bootRootWire = bootById.get(root.id)?.wire
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+    expect(bootRootWire, 'FIXTURE: the bootstrap root emits on "root"').toBe('root')
+    expect(bootById.get(filler.id), 'FIXTURE: the family-routed container #filler must emit at bootstrap').toBeDefined()
+
+    // `placement-path-spec` §3.3, scope pin (stress-test round 4, scenario
+    // 40(c)): a placement-attach into a container that is NOT placement-routed
+    // (container anchors only — no `content` anchor). #filler is a plain family
+    // child; #holder is the zone producer.
+    const graft = consumerNode('graft')
+    sup.registerNode(graft)
+    const res = sup.apply({ kind: 'placement-attach', node: graft, container: filler, names: ['zone'] })
+    expect(res.status, 'FIXTURE: the placement-attach is a sanctioned applied op').toBe('applied')
+    const dirtied = res.status === 'applied' ? [...(res.dirtied ?? [])] : []
+    expect(
+      dirtied.sort(),
+      'FIXTURE: the E2E-4 affected set — the container + the added node only',
+    ).toEqual([filler.id, graft.id].sort())
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+
+    const post = renderPass(sup, adapter, series)
+    const graftEl = byNodeId(post.els).get(graft.id)
+    expect(graftEl, 'the added node stopped emitting').toBeDefined()
+
+    // (a) THE PIN — the added node GAINS ITS APPEND. §3.3 pins the opposite
+    // reading as today's behavior: "the added node's element is created on its
+    // pathKey wire with NO append op — the widget does not render". The
+    // consumer's re-test observed the real consequence: it surfaces as a
+    // DETACHED TOP-LEVEL SIBLING after the root (`ORPHAN-EMIT-TOP-LEVEL-LEAK`).
+    // Under a tree compile mode the container RE-MINTS, so its path-state's
+    // childOrder names the added node and the append exists (gate §5
+    // disposition 8 — the row closes on this evidence, never by citation).
+    const appends = appendPairs(post.ops)
+    expect(
+      appends.filter((p) => p.child === graftEl!.wire),
+      'the added node was created with NO append — it surfaces as a detached top-level sibling (ORPHAN-EMIT-TOP-LEVEL-LEAK), not as a child of its container',
+    ).toHaveLength(1)
+
+    // (b) NO TOP-LEVEL LEAK: the added node must not occupy the document root's
+    // own wire, and it must appear AFTER the root in the document. An
+    // unappended fragment is serialized top-level by the adapter
+    // (`adapters.ts` `toString` — "fragments that were created but never
+    // appended ... serialize top-level after it"), and the capture order can
+    // give it the rootKey slot.
+    expect(graftEl!.wire, "the added node emits on the document ROOT's own wire").not.toBe(bootRootWire)
+    const graftAt = post.html.indexOf(`data-node-id="${graft.id}"`)
+    const rootAt = post.html.indexOf(`data-node-id="${root.id}"`)
+    expect(graftAt, 'the added node is not in the document at all').toBeGreaterThan(-1)
+    expect(rootAt, 'the document root is not in the document at all').toBeGreaterThan(-1)
+    expect(
+      graftAt,
+      'the added node surfaces BEFORE the document root — a detached top-level sibling (ORPHAN-EMIT-TOP-LEVEL-LEAK)',
+    ).toBeGreaterThan(rootAt)
   })
 })

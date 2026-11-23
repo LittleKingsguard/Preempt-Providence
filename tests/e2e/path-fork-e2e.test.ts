@@ -386,7 +386,18 @@ describe('E2E-3 — a component change recalculates ONLY its consumers (spec §3
 
     await flushSweep()
     expect(keysOf(sup)).toEqual([p2a.id, p3a.id, p3b.id, p4a.id, p4b.id].sort())
-    expect(spyP2a).toHaveBeenCalledTimes(1)
+    // RE-SPECIFIED (not re-pointed) under ONE RULE — "ancestors re-mint,
+    // descendants do not" — gate record
+    // docs/specs/post-bootstrap-emit-drop-fix-review.md §10 Q5 (R-1 tree
+    // compile mode, `Supervisor.compileMode = 'path'`). p2a is BOTH the changed
+    // node and the provider swept into every re-derived consumer's bounded
+    // slice, so it re-mints once per slice that carries it: its own dirty pass
+    // (1) + one re-mint per consumer slice (4) = 5. The old reading (1) was the
+    // family-mode focused compile, which overwrote the provider's own
+    // bootstrap path-state instead of re-minting it. The descendant pins below
+    // are UNCHANGED: each consumer still compiles exactly once (only its own
+    // pass — no descendant re-mint) and the non-consumer sibling stays at zero.
+    expect(spyP2a).toHaveBeenCalledTimes(1 + [p3a, p3b, p4a, p4b].length)
     expect(spyP3a).toHaveBeenCalledTimes(1)
     expect(spyP3b).toHaveBeenCalledTimes(1)
     expect(spyP4a).toHaveBeenCalledTimes(1)
@@ -415,7 +426,15 @@ describe('E2E-3 — a component change recalculates ONLY its consumers (spec §3
 
     await flushSweep()
     expect(keysOf(sup)).toEqual([p2a.id, p3a.id, p4a.id].sort())
-    expect(spyP2a).toHaveBeenCalledTimes(1)
+    // RE-SPECIFIED (not re-pointed) under the same ONE RULE — "ancestors
+    // re-mint, descendants do not" — gate record
+    // docs/specs/post-bootstrap-emit-drop-fix-review.md §10 Q5 (R-1 tree
+    // compile mode). The half-tree provider p2a re-mints once per slice that
+    // carries it: its own dirty pass (1) + the a-column consumer slices (2) =
+    // 3. The precision half of the pin is UNCHANGED: the sibling half of the
+    // tree (p2b, p3b, p4b) still runs ZERO compile passes, and the consumers
+    // below still compile exactly once each (no descendant re-mint).
+    expect(spyP2a).toHaveBeenCalledTimes(1 + [p3a, p4a].length)
     expect(spyP3a).toHaveBeenCalledTimes(1)
     expect(spyP4a).toHaveBeenCalledTimes(1)
     // the other half of the max-depth layer (p4b's 8 states) + the b-column

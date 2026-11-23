@@ -387,14 +387,25 @@ describe('E2E-3 — component SOURCE change invalidates ONLY the per-name compon
     expect(res.status).toBe('applied')
     await flush()
 
-    // the a-column consumers compile (2); the b-column + root never hit compilePath
-    // (root is focused-compiled — mode switch §2.1; the b-column is not in the set)
+    // the a-column consumers compile (2) and — RE-SPECIFIED under the ONE RULE
+    // "ancestors re-mint, descendants do not" (gate record
+    // docs/specs/post-bootstrap-emit-drop-fix-review.md §10 Q5, R-1 tree
+    // compile mode) — the ROOT PROVIDER re-mints too: it is a member of both
+    // consumer slices, so under path mode it is re-derived in the path domain
+    // instead of being focused-compiled. Its pathKey re-mints
+    // deterministically ('root'), so the pass-2 key count below stays 13. The
+    // b-column is not in the affected set and runs ZERO passes (descendants do
+    // not re-mint).
     const compiled = new Set(spy.mock.instances.map((i) => (i as { id?: string }).id))
-    expect(compiled).toEqual(new Set([idFor(t, 3, 'a'), idFor(t, 4, 'a')]))
+    // the ancestor set that re-mints is stated explicitly, not implied by a
+    // bigger literal: the root provider — nothing else above the consumers.
+    const reMintedAncestors = new Set([t.root.id])
+    expect(compiled).toEqual(new Set([...reMintedAncestors, idFor(t, 3, 'a'), idFor(t, 4, 'a')]))
     spy.mockRestore()
 
-    // pass-2 keys: p3a (4) + p4a (8) + the root's own focused state (13 total);
-    // p4b's 8 max-depth states are untouched
+    // pass-2 keys: p3a (4) + p4a (8) + the root's own re-minted `root` state
+    // (13 total — path mode re-mints the SAME 'root' pathKey, Q5 rule; the pin
+    // itself is unchanged); p4b's 8 max-depth states are untouched
     const pass2 = pass2Keys(supervisor)
     expect(pass2).toHaveLength(13)
     const p4bKeys = expectedLevelKeys(t, 4, 'b')
