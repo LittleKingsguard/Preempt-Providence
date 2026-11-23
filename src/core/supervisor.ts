@@ -1037,6 +1037,40 @@ export class Supervisor {
       this.nodes.delete(n.id)
     }
     this.destroyedRefs.clear()
+    // step 1b — DESTROY-SHARED-LINK-RESIDUE (`docs/defects.md`; gate
+    // `docs/specs/serializer-census-gate-review.md` §1(a)/§3 item 1). The loop
+    // above walks `this.nodes` only, so it can never reach the def-prototype
+    // generation: plain prototypes are REGISTRY-ONLY (they stay out of
+    // `this.nodes` — serialize.md §3 step 5), and doc ids are re-seeded
+    // verbatim, so after the re-seed an id names BOTH generations. The only
+    // generation-distinct handle is OBJECT IDENTITY in the live registry —
+    // hence the enumerators, hub-filtered exactly like the condense census
+    // (`:957-960`, ADV-S12: another graph's prototypes must not be touched).
+    // `destroy()` → `destroyLinks` removes only `child`/`content`/`container`
+    // (node.ts:956-973) — the `source`/`duplex`/`target` anchors (name-keyed
+    // roles, node.ts:59) are NEVER removed, and those are exactly the anchors
+    // the def registry recovers a name from (`defNameForLink`) and that every
+    // provider read walks (`providerValueFromLink`, resolve.ts:36-47). Left in
+    // place, the re-seeded generation joins a Link whose FIRST provider anchor
+    // still belongs to the EVICTED generation, and a provider read returns a
+    // DEAD provider's value (the order-dependence class of R-VPD-1). Detach
+    // per instance with `removeAnchor` — never `link.destroy()` (the Link is
+    // shared with the restored generation) — then evict. Runs BEFORE
+    // `reRegisterDefPrototypes` (step 2), which overwrites the same registry
+    // entries with the restored instances.
+    const protoScope = this.graphScope ?? undefined
+    const stalePrototypes = new Set<Node>()
+    for (const [, protos] of defPrototypeEntries(protoScope)) for (const p of protos) if (p.hubFor === hub) stalePrototypes.add(p)
+    for (const [, r] of defRootPrototypeEntries(protoScope)) if (r.hubFor === hub) stalePrototypes.add(r)
+    for (const p of stalePrototypes) {
+      for (const a of [...p.anchors]) {
+        if (a.role === 'source' || a.role === 'duplex' || a.role === 'target') p.removeAnchor(a)
+      }
+      evictDestroyedNode(p)
+      // INSTANCE-guarded (never id-keyed): a doc re-seeded verbatim makes the
+      // id ambiguous across generations; only THIS object may be dropped.
+      if (this.nodes.get(p.id) === p) this.nodes.delete(p.id)
+    }
     // step 2 — the §3 recipe (D1: the round-trip, executed in-process).
     // The template (root) seeds FIRST, then the content states (the §3
     // ordering — a def-root must precede its def-children).
@@ -1047,7 +1081,18 @@ export class Supervisor {
     for (const d of loadState(doc as never)) seeds.push(new Node(d as never, hub, undefined, false, scope))
     reconcileParentTargets(seeds)
     reRegisterDefPrototypes(doc as never, hub, seeds as never[], scope)
-    for (const n of seeds) this.registerNode(n)
+    // RESTORE-REGISTERS-PROTOTYPES (`docs/defects.md`; gate
+    // `serializer-census-gate-review.md` §1(c)/§3 item 3, disposition (i)):
+    // step 5 of the §3 recipe registers the seeds in `this.nodes`, and the pin
+    // "plain prototypes stay out of `this.nodes`" (serialize.md §3 step 5) is a
+    // graph-shape invariant the translate path already honors. A plain
+    // prototype seed is skipped HERE (this.nodes membership only — the module
+    // registry already holds it from the constructor, and
+    // `reRegisterDefPrototypes` above re-registered it, which is all the
+    // seam/rows-mint machinery needs). A prototype is the seed the census
+    // re-registered: after step 4 every census node derives 'prototype' (the
+    // tripwire), so the derived state is the discriminator.
+    for (const n of seeds) if (n.state !== 'prototype') this.registerNode(n)
     // RESTORE-INTEGRITY (a) — re-establish `contentNodes` scope membership.
     // `registerContentNode` is called by TRANSLATE/PAYLOAD only, so a restored
     // content root used to come back WITHOUT it: `state` still reads 'in-tree'
@@ -1058,10 +1103,21 @@ export class Supervisor {
     // FAMILY parent anchor targets the 'contentNodes' token — the same test
     // `node.state` uses (`stateFrom`); scoped through `scopeOf(node)` by
     // `registerContentNode` itself, so the seed's own graph scope is honored.
+    // RESTORE-PLACED-CONTENT-MEMBERSHIP (`docs/defects.md`; gate §1(b)/§3 item
+    // 2) — the token test above cannot see a PLACED content root:
+    // `addAnchor` DESTROYS the 'contentNodes' placeholder edge the moment a
+    // real family parent supersedes it (node.ts:1022-1023) and the document
+    // records only the real parent, so a restored placed root came back
+    // byte-indistinguishable from an authored tree node and lost its sweep
+    // exemption. The snapshot now carries the ADVISORY `isContentRoot: true`
+    // for a node that was content-owned at serialize time; it is honoured
+    // ALONGSIDE the token test (an unplaced/token-parented root still has no
+    // such flag and must keep working), and absent ⇒ today's behaviour.
     for (const n of seeds) {
       const child = n.childAnchor()
       const parentAnchor = child ? child.link.anchorsOf('parent')[0] : undefined
       if (parentAnchor !== undefined && parentAnchor.target === 'contentNodes') registerContentNode(n)
+      else if (n.base.isContentRoot === true) registerContentNode(n)
     }
     // step 3 — re-mint rows per the batches records (step 4.5 of the §3
     // recipe; fresh ids — the serialize.md §4 residual). Runs with the

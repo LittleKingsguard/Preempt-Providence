@@ -38,6 +38,26 @@ def-bearing doc ships the FULL `TranslatedTree.nodes` list (prototypes
 included) — the census's builder contract: a census `nodeId` absent from the
 doc is a crafted doc (rejected at the schema boundary).**
 
+**`isContentRoot?: true` (RESTORE-PLACED-CONTENT-MEMBERSHIP, `defects.md`;
+gate `serializer-census-gate-review.md` §1(b)/§3 item 2) — the ONE placement
+fact the document must carry.** Every node state MAY carry the per-node
+BOOLEAN `isContentRoot`, emitted **only when true**, i.e. only when the node
+was a content root at serialize time (`isContentNode(node)` — payload-owned,
+translate/payload-registered). It is needed because a **placed** content root
+is otherwise byte-indistinguishable from an authored tree node: its
+`'contentNodes'` token family edge is DESTROYED when a real family parent
+supersedes it (`node.ts:1022-1023`) and `state` never round-trips, so payload
+ownership is not derivable from the rest of the document. Like the def census
+it is **slice-scoped** — only nodes in the slice ship it (`serializeNode` is
+the slice path) — and it is **advisory and optional on restore**: a doc
+without the field restores exactly as before (token-parented content roots
+only; an older snapshot is silently-but-recordedly narrower), and the field
+names nothing outside the node it rides (never an id list: ids collide with
+the fresh row ids of §4 and with slice membership). It carries no
+destruction, no sweep exemption and no registration — the document never
+instructs; the supervisor's restore hook (`_restoreBase`, ALONGSIDE its
+token-parented `'contentNodes'` detector) is what acts on it.
+
 ## 2. Loading (`loadState`)
 
 `loadState(doc): NodeBaseData[]` parses + validates the envelope
@@ -48,8 +68,12 @@ section rides the same schema boundary: a non-array section → `envelope-
 mismatch`; a malformed entry (name/nodeId non-string, isRoot non-boolean), a
 duplicate entry nodeId, or a nodeId absent from the doc → `NodeSchema-shape-
 mismatch` (duplicate NAMES are legal — a def-root and its def-children share
-the registration name). `loadState` stays PURE parse+validate: it never
-re-mints, never registers, never touches rows.
+the registration name). **The advisory `isContentRoot` (§1) rides the same
+boundary and no more than it: a NON-boolean value (on a content entry or on
+the template) → `NodeSchema-shape-mismatch`; `true` is copied through onto the
+seed's `NodeBaseData.isContentRoot` and `false`/absent is dropped — no
+containment check, no id list, no registration.** `loadState` stays PURE
+parse+validate: it never re-mints, never registers, never touches rows.
 
 ## 3. REQ-GAP-9 — the corrected reseed recipe (pinned 2026-08-22; Feature 1a steps 2026-08-24)
 

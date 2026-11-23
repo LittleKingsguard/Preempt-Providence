@@ -334,7 +334,15 @@ export interface NodeLayer {
    *  defaults to no (the current reverse-exclusion). */
   preserveByReversal?: boolean
 }
-export interface NodeBaseData { id?: string; type?: string; content?: unknown; bodyRuns?: BodyRun[]; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind>; batches?: Record<string, BatchRecord> }
+/** RESTORE-PLACED-CONTENT-MEMBERSHIP (`docs/specs/serializer-census-gate-
+ *  review.md` §3 item 2) — `NodeBaseData.isContentRoot` is the ADVISORY flag
+ *  the snapshot emits for a payload-owned node (`RenderNodeState.
+ *  isContentRoot`); the seed carries it verbatim so `_restoreBase` can
+ *  re-register `contentNodes` membership for a PLACED root (whose
+ *  `contentNodes` token edge is destroyed by its real family parent). Never
+ *  read by the engine outside the restore, and never a registration itself —
+ *  `loadState` stays pure parse+validate. */
+export interface NodeBaseData { id?: string; type?: string; content?: unknown; bodyRuns?: BodyRun[]; props?: Record<string,unknown>; css?: Record<string,unknown>; handlers?: unknown[]; derived?: DerivedDecl; hooks?: string[]; hooksKind?: Record<string, HookKind>; batches?: Record<string, BatchRecord>; isContentRoot?: true }
 /** HOOKS-ARRAY (§9.4 item 1 — CONTRACT AMENDMENT C) — the closed kind union
  *  a `hooksKind` declaration may name: `'value'` (the shipped §7 scalar
  *  value-provider slot), `'component'` (the hook mints nodes with

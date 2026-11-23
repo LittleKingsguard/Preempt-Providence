@@ -6,7 +6,7 @@ import type { Node } from './node.js'
 import type { AnchorTarget, DerivedDecl, LinkConfigNameHub, NodeBaseData, NodeRef, Role } from './types.js'
 import type { BodyRun } from './body-runs.js'
 import { validateDerived } from './derived.js'
-import { defPrototypeEntries, defRootPrototypeEntries, defNameForLink, registerDefPrototypes, registerDefRootPrototype, scopeOf, DEFAULT_SCOPE } from './registry.js'
+import { defPrototypeEntries, defRootPrototypeEntries, defNameForLink, isContentNode, registerDefPrototypes, registerDefRootPrototype, scopeOf, DEFAULT_SCOPE } from './registry.js'
 import type { GraphScope } from './registry.js'
 
 export type SerializedAnchor = {
@@ -41,6 +41,18 @@ export interface RenderNodeState {
    *  alongside the names; loadState re-validates the closed union at the
    *  schema boundary (SER-R1). */
   hooksKind?: Record<string, string>
+  /** RESTORE-PLACED-CONTENT-MEMBERSHIP (serializer-census-gate-review §3
+   *  item 2) — ADVISORY, OPTIONAL: `true` ONLY when this node was a content
+   *  root at serialize time (`isContentNode(node)`), i.e. payload-owned.
+   *  A *placed* content root is byte-indistinguishable from an authored tree
+   *  node (its `contentNodes` token family edge is destroyed by the real
+   *  parent — node.ts:1022-1023, and `state` never round-trips), so the
+   *  document must carry the fact. Emitted only when true, sliced like the
+   *  def census (only nodes in the slice ship — `serializeNode` IS the slice
+   *  path); a restore re-registers membership for a seed carrying it
+   *  ALONGSIDE the token-parented detector. Absent ⇒ today's behaviour
+   *  (an older snapshot restores token-parented content only). */
+  isContentRoot?: true
   /** HOOKS-ARRAY (OPTION C — §9.2 pin 5) — the batch PAYLOAD records keyed
    *  by hook name. Rows are DATA (ship once); the minted nodes are DERIVED.
    *  NOTE (2026-08-24 adversarial pass, S4a): there is NO origin-layer
@@ -157,6 +169,12 @@ export function serializeNode(node: Node): RenderNodeState {
   if (node.derived !== undefined) state.derived = node.derived
   if (node.base.hooks !== undefined && node.base.hooks.length > 0) state.hooks = [...node.base.hooks]
   if (node.base.hooksKind !== undefined && Object.keys(node.base.hooksKind).length > 0) state.hooksKind = { ...node.base.hooksKind }
+  // RESTORE-PLACED-CONTENT-MEMBERSHIP — the ONE placement fact content cannot
+  // carry: a *placed* content root's `contentNodes` token edge is destroyed by
+  // its real family parent (node.ts:1022-1023) and `state` never round-trips,
+  // so payload ownership is un-derivable at restore. Advisory + optional: emit
+  // ONLY when true (absent = an older snapshot = today's behaviour).
+  if (isContentNode(node)) state.isContentRoot = true
   if (node.batches && Object.keys(node.batches).length > 0) {
     // ADVERSARIAL-S16 — the batch RECORD (the rows payload) rides the
     // JSON-safety boundary: a function/circular row is a serialization-error,
@@ -249,6 +267,10 @@ interface SeededNode {
   derived?: DerivedDecl
   hooks?: string[]
   hooksKind?: Record<string, string>
+  /** RESTORE-PLACED-CONTENT-MEMBERSHIP — the advisory content-root flag
+   *  (rides `NodeBaseData.isContentRoot`; never a registration side effect —
+   *  `loadState` stays pure parse+validate). */
+  isContentRoot?: true
   batches?: Record<string, unknown>
 }
 
@@ -324,6 +346,14 @@ function parseNodeState(v: unknown): SeededNode {
       }
     }
     seed.hooksKind = o.hooksKind as Record<string, string>
+  }
+  if (o.isContentRoot !== undefined) {
+    // RESTORE-PLACED-CONTENT-MEMBERSHIP — ADVISORY and OPTIONAL: the value
+    // rides the schema boundary as a BOOLEAN and nothing more (no containment
+    // check, no registration — `loadState` stays pure parse+validate). A
+    // non-boolean is a malformed schema member like any other.
+    if (typeof o.isContentRoot !== 'boolean') throw new Error('NodeSchema-shape-mismatch')
+    if (o.isContentRoot) seed.isContentRoot = true
   }
   if (o.batches !== undefined) {
     // HOOKS-ARRAY (OPTION C) — the batch record rides the schema boundary
@@ -418,6 +448,13 @@ export function loadState(doc: SerializedRenderDoc): NodeBaseData[] {
     // such defs (rows-mint resolves protos[0] from the children registry).
   }
   assertNoLiveTargets(template)
+  // RESTORE-PLACED-CONTENT-MEMBERSHIP — the advisory content-root flag rides
+  // the template's schema boundary too (emit never sets it there — a content
+  // root is never the authored root — so a template carrying a NON-boolean is
+  // a crafted doc, rejected like any other malformed member). Boolean, nothing
+  // more: no containment check, no registration (`loadState` stays pure).
+  const templateIsContentRoot = (template as { isContentRoot?: unknown }).isContentRoot
+  if (templateIsContentRoot !== undefined && typeof templateIsContentRoot !== 'boolean') throw new Error('NodeSchema-shape-mismatch')
   // the template's derived rule is validated at the same schema boundary as
   // every content entry (derived-state.md §7)
   validateDerived((template as { derived?: unknown }).derived)
