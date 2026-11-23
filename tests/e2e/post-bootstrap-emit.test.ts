@@ -84,7 +84,7 @@
 import { describe, it, expect } from 'vitest'
 import { Supervisor, type Node } from '../../src/core/node.js'
 import { translateLegacy, createLinkHub, type LegacyInitialData, type TranslatedTree } from '../../src/core/translate.js'
-import { renderProducingProcess } from '../../src/core/render-helpers.js'
+import { renderProducingProcess, treeFromOps } from '../../src/core/render-helpers.js'
 import { SSRFragmentAdapter, MarkdownAdapter } from '../../src/core/adapters.js'
 import type { MinimalElement, RenderAdapter, RenderOp } from '../../src/core/render.js'
 import type { CompiledState, NodeRef } from '../../src/core/types.js'
@@ -874,5 +874,97 @@ describe('POST-BOOTSTRAP-EMIT-DROP — a post-bootstrap structural change must n
       graftAt,
       'the added node surfaces BEFORE the document root — a detached top-level sibling (ORPHAN-EMIT-TOP-LEVEL-LEAK)',
     ).toBeGreaterThan(rootAt)
+  })
+
+  // ==========================================================================
+  // PBED-11 — the DUPLICATE CENSUS (ORPHAN-EMIT gate §8 P-3a)
+  // ==========================================================================
+  //
+  // `PBED-10` keys a `data-node-id` **Map** (last-wins) to read the document, so
+  // it is BLIND to the duplicate: a `placement-attach`ed graft holds a TOKEN walk
+  // beside its placement walks, so the graft emits ONE ELEMENT PER WALK, and
+  // every one of them carries the same `data-node-id`. The supervisor's decisive
+  // probe (`docs/specs/orphan-emit-gate-review.md` §4.3) measured **3** elements
+  // / 3 wires / a **3**-root forest for a two-offering-container fixture; this
+  // fixture offers ONE container (the family child `#filler`), so the same
+  // count is **2** (token walk + one placement walk).
+  //
+  // This case reads the document as an ARRAY (never through `byNodeId`), so the
+  // duplicate is visible, and it pins the accepted remedy `E5` (§5 D-2: do not
+  // mint the token walk for a `routed` node) from the OUTSIDE: one element, one
+  // `create`, one document, one occurrence in the html.
+  //
+  // RED FIRST: no `src/**` change accompanies it.
+
+  it('PBED-11 the duplicate census — a placement-attached graft emits ONE element, not one per walk', async () => {
+    const { sup, tree, root, filler } = fixture()
+    const adapter = new SSRFragmentAdapter()
+    const series: HostSeries = { prevStates: bootstrapStates(sup, tree.nodes), prevMap: null }
+
+    const boot = renderPass(sup, adapter, series)
+    expect(boot.html, 'FIXTURE: the bootstrap render must be the authored document').not.toBe('')
+    expect(byNodeId(boot.els).get(root.id)?.wire, 'FIXTURE: the bootstrap root emits on "root"').toBe('root')
+    expect(byNodeId(boot.els).get(filler.id), 'FIXTURE: the family-routed container #filler must emit at bootstrap').toBeDefined()
+
+    // PBED-10's construction, unchanged: a separately translated tree ROOT
+    // (a graft — it roots its own tree and carries the 'rootNode' token)
+    // placed by name into the authored page's container.
+    const graft = consumerNode('graft')
+    sup.registerNode(graft)
+    const res = sup.apply({ kind: 'placement-attach', node: graft, container: filler, names: ['zone'] })
+    expect(res.status, 'FIXTURE: the placement-attach is a sanctioned applied op').toBe('applied')
+    await sup.flush()
+    mergePass2(sup, series.prevStates)
+
+    const post = renderPass(sup, adapter, series)
+
+    // The graft's wires as the HOST holds them (its live states' pathKeys — the
+    // public identity field), so the `create` census below is not a restatement
+    // of the element census.
+    const graftStates = series.prevStates.get(graft.id) ?? []
+    expect(graftStates.length, 'FIXTURE: the graft must hold at least one state').toBeGreaterThan(0)
+    const graftWires = new Set(graftStates.map((s) => String(s.pathKey)))
+
+    // (1) THE DUPLICATE, over `post.els` AS AN ARRAY. `byNodeId` collapses this
+    // to 1 by construction (last-wins) — which is why PBED-10 cannot see it.
+    const graftEls = post.els.filter((el) => el.props['data:node-id'] === graft.id)
+    expect(
+      graftEls.map((el) => String(el.wire)),
+      `the graft (${graft.id}) emitted ${graftEls.length} elements — one per WALK (its token walk + one per offering container) instead of one per POSITION in the document`,
+    ).toHaveLength(1)
+
+    // (2) …and the adapter was told to CREATE it once.
+    const graftCreates = createWires(post.ops).filter((w) => graftWires.has(String(w)))
+    expect(
+      graftCreates.map(String),
+      `the engine CREATED ${graftCreates.length} elements for the one graft node (${graft.id})`,
+    ).toHaveLength(1)
+
+    // (3) ONE DOCUMENT: the op stream must serialize a single tree — no stray
+    // sibling beside the document root. The forest census is taken over the
+    // DOCUMENT stream (a fresh baseline over the same live states, exactly what
+    // a fresh host/adapter receives): `post.ops` alone is a DIFF against
+    // `prevMap`, whose root count only names the elements created THIS pass that
+    // nothing appended — pinned separately just below, because that is the
+    // adapter-visible half of the same duplicate.
+    const docSeries: HostSeries = { prevStates: series.prevStates, prevMap: null }
+    const doc = renderPass(sup, new SSRFragmentAdapter(), docSeries)
+    const docTrees = treeFromOps(doc.ops)
+    expect(
+      docTrees.map((t) => String(t.wire)),
+      `the document is a FOREST, not one tree: ${docTrees.length} roots in the op stream (the unclaimed graft element is a top-level sibling of the document root)`,
+    ).toHaveLength(1)
+    expect(
+      treeFromOps(post.ops).map((t) => String(t.wire)),
+      'the post-bootstrap diff left an element created-but-never-appended — a forest root beside the document root: an element no parent in the document claims',
+    ).toEqual([])
+
+    // (4) …and the serialized document carries the graft's id exactly ONCE.
+    const marker = `data-node-id="${graft.id}"`
+    const occurrences = post.html.split(marker).length - 1
+    expect(
+      occurrences,
+      `the graft's data-node-id appears ${occurrences}× in the adapter's html — the same node rendered as ${occurrences} elements`,
+    ).toBe(1)
   })
 })

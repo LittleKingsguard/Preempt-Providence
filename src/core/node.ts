@@ -1458,8 +1458,11 @@ export class Node {
    * = `pathKey` on every path-state (§2.2); `activePlacement` = the chosen
    * name (§2.5); component targets resolve path-only (Q8). Loop-terminated
    * paths drop with a `circular-source` warning; token/no-edge-terminated
-   * paths drop silently (§2.4 arm disposition). Path-derived children attach
-   * at mint time (§2.3).
+   * paths drop silently (§2.4 arm disposition). A `routed` node's zero-hop
+   * TOKEN walk is NOT minted when another walk survives (ORPHAN-EMIT `E5`) —
+   * suppressed, not dropped (no arm, no warning), and never when it is the
+   * node's last surviving walk. Path-derived children attach at mint time
+   * (§2.3).
    */
   compilePath(): CompileResult {
     const actionable: CompiledState[] = []
@@ -1499,6 +1502,10 @@ export class Node {
     // ROUTED through another node (a container/owner), so the 'rootNode' token
     // is not its only route: it is a graft, not the document root (pathKeyFor).
     const routed = walks.some((x) => x.hops.length > 0)
+    // The walks that SURVIVE the pruning/termination arms — collected before
+    // anything is minted, so the E5 suppression below is decided on the actual
+    // survivor set and never on a prediction of it.
+    const mintable: PathWalk[] = []
     for (const w of walks) {
       if (chosen !== null) {
         const firstZone = firstHopZone(w)
@@ -1519,6 +1526,22 @@ export class Node {
         dropped.push({ arm: [this.id], reason: 'owner-terminated' })
         continue
       }
+      mintable.push(w)
+    }
+    // ORPHAN-EMIT gate §5 D-2 (remedy `E5`): a ROUTED node's zero-hop walk is
+    // its TOKEN identity — keyed `root/<nodeId>`, parented by nothing in this
+    // document, so its state emits as a detached top-level fragment (the graft
+    // renders TWICE). Its identity is its placement, so that walk is not
+    // minted. This is a mint removal, NOT a drop: no `dropped` arm, no warning,
+    // no widened union — the record is this comment.
+    // CONDITION (2) — NEVER suppress the node's LAST surviving walk: a node
+    // whose placement walks were all pruned/terminated keeps its token walk, or
+    // it vanishes from the document with nothing recording it (and a
+    // container's `childOrder` would name a wire no element emits). Hence the
+    // condition is "a NON-token walk actually minted", not "the node is routed".
+    const suppressToken = routed && mintable.some((w) => w.hops.length > 0)
+    for (const w of mintable) {
+      if (suppressToken && w.hops.length === 0) continue
       const cs = this.mintPathState(w, routed)
       actionable.push(cs)
       // PATH-MODE-SILENT-UNRESOLVED — the LOUD half: the path resolve's

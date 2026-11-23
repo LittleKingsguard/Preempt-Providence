@@ -509,8 +509,19 @@ R2.3).
   layer-driven removal additionally depends on node.md §6.2's
   generating-anchor removal (DEFECT #10) — without it the census never
   shrinks and the reverse ships a phantom zone.
+- **⚠ ✎ MODE QUALIFIER 2026-11-23 — the pin below is TRUE ONLY IN `family` COMPILE MODE** (gate record
+  `docs/specs/orphan-emit-gate-review.md` §5 **D-6**, filed as a DOC DEFECT because as written the pin
+  contradicted a GREEN test). After `docs/decisions.md` **PATH-DOMAIN-RE-MINT**, a dirty placement-routed
+  container in a **path-mode** tree re-mints as a **path state**, and its `pathChildrenFor` scan (§2.3
+  mint-time attach) **does** name the content-anchor owner — so the added node **gains its append** and the
+  widget renders. That is exactly what `tests/e2e/post-bootstrap-emit.test.ts` **PBED-10** asserts green
+  (one `append`, graft wire ≠ `root`, graft after the root). **Read the pin as the `family`-mode reading,
+  never as a mode-independent fact.** The live residual is therefore narrow — **family-mode trees only** —
+  and is disposed as a documented limit plus an op-site diagnostic (gate §5 **D-3**), with the emit-side
+  remedies `E1`/`E2`/`E3` **rejected** and `E4` **parked** pending the family-state child-wire contract.
 - **Scope pin — attach into a family-routed container (PINNED — stress-
-  test review loop round 4, scenario 40(c)):** a `placement-attach` into
+  test review loop round 4, scenario 40(c); ✎ SCOPE-QUALIFIED 2026-11-23 — `family` compile mode only, see the
+  qualifier above):** a `placement-attach` into
   a container that is NOT placement-routed (container anchors only — no
   `content` anchor) leaves the added node's path-state ORPHANED: per-path
   append ops come from the parent PATH-state's `childOrder` (§2.3

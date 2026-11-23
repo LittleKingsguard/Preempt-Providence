@@ -26,7 +26,7 @@ import { describe, it, expect } from 'vitest'
 import { Node } from '../../src/core/node.js'
 import { Supervisor } from '../../src/core/supervisor.js'
 import { Link } from '../../src/core/link.js'
-import { makeRoot, makeNode, childOf, addComponentSource, targetAnchor } from '../helpers/fixtures.js'
+import { makeRoot, makeNode, makePrototype, childOf, addComponentSource, targetAnchor } from '../helpers/fixtures.js'
 import { translateLegacy } from '../../src/core/translate.js'
 import type { LegacyInitialData, LegacyNodeData } from '../../src/core/translate.js'
 import {
@@ -659,5 +659,210 @@ describe('DEFECT #26 — def-fill family surfaces compiled handlers as on:* prop
     expect(collapsed.type).toBe('a')
     // RED: the collapsed <a> (built by the SED-1 def-fill) carries no on:click
     expect(collapsed.props['on:click']).toBe(true)
+  })
+})
+
+// ============================================================================
+// ORPHAN-EMIT gate §5 D-2 — the accepted remedy `E5`: "do not mint the token
+// walk for a `routed` node" (docs/specs/orphan-emit-gate-review.md §5 D-2,
+// §8 P-1/P-2). RED FIRST (AGENTS.md item 8): these cases are written before the
+// `src/**` change; the tree is the one the supervisor's decisive probe built
+// (§4.3 — a separately translated tree ROOT `placement-attach`ed into an
+// authored page), and the token-walk state that E5 removes is MEASURED below.
+//
+// THE STATE UNDER REVIEW (public `CompiledState` surface only: `pathKey`,
+// `forkKey`, `parent`): a translated-tree ROOT carries the `'rootNode'` family
+// token — it roots its OWN tree — and `placement-attach` then places it into
+// ANOTHER tree's container by name. It therefore holds TWO kinds of walk: its
+// TOKEN walk (`hops.length === 0`, terminal 'root') and one PLACEMENT walk per
+// offering container (`hops.length > 0`, hence `routed`). Today `compilePath`
+// mints a state for every one of them, so the graft — one live node — emits one
+// element MORE than the document has positions for: the token state keys off
+// `pathKeyFor`'s `!routed` term (`root/<graftId>`) and nothing in the document
+// appends it.
+//
+// E5's binding condition (2) is what P-EMIT-15 pins: suppressing the token walk
+// must never leave the node with ZERO surviving walks.
+// ============================================================================
+
+describe('ORPHAN-EMIT gate (E5) — a ROUTED graft mints only its placement walks', () => {
+  /** The authored PAGE the graft is placed into: `div#page-root` with two plain
+   *  FAMILY containers and nothing else. Neither is placement-routed (no
+   *  `content` anchor) and they are SIBLINGS, so the attach-minted `zone`
+   *  container anchor can never be vetoed by an ancestor (`ops.ts` §1.3
+   *  `ancestorConsumesZone`). Attaching the graft into BOTH gives it exactly TWO
+   *  placement walks — the N-way duplication §4.3 measured, kept small,
+   *  deterministic and hub-independent (both container anchors are minted by the
+   *  ops themselves, so the count never depends on a translate-time Link
+   *  identity). */
+  function graftPage(): { sup: Supervisor; nodes: Node[]; containers: [Node, Node] } {
+    const doc: LegacyInitialData = {
+      template: {
+        root: {
+          type: 'div',
+          css: { id: 'page-root' },
+          children: [
+            { type: 'div', css: { id: 'zone-a' } },
+            { type: 'div', css: { id: 'zone-b' } },
+          ],
+        },
+      },
+      content: [],
+      clientConfig: { runInstantiation: true, runRendering: true },
+    }
+    const t = translateLegacy(doc)
+    const sup = new Supervisor({})
+    for (const n of t.nodes) sup.registerNode(n)
+    const byCss = (id: string): Node => {
+      const n = t.nodes.find((x) => x.css?.id === id)
+      if (!n) throw new Error(`fixture: the page has no #${id} node`)
+      return n
+    }
+    return { sup, nodes: t.nodes, containers: [byCss('zone-a'), byCss('zone-b')] }
+  }
+
+  /** The GRAFT: a SEPARATELY `translateLegacy`d tree root. It carries its own
+   *  child-owner token (`'rootNode'` — it roots its own tree) and has no family
+   *  parent in the page it is placed into, which is exactly the construction
+   *  `GRAFT-ROOT-PATHKEY-COLLISION` / `ORPHAN-EMIT` are about. */
+  function graftNode(cssId: string): Node {
+    const doc: LegacyInitialData = {
+      template: { root: { type: 'span', css: { id: cssId } } },
+      content: [],
+      clientConfig: { runInstantiation: true, runRendering: true },
+    }
+    return translateLegacy(doc).root
+  }
+
+  it('P-EMIT-14 a ROUTED graft mints ONLY its placement walks (no token-identity state)', () => {
+    const { sup, containers } = graftPage()
+    const graft = graftNode('graft')
+    sup.registerNode(graft)
+    for (const container of containers) {
+      const res = sup.apply({ kind: 'placement-attach', node: graft, container, names: ['zone'] })
+      expect(
+        res.status,
+        'FIXTURE: placement-attach into a plain family container is a sanctioned applied op',
+      ).toBe('applied')
+    }
+
+    const { actionable } = graft.compilePath()
+
+    // (1) THE DEFECT: the token walk's state. The graft roots its own tree, so
+    // its walk set holds a `hops.length === 0` token walk; `routed` is true, so
+    // `pathKeyFor`'s `!routed` term keys that state `root/<graftId>` — an
+    // element no parent in this document appends (the probe's "1 token walk").
+    // E5: not minted at all.
+    expect(
+      actionable.filter((s) => s.pathKey === `root/${graft.id}`),
+      `a ROUTED graft still mints its TOKEN-IDENTITY state (pathKey "root/${graft.id}") beside its placement walks — one element no parent appends (ORPHAN-EMIT §4.3)`,
+    ).toEqual([])
+
+    // (2) ONE state per PLACEMENT WALK — two offering containers ⇒ two states.
+    expect(
+      actionable,
+      `a routed graft must mint exactly one state per placement walk (${containers.length} offering containers) — it minted ${actionable.length}: ${actionable.map((s) => String(s.pathKey)).join(', ')}`,
+    ).toHaveLength(containers.length)
+
+    // (3) every survivor IS a placement walk: landed in one of the offering
+    // containers (`parent`, public on CompiledState)…
+    expect(
+      actionable.map((s) => s.parent).sort(),
+      'the surviving states must be EXACTLY the placement walks — one per offering container',
+    ).toEqual(containers.map((c) => c.id).sort())
+
+    // (4) …keyed off its hops, and a path-state's forkKey IS its pathKey (§2.2).
+    for (const s of actionable) {
+      expect(
+        s.pathKey,
+        'a surviving state must key off its hop segment (root/<zone>/<container>/<node>), never the bare token identity',
+      ).toBe(`root/zone/${String(s.parent)}/${graft.id}`)
+      expect(
+        s.forkKey,
+        '§2.2: every path-state carries forkKey === pathKey (the emit layer keys the wire off exactly that field)',
+      ).toBe(s.pathKey)
+    }
+  })
+
+  it('P-EMIT-15 a routed graft whose placement walks are ALL non-viable keeps its token walk (last-state guard)', () => {
+    const { sup, nodes: pageNodes } = graftPage()
+    // The requested names' containers are REAL and offer their zone, but no
+    // owner chain from them reaches this document, so neither walk is
+    // root-viable — the requested placement names have NO VIABLE CONTAINER:
+    //  · a component PROTOTYPE (chain → the 'component' token ⇒
+    //    prototype-terminated),
+    //  · an UNATTACHED node (no family parent at all ⇒ owner-terminated).
+    // Both are legal `placement-attach` targets (the op validates the container
+    // is not its own ancestor, nothing about its chain), and each yields a
+    // placement walk with `hops.length > 0` — so the graft IS `routed` while
+    // every one of its placement walks is dropped.
+    const proto = makePrototype({ type: 'section' }, 'zone-proto')
+    const lonely = makeNode({ type: 'section' }, 'zone-lonely')
+    sup.registerNode(proto)
+    sup.registerNode(lonely)
+    const graft = graftNode('graft-last')
+    sup.registerNode(graft)
+    expect(
+      sup.apply({ kind: 'placement-attach', node: graft, container: proto, names: ['zone'] }).status,
+      'FIXTURE: a component prototype is a legal placement-attach container (the walk is what is non-viable)',
+    ).toBe('applied')
+    expect(
+      sup.apply({ kind: 'placement-attach', node: graft, container: lonely, names: ['zone2'] }).status,
+      'FIXTURE: an unattached node is a legal placement-attach container (no chain ⇒ no viable walk)',
+    ).toBe('applied')
+
+    const res = graft.compilePath()
+
+    // FIXTURE: the graft really does hold non-viable PLACEMENT walks (that is
+    // what makes it `routed`), and each one is RECORDED in a `dropped` arm with
+    // its reason — the disappearance this guard forbids would be silent.
+    expect(
+      res.dropped.map((d) => d.reason).sort(),
+      'FIXTURE: the graft must hold two non-viable placement walks, each dropped with a recorded reason (prototype / no chain)',
+    ).toEqual(['owner-terminated', 'prototype-terminated'])
+
+    // THE GUARD (E5 condition 2): the token walk is the node's LAST surviving
+    // walk. E5 suppresses the token walk of a `routed` node — a suppression that
+    // does not first check "is anything else left?" turns this leak into a
+    // DISAPPEARANCE: the graft would emit no state at all, with no extra
+    // `dropped` entry to say so.
+    expect(
+      res.actionable,
+      `the graft's LAST surviving walk (its token walk) was suppressed — the routed graft now emits NO state at all (dropped: ${JSON.stringify(res.dropped)}) and vanishes from the document`,
+    ).toHaveLength(1)
+    expect(
+      res.actionable[0]!.pathKey,
+      'the single surviving state must be the token-identity state (the last state guard keeps it)',
+    ).toBe(`root/${graft.id}`)
+    expect(
+      res.actionable[0]!.parent,
+      'the surviving token state is parentless (nothing in the document owns it)',
+    ).toBeNull()
+
+    // …and the EMISSION agrees: one element on that wire, and no element's
+    // childOrder names a wire for which no element exists (a `R-VPD-2` ghost —
+    // `render.ts` §3.3 appends only for `childOrder ∩ present`, so a ghost is
+    // silently unappended content).
+    const allStates = [...pageNodes, graft].flatMap((n) => n.compilePath().actionable)
+    const nodeBy = new Map<string, Node>(sup.allNodes().map((n): [string, Node] => [n.id, n]))
+    const els = emitElements(allStates, nodeBy, { nodeIdAttribute: true })
+    const wires = new Set(els.map((e) => String(e.wire)))
+    const ghosts = els.flatMap((e) =>
+      e.childOrder
+        .filter((c) => !wires.has(String(c)))
+        .map((c) => ({ owner: String(e.wire), child: String(c) })),
+    )
+    expect(
+      ghosts,
+      'an emitted childOrder names a wire for which no element exists — a ghost child never appends (R-VPD-2), so the content is silently lost',
+    ).toEqual([])
+    const graftEls = els.filter((e) => e.props['data:node-id'] === graft.id)
+    expect(
+      graftEls,
+      'the routed graft VANISHED from the element set — its last surviving walk was suppressed',
+    ).toHaveLength(1)
+    expect(graftEls[0]!.wire, 'the surviving element must emit on the surviving state\'s wire').toBe(
+      `root/${graft.id}`,
+    )
   })
 })
