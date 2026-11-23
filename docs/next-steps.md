@@ -27,6 +27,7 @@ to pick up next.
 > `ORPHAN-EMIT-TOP-LEVEL-LEAK` (carve-out (b) emits a detached top-level sibling; the pin's wording is wrong).
 > Our reply's §1.1 recipe was also corrected — **a freshly translated node needs detach-then-attach**, it rejects
 > `single-parent` otherwise. **The owner owes: the queue order, and a request for their probe arm** (offered in §4).
+> **QUEUE ORDERED BY THE OWNER 2026-11-23 — the head changed:** **`POST-BOOTSTRAP-EMIT-DROP` is now FIRST** (a zeroed render outranks a silent no-op), and it is **BLOCKED on the consumer's probe arm**, formally requested in `docs/handoffs-request-arm-modularity-2026-11-23.md`. The `attach` fix stays booked and second; **do not re-derive the envelope shape while the arm is in flight**. When the arm lands: red case first, then diagnose; a non-reproduction is itself a finding and goes back with the diff.
 > **THE QUEUE, in order (each red-first, no implementation in the same pass):**
 > **(1) R-2a** `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP** — the gate's **head item**; the real
 > blocker for the downstream's module activation. Probes P-1 (red) + P-2 (the registration counter-probe;
