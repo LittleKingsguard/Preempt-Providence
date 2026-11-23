@@ -45,7 +45,20 @@ keying the code never had, and it was the (false) basis of the withdrawn (a)
 half of that defect row. **A
 def-bearing doc ships the FULL `TranslatedTree.nodes` list (prototypes
 included) — the census's builder contract: a census `nodeId` absent from the
-doc is a crafted doc (rejected at the schema boundary).**
+doc is a crafted doc (rejected at the schema boundary).** **✎ NO NODE ID
+APPEARS TWICE in `content` (CONDENSE-CENSUS-NO-DEDUPE, FIXED 2026-11-23):**
+`condense()`'s census is the concat of `allNodes()` and the def-prototype
+registry, and those two sources OVERLAP whenever a def-root has been
+seam-wired (its derived `state` flips to `'in-tree'`, so a host registering
+through the `state !== 'prototype'` filter puts it in `allNodes()` while it
+stays in the registry) — so the concat must dedupe by node IDENTITY, or the
+same id ships twice and the document is unrestorable (`reconcileParentTargets`
+throws `LinkConfigError: unique-order`; since 2026-11-23 that is refused
+loudly before the eviction). **The ONE permitted repetition is the authored
+ROOT**, which ships as `doc.template` **and** once inside `content` (the census
+includes it); the restore's pre-flight carries a matching one-occurrence
+exemption. `sliceSet` membership in `serializeSlice` is INSTANCE-based, so a
+duplicate entry was never a second element — only a corrupt document.
 
 **`isContentRoot?: true` (RESTORE-PLACED-CONTENT-MEMBERSHIP, `defects.md`;
 gate `serializer-census-gate-review.md` §1(b)/§3 item 2) — the ONE placement

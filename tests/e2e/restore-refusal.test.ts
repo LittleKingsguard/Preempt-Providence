@@ -79,19 +79,51 @@
  * is `RESTORE-REFUSES-NOT-EMPTIES`, gate record
  * `docs/specs/undo-redo-report.md` U19 + `docs/defects.md`
  * `RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS` (b)):
- *  - **RR-1** (was RED at authoring) a restore that cannot complete
- *    keeps the graph it had: (i) `allNodes()` is NOT empty and its sorted id
- *    set equals the pre-replay one, and an authored node is still usable
- *    (`compilePath()` does not throw); (ii) EXACTLY ONE `console.warn` names a
- *    restore failure (`/restore/i` AND `/fail|refus|error|cannot|unable|abort/i`);
- *    (iii) `replay().status` is NOT `'applied'` — it is `'no-op'`. Measured at
- *    AUTHORING time: (i) 0 nodes, (ii) 0 warns, (iii) `'applied'`; measured now:
- *    (i) 5 nodes with the identical id set, (ii) 1 warn
- *    (`restore-refused-invalid-snapshot:`), (iii) `'no-op'`.
+ *  - **RR-1** (was RED at authoring; ✎ RE-BASED — see the next block) a restore
+ *    that cannot complete keeps the graph it had: (i) `allNodes()` is NOT empty
+ *    and its sorted id set equals the pre-replay one, and an authored node is
+ *    still usable (`compilePath()` does not throw); (ii) EXACTLY ONE
+ *    `console.warn` names a restore failure (`/restore/i` AND
+ *    `/fail|refus|error|cannot|unable|abort/i`); (iii) `replay().status` is NOT
+ *    `'applied'` — it is `'no-op'`. Measured at AUTHORING time: (i) 0 nodes,
+ *    (ii) 0 warns, (iii) `'applied'`; measured after the re-base: (i) 5 nodes
+ *    with the identical id set, (ii) 1 warn
+ *    (`restore-refused-invalid-snapshot: the condensed base could not be
+ *    parsed …`), (iii) `'no-op'`.
  *  - **RR-2** (CONTROL, GREEN today) the SAME page WITHOUT the seam consumer:
  *    the condense + restore succeed (`status: 'applied'`), the graph is
  *    non-empty, and ZERO warns — proving RR-1's red is caused by the
  *    seam-wired def and not by broken condense plumbing.
+ *
+ * ─── ✎ RE-BASED (the `CONDENSE-CENSUS-NO-DEDUPE` landing) ───────────────────
+ * RR-1's ORIGINAL trigger was the duplicated condense census this page
+ * produces: the seam-wired def-root is in `allNodes()` AND in the
+ * def-prototype registry, `condense()`'s plain concat shipped it twice, and the
+ * restore was REFUSED (`restore-refused-invalid-snapshot: … ships one node
+ * twice …`). That producer defect is its own OPEN row (`docs/defects.md`
+ * `CONDENSE-CENSUS-NO-DEDUPE`) and its fix — one membership condition on the
+ * registry loop — makes THIS page restore SUCCESSFULLY, i.e. it DELETES RR-1's
+ * trigger. RR-1's honest contract ("a restore that cannot complete must keep
+ * the graph it had and say so") is not about the census, so it is re-based onto
+ * a refusal that SURVIVES the dedupe: a **crafted malformed base** injected
+ * through the public `sup.journal` field (the `MAL-6` idiom of
+ * `tests/unit/undo-redo-report-adversarial.test.ts`: `sup.journal.length = 0;
+ * sup.journal.push({ id, op: { kind: 'base', snapshot: { template: null,
+ * content: [] } }, result: { status: 'base' } })`), which `loadState` cannot
+ * parse (`envelope-mismatch`) — so `_restoreBase` refuses at step 0b, BEFORE any
+ * eviction, exactly the contract RR-1 pins.
+ *
+ * WHAT CHANGED IN THIS RE-BASE: **nothing in RR-1's three assertions** — (i),
+ * (ii) and (iii) are byte-identical, and so is every FIXTURE precondition
+ * (the page, the seam-wiring asserts, the condense recipe and the
+ * `basePresent` gate) — and no message was reworded either. The ONLY addition is
+ * the marker replacement itself. The seam page is KEPT as the fixture
+ * (rather than swapping in a plain page) precisely so no assertion had to move.
+ * The census duplication is now pinned — RED-first — by
+ * `tests/e2e/condense-census-dedupe.test.ts` CCD-1/CCD-2, which is the file to
+ * read for the producer defect itself. **RR-2 is untouched** (its page, recipe
+ * and assertions are unchanged); it remains the control that a successful
+ * restore is silent.
  *
  * NAMESPACE/SCOPE DISCIPLINE: every case builds its OWN `createLinkHub()` and
  * its own translated tree, so no case shares a per-name `Link`, a registry
@@ -345,6 +377,25 @@ describe('RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS — a restore that cannot complete 
       view.basePresent,
       "FIXTURE (RR-1): the journal must carry the condensed base marker — without it replay() never calls _restoreBase and this case would test NOTHING (the condense is deferred AND size-guarded: a base >= the pre-base journal is skipped with 'condense-skipped-size')",
     ).toBe(true)
+
+    // ---- THE TRIGGER (✎ RE-BASED — see the header): a crafted malformed base.
+    // A restore that CANNOT complete is refused in `_restoreBase`'s pre-flight
+    // (step 0b) before any eviction. The recipe above proved the condense itself
+    // works and produced a REAL base; this replaces that marker with a snapshot
+    // `loadState` cannot parse (`envelope-mismatch`), the `MAL-6` idiom
+    // (`tests/unit/undo-redo-report-adversarial.test.ts`): a corrupted journal is
+    // a documented host hazard, and the refusal it triggers SURVIVES the
+    // `CONDENSE-CENSUS-NO-DEDUPE` fix — which removes only the duplicated-node
+    // refusal this case used to ride on (header block). Measured: exactly ONE
+    // warn (`restore-refused-invalid-snapshot: the condensed base could not be
+    // parsed (envelope-mismatch) …`), `status: 'no-op'`, graph 5 -> 5 nodes with
+    // the identical id set — the three assertions below are unchanged.
+    sup.journal.length = 0
+    sup.journal.push({
+      id: 'journal-base',
+      op: { kind: 'base', snapshot: { template: null, content: [] } },
+      result: { status: 'base' },
+    })
 
     const preNodes = sup.allNodes()
     const preCount = preNodes.length

@@ -8,7 +8,27 @@ circled back to on resolution. Parked/pending decisions and speculative
 proposals live in `docs/pending.md` — this file is the work queue of what
 to pick up next.
 
-## ✎✎ CURRENT UNIT — `CONDENSE-CENSUS-NO-DEDUPE` (NOT STARTED)
+## ✎✎ LANDED 2026-11-23 — `CONDENSE-CENSUS-NO-DEDUPE` (the queue head and the release gate; its brief is kept below as the record)
+
+> **WHAT SHIPPED:** `condense()`'s census now dedupes by node IDENTITY (`const kidSet = new Set(kids)` plus a skip in
+> the registry loop), so a seam-wired def-root no longer ships twice and **the seam-wired page is restorable again** —
+> measured before: `'no-op'` + one refusal warn, content ids `[… node-4, node-3]`; measured after: `'applied'`, every id
+> once, `allNodes()` 5 → 3 (the def-root/def-child come back REGISTRY-ONLY — the pinned live shape — and re-wire on
+> compile). Red set `tests/e2e/condense-census-dedupe.test.ts` (CCD-1 census, CCD-2 capability, CCD-3 control, CCD-4 the
+> over-correction guard: a placement-multiplicity page keeps its repeated structure). **The ROOT double-ship is INTENDED
+> and stays** — `doc.template` plus one `content` occurrence; `docs/specs/serialize.md` now states the census contract
+> and the single permitted repetition.
+> **TWO CASES WERE RE-BASED, NOT WEAKENED** (their trigger was this very duplication): `restore-refusal` RR-1 now
+> injects a crafted malformed base with all three assertions byte-identical, and `base-mutation-detection` BMD-5 uses the
+> **hub-less** refusal — chosen over the crafted base because a crafted marker is not the one `condense()` digested, so
+> the digest check would skip as "no evidence" and the ordering claim would be vacuous.
+>
+> **THE QUEUE AFTER THIS: no open item blocks `0.6.0`.** Post-release residuals are unchanged
+> (`PATH-MODE-DIAGNOSTIC-UNGUARDED`, `COMPILE-MODE-OVERRIDE-ORDERING`, `GRAFT-RESIDUALS` (a), the silent `chosen`
+> prune, `ORPHAN-EMIT`'s family-mode `E4` behind a missing family-state child-wire contract), plus the two
+> owner-level items: the pass-2 residual (pursue `R2`–`R6`, or park) and the `0.6.0` cut itself.
+
+## ✎ BRIEF (historical) — `CONDENSE-CENSUS-NO-DEDUPE`
 
 > **✎ STATE AS OF THE LAST PASS (2026-11-23, read this first):** the mutation-detection gate ran
 > (`docs/specs/restore-base-mutation-detection-gate-review.md`) → **step 1 LANDED** as

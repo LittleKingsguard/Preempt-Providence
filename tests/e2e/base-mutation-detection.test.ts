@@ -91,17 +91,41 @@
  *    marker id CHANGED, mutate the NEW base's captured carrier, `replay()`:
  *    exactly one ADDITIONAL warn (two in total). This pins "per marker", not
  *    "per process" and not "warn once and then never again".
- *  - **BMD-5** (GREEN today — the refused-base control). The RR-1 page (a def
- *    host + a `component: [{ target: 'children', reference: <def> }]` seam
- *    consumer, whose restore is REFUSED because the condense census duplicates a
- *    node) **with a mutated base**: the window holds exactly ONE warn and it is
- *    the refusal — no `restore-base-mutated` (contract point 2).
+ *  - **BMD-5** (GREEN today — the refused-base control). A page whose restore is
+ *    REFUSED **with a mutated base**: the window holds exactly ONE warn and it
+ *    is the refusal — no `restore-base-mutated` (contract point 2).
+ *    ✎ **RE-BASED** (the `CONDENSE-CENSUS-NO-DEDUPE` landing) — see the block
+ *    below: the original trigger was the RR-1 seam page, whose condense census
+ *    ships a node twice (a refusal the census fix DELETES). The trigger is now
+ *    the **hub-less refusal** of `tests/e2e/restore-integrity.test.ts` RI-3.
  *  - **BMD-6** (GREEN today — the unserializable-base control, contract point 6).
  *    A root whose `css.cssDef` is CYCLIC (`cssDef` is NOT `assertJsonSafe`d, so
  *    it slips into the base uncloned — gate record §2/§5), with a mutated
  *    carrier: the condense must NOT abort (`condense-aborted` absent) and the
  *    restore must NOT warn (the digest could not be computed ⇒ silently
  *    unchecked), and the restore still applies.
+ *
+ * ─── ✎ BMD-5 RE-BASED — WHICH REFUSAL, AND WHY (read this before editing it) ─
+ * BMD-5's claim is ORDERING: contract point 2 says the digest comparison runs
+ * AFTER every refusal and BEFORE the eviction, so a base that is REFUSED must
+ * never also get a `restore-base-mutated` claim ("the rewritten recorded state
+ * is being restored" would be a lie — nothing is restored). To measure ordering
+ * the case needs a refusal that (a) SURVIVES the census dedupe and (b) fires on
+ * a marker the digest was RECORDED for. A **crafted malformed base** (the
+ * `MAL-6` idiom RR-1 uses) fails (b): an injected `{ template: null, content:
+ * [] }` marker is not the marker `condense()` digested, so the digest
+ * comparison would skip under "no evidence" (gate record §5 item 7) and the case
+ * could not tell correct ORDERING from an ABSENT comparison — it would pass
+ * even if step 0c ran first. The authorable choice is therefore the
+ * **hub-less refusal** (RI-3's shape, a documented-legal single-graph host):
+ * the condense is REAL (so `baseDigest` IS keyed to this marker), the mutation
+ * is REAL (the host writes in place through the base's own aliased carrier — the
+ * `CBI-3a` device — measured: 1090B → 1094B, the base's own entry reads the
+ * pushed tag), and the refusal fires at step 0 (no hub), BEFORE the step-0c
+ * digest comparison. If step 0c ever moved ahead of it, this case would see a
+ * SECOND warn and fail. Measured: exactly one warn,
+ * `restore-refused-no-hub: …`, `status: 'no-op'`, graph 2 → 2 nodes with the
+ * identical id set.
  *
  * NAMESPACE/SCOPE DISCIPLINE: every case builds its OWN `createLinkHub()` and its
  * own translated tree, so no case shares a per-name `Link`, a registry entry or
@@ -209,13 +233,17 @@ function cssDefPage(cssDef: unknown): LegacyInitialData {
 }
 
 /**
- * **the RR-1 refusal page** (`tests/e2e/restore-refusal.test.ts`), plus the
- * aliased carrier BMD-5 mutates: `div#app > div#defHost` (which hosts the
- * inline def `nav`, minting its def-root + def-child prototypes) and
- * `div#seamConsumer`, whose `component: [{ target: 'children', reference: 'nav' }]`
- * seam duplicates a node in the condense census — which is what makes the
- * restore REFUSED (`restore-refused-invalid-snapshot:`, `status: 'no-op'`).
+ * **the RR-1 page** (`tests/e2e/restore-refusal.test.ts`), kept as BMD-5's
+ * carrier page: `div#app > div#defHost` (which hosts the inline def `nav`,
+ * minting its def-root + def-child prototypes) plus `div#seamConsumer`
+ * (`component: [{ target: 'children', reference: 'nav' }]`).
  * `#defHost.props.meta` is the nested object the base aliases.
+ *
+ * ✎ RE-BASED NOTE: BMD-5 no longer *uses* the seam (`seam: false` — the
+ * duplicated-census refusal it used to ride on is removed by
+ * `CONDENSE-CENSUS-NO-DEDUPE`, header block). The consumer stays in the
+ * envelope because it is what makes this the same page RR-1 uses, and the
+ * restore's refusal trigger is now the host's missing HUB, not the seam.
  */
 function seamPage(): LegacyInitialData {
   return {
@@ -269,15 +297,24 @@ interface Page {
  * `translateLegacy` and the `Supervisor`, and registration through the
  * derived-state filter `state !== 'prototype'` (`serialize.md:99-100`).
  *
- * ORDER MATTERS ON THE SEAM PAGE and is the refusal's reproduction: the host
- * runs its BOOTSTRAP COMPILE (`#seamConsumer.compilePath()`, a read-only path
- * compile, legal before registration) and only THEN registers — that is the
- * order in which the seam's state flip is visible to the filter.
+ * ORDER MATTERS ON THE SEAM PAGE and is the (historical) refusal's
+ * reproduction: the host runs its BOOTSTRAP COMPILE
+ * (`#seamConsumer.compilePath()`, a read-only path compile, legal before
+ * registration) and only THEN registers — that is the order in which the seam's
+ * state flip is visible to the filter.
+ *
+ * `hub: false` builds the HUB-LESS host BMD-5 is re-based onto (✎ see the
+ * header block): a documented-legal shape for a single-graph host
+ * (`Supervisor`'s constructor accepts it) whose restore is refused at the
+ * hub check — the `tests/e2e/restore-integrity.test.ts` RI-3 idiom.
  */
-function buildPage(opts: { envelope: LegacyInitialData; seam: boolean; where: string }): Page {
-  const hub = createLinkHub()
-  const tree = translateLegacy(opts.envelope, { hub })
-  const sup = new Supervisor({ hub, maxJournalLength: MAX_JOURNAL_LENGTH })
+function buildPage(opts: { envelope: LegacyInitialData; seam: boolean; where: string; hub?: boolean }): Page {
+  const hub = opts.hub === false ? undefined : createLinkHub()
+  const tree = translateLegacy(opts.envelope, hub ? { hub } : undefined)
+  const sup = new Supervisor({
+    ...(hub ? { hub } : {}),
+    maxJournalLength: MAX_JOURNAL_LENGTH,
+  })
   const protosAtTranslate = tree.nodes.filter((n) => n.state === 'prototype')
   if (opts.seam) {
     const consumer = tree.nodes.find((n) => n.css?.id === 'seamConsumer')
@@ -826,24 +863,31 @@ describe('RESTORE-BASE-MUTATION-DETECTION — a mutated condensed base warns exa
   // ==========================================================================
 
   it('BMD-5 a REFUSED base gets exactly one warn and it is the REFUSAL — no restore-base-mutated claim for a restore that does not happen', async () => {
-    const page = buildPage({ envelope: seamPage(), seam: true, where: 'BMD-5' })
+    // ✎ RE-BASED (header block): the trigger is the HUB-LESS refusal (RI-3's
+    // documented-legal single-graph host), NOT the seam page's duplicated condense
+    // census — that refusal is DELETED by `CONDENSE-CENSUS-NO-DEDUPE`. `seam:
+    // false` keeps the seam out of the picture entirely (this case is about the
+    // pre-flight ORDER, not about seams), and `hub: false` is what makes the
+    // restore refuse.
+    const page = buildPage({ envelope: seamPage(), seam: false, hub: false, where: 'BMD-5' })
     const sup = page.sup
 
-    // FIXTURE: the seam WIRED the def prototypes (the refusal's trigger — the
-    // duplicated condense census). Without the flip this case would test the
-    // control page and pass vacuously.
+    // FIXTURE: the page is the registry-only-prototype shape — with no seam, the
+    // `nav` def prototypes stay derived-'prototype' and the registration filter
+    // skips them (so the census is `allNodes()` alone). Without this the page is
+    // not the one RI-3 describes.
     expect(
       page.protosAtTranslate.length,
-      'FIXTURE (BMD-5): the `nav` def must mint its def-root + one def-child prototype (translate.ts mintDefPrototypes) — without prototypes this case tests nothing',
+      'FIXTURE (BMD-5): the `nav` def must mint its def-root + one def-child prototype (translate.ts mintDefPrototypes) — the page must be the DEF page, not an empty one',
     ).toBe(2)
     expect(
       page.protosAtTranslate.map((n) => n.state),
-      `FIXTURE (BMD-5): compiling the children-target seam consumer must wire the def-root under it, flipping EVERY def prototype's derived state from 'prototype' to 'in-tree' (measured ${JSON.stringify(page.protosAtTranslate.map((n) => n.state))}); if they are still 'prototype' the seam did not wire and this case would not reach the refusal`,
-    ).toEqual(page.protosAtTranslate.map(() => 'in-tree'))
+      `FIXTURE (BMD-5): with no seam consumer the def prototypes must stay derived-'prototype' (measured ${JSON.stringify(page.protosAtTranslate.map((n) => n.state))})`,
+    ).toEqual(page.protosAtTranslate.map(() => 'prototype'))
     expect(
-      page.skipped.map((n) => `${n.id}:${n.state}`),
-      `FIXTURE (BMD-5): the registration filter must skip NOTHING on the seam page (measured skipped ${JSON.stringify(page.skipped.map((n) => n.id))}) — the seam-wired def-root reaches allNodes() while staying in the def-prototype registry, which is the duplication the refusal reports`,
-    ).toEqual([])
+      page.skipped.length,
+      `FIXTURE (BMD-5): the registration filter must skip the registry-only def prototypes (measured skipped ${JSON.stringify(page.skipped.map((n) => n.id))})`,
+    ).toBe(2)
 
     const base = await condenseBase(sup, 'BMD-5')
     const defHostBefore = requireAuthored(sup.allNodes(), 'defHost', 'BMD-5')
@@ -851,7 +895,9 @@ describe('RESTORE-BASE-MUTATION-DETECTION — a mutated condensed base warns exa
     const preIds = authoredIds(sup.allNodes())
     const preAuthoredIds = sup.allNodes().map((n) => n.id).sort()
 
-    // ---- THE MUTATION: authorable on this page too (the same alias) ------
+    // ---- THE MUTATION: the base ALIASES this live carrier (the CBI-3a device),
+    // so this push rewrites recorded history on a marker the condense REALLY
+    // digested — the precondition that makes "no mutation warn" discriminating.
     assertAliasedCarrier(defHostBefore.props, contentEntryFor(base, 'defHost').props, 'BMD-5 (#defHost props.meta)')
     tagsOf(defHostBefore.props, 'BMD-5 (the carrier being mutated)').tags.push(MUTATION_TAG)
     expect(
@@ -866,19 +912,26 @@ describe('RESTORE-BASE-MUTATION-DETECTION — a mutated condensed base warns exa
     await flushCondense()
     const warns = warnLines(warn)
     const mutationWarns = warns.filter(isBaseMutationWarn)
-    const refusalWarns = warns.filter((w) => w.startsWith('restore-refused-invalid-snapshot'))
+    // The refusal this case rides on: `_restoreBase` step 0 (no hub) — it runs
+    // BEFORE step 0c's digest comparison, which is the ORDER contract point 2
+    // pins. Matched as a PREFIX (never a substring).
+    const refusalWarns = warns.filter((w) => w.startsWith('restore-refused-'))
 
     // (a) the refusal is the window's ONE warn (tests/e2e/restore-refusal.test.ts
-    //     RR-1 pins exactly one warn on this page — the mutation must not add a
-    //     second).
+    //     RR-1 pins exactly one warn on a refused restore — the mutation must not
+    //     add a second).
     expect(
       warns.length,
-      `BMD-5: a REFUSED restore must report EXACTLY ONE warn — the 'restore-refused-invalid-snapshot:' diagnostic (RR-1's pin in tests/e2e/restore-refusal.test.ts) and NOTHING else; measured ${warns.length} warn(s): ${JSON.stringify(warns)}. A mutation warn here means the digest was compared BEFORE the refusal checks (contract point 2)`,
+      `BMD-5: a REFUSED restore must report EXACTLY ONE warn — the 'restore-refused-*' diagnostic (RR-1's pin in tests/e2e/restore-refusal.test.ts) and NOTHING else; measured ${warns.length} warn(s): ${JSON.stringify(warns)}. A mutation warn here means the digest was compared BEFORE the refusal checks (contract point 2)`,
     ).toBe(1)
     expect(
       refusalWarns.length,
-      `BMD-5: the single warn must be the REFUSAL — the seam page's condense census duplicates a node, so _restoreBase refuses it; measured ${JSON.stringify(warns)}`,
+      `BMD-5: the single warn must be the REFUSAL — this hub-less host's restore is refused at _restoreBase step 0, so no seeding (and no digest comparison) happens; measured ${JSON.stringify(warns)}`,
     ).toBe(1)
+    expect(
+      warns[0]?.startsWith('restore-refused-no-hub'),
+      `BMD-5: the single warn must be the HUB-LESS refusal ('restore-refused-no-hub: …') — the re-based trigger (RI-3's shape). Measured ${JSON.stringify(warns)}; if this reads 'restore-refused-invalid-snapshot' the trigger moved and this case is measuring something else`,
+    ).toBe(true)
 
     // (b) THE CLAIM: no mutation diagnostic for a base that is NOT restored.
     expect(
@@ -889,7 +942,7 @@ describe('RESTORE-BASE-MUTATION-DETECTION — a mutated condensed base warns exa
     // (c) the refusal kept the graph (so the case really took the refusal path)
     expect(
       replay.status,
-      `BMD-5: the seam page's restore must be REPORTED as refused — measured '${replay.status}' (the RR-1 contract's word for "nothing was applied")`,
+      `BMD-5: the hub-less page's restore must be REPORTED as refused — measured '${replay.status}' (the RR-1 contract's word for "nothing was applied")`,
     ).toBe('no-op')
     expect(
       sup.allNodes().length,

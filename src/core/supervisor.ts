@@ -1030,7 +1030,35 @@ export class Supervisor {
       for (const [, protos] of defPrototypeEntries(protoScope)) for (const p of protos) if (p.hubFor === this.hub) protoSet.add(p)
       for (const [, r] of defRootPrototypeEntries(protoScope)) if (r.hubFor === this.hub) protoSet.add(r)
       const kids = this.allNodes()
-      for (const p of protoSet) if (p !== root) kids.push(p)
+      // CONDENSE-CENSUS-NO-DEDUPE (`docs/defects.md`; the re-filed (a) half of
+      // RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS) — the census is a concat of TWO
+      // sources that can OVERLAP, so it must dedupe by node IDENTITY before it
+      // ships. The overlap is reachable on a documented-legal host: compiling a
+      // `component: [{ target: 'children', reference: <def> }]` consumer wires
+      // the def-root as a seam child, which flips its derived `state` from
+      // 'prototype' to 'in-tree' — so a host registering through the pinned
+      // `state !== 'prototype'` filter puts it in `allNodes()` while it STAYS in
+      // the def-prototype registry. The plain concat then pushed the SAME node
+      // object twice, `serializeSlice` shipped one id twice, and the restore
+      // died on `LinkConfigError: unique-order` from `reconcileParentTargets`
+      // (measured content ids [node-1, node-2, node-3, node-4, node-5, node-4,
+      // node-3] — the seam-wired def-root and its def-child each twice), i.e. the
+      // page could not be restored AT ALL. `sliceSet` in `serializeSlice` is
+      // instance-membership, so a duplicate there is never a second element; it
+      // is a corrupt document.
+      //
+      // NOT deduped, deliberately: the authored ROOT still ships twice (as
+      // `doc.template` AND as its own `allNodes()` entry inside `content`), which
+      // is the intended shape (`RESTORE-REFUSES-NOT-EMPTIES` clause (1)'s
+      // one-occurrence template exemption is written around it). This loop only
+      // stops a node being pushed a SECOND time, which is a different thing from
+      // the root's template/content pair.
+      const kidSet = new Set(kids)
+      for (const p of protoSet) {
+        if (p === root || kidSet.has(p)) continue
+        kids.push(p)
+        kidSet.add(p)
+      }
       const snapshot = serializeSlice(root, kids) as never
       const baseBytes = Supervisor.estBytes(snapshot)
       const journalBytes = Supervisor.estBytes(this.journal.slice(0, preLen))
