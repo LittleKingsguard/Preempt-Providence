@@ -14,7 +14,7 @@ import { createClient } from './client.js'
 import type { ClientAPI } from './client.js'
 import { makeHandlerContext, dispatchPhase, dispatchPhaseForNodes, dispatchEvent } from './handlers.js'
 import type { HandlerContext, HandlerPhase, HandlerResult } from './handlers.js'
-import { unregisterContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin, drainPendingDestroy, defRootPrototypeEntries, defPrototypeEntries, scopeOf } from './registry.js'
+import { unregisterContentNode, registerContentNode, resolveNodeRef, evictDestroyedNode, onNodeFinalized, markCascadeExplicit, mintedByOrigin, drainPendingDestroy, defRootPrototypeEntries, defPrototypeEntries, scopeOf } from './registry.js'
 import type { GraphScope } from './registry.js'
 import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './resolve.js'
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
@@ -963,12 +963,45 @@ export class Supervisor {
    *  cannot interleave (the drain ran synchronously). Re-runnable: a second
    *  restore drains the first restore's nodes the same way. */
   private _restoreBase(snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown }): void {
+    // step 0 — RESTORE-INTEGRITY (b): a restore NEEDS this supervisor's hub,
+    // and it must refuse BEFORE the eviction below. The seeds are built with
+    // `new Node(d, hub, …)`: with no hub their placement/component anchors
+    // cannot rejoin any shared `Link`, so the re-seed is impossible — while the
+    // eviction (step 1) has already dropped every pre-base node from
+    // `this.nodes`, i.e. a hub-less restore used to EVICT THE WHOLE GRAPH
+    // SILENTLY (`allNodes() === 0`, `replay().status === 'applied'`, no
+    // diagnostic) — total data loss on a documented-legal host shape (a
+    // hub-less `Supervisor` is normal for a single-graph host). Refuse LOUDLY
+    // and keep the graph untouched. A hub is NOT minted on demand: the hub IS
+    // the graph's identity (same-name shared Links), so minting one here would
+    // silently change identity semantics and needs its own gate.
+    const hub = this.hub
+    if (!hub) {
+      console.warn(
+        "restore-refused-no-hub: a condensed-base restore needs the supervisor's hub to re-seed the graph (construct it as `new Supervisor({ hub: createLinkHub() })` and translate with the same hub); without it the restored seeds cannot rejoin the shared Links, so the graph would be EVICTED and left EMPTY. Restore refused — the current graph is kept as-is",
+      )
+      return
+    }
     // step 1 — drain + evict every pre-base node (synchronous critical section).
     // DEFECT-A fix (2026-08-25, X19/X20): drain only THIS scope's pending
     // queue — an isolated graph's restore must never finalize another graph's
     // nodes (a shared/default supervisor has one scope, so no behavior change).
     drainPendingDestroy(this.graphScope ?? undefined)
     for (const n of [...this.nodes.values()]) {
+      // RESTORE-PATHKEY-DUPLICATION: dropping the evicted generation from
+      // `this.nodes` does NOT take its anchors off the HUB-SHARED per-name
+      // placement `Link`, so the re-seeded generation joins a Link that still
+      // holds the old one — and `compilePath`'s placement fan-out then walks
+      // BOTH generations, minting one path state per stale `container` anchor
+      // with a `pathKey` byte-identical to the live one (two elements on one
+      // wire; states and anchors grow by one generation per restore).
+      // `destroy()` is the live node's own detach primitive: it removes THIS
+      // node's `content`/`container` anchors via `removeAnchor` (never
+      // `link.destroy()` — the Link is shared, so other producers/consumers
+      // must keep their anchors) and dissolves the node's own per-node family
+      // links, which also marks the generation for the sweep (terminal, so the
+      // leaked generation stops being reachable from the shared Link).
+      n.destroy()
       evictDestroyedNode(n)
       this.nodes.delete(n.id)
     }
@@ -976,8 +1009,6 @@ export class Supervisor {
     // step 2 — the §3 recipe (D1: the round-trip, executed in-process).
     // The template (root) seeds FIRST, then the content states (the §3
     // ordering — a def-root must precede its def-children).
-    const hub = this.hub
-    if (!hub) return
     const doc = snapshot as unknown as { template: unknown; content: unknown[] }
     const seeds: Node[] = []
     const scope = this.graphScope ?? undefined
@@ -986,6 +1017,21 @@ export class Supervisor {
     reconcileParentTargets(seeds)
     reRegisterDefPrototypes(doc as never, hub, seeds as never[], scope)
     for (const n of seeds) this.registerNode(n)
+    // RESTORE-INTEGRITY (a) — re-establish `contentNodes` scope membership.
+    // `registerContentNode` is called by TRANSLATE/PAYLOAD only, so a restored
+    // content root used to come back WITHOUT it: `state` still reads 'in-tree'
+    // (the token is serialized with the seed), but once the node leaves the
+    // tree the sweep's `isContentNode` exemption is gone and the payload-owned
+    // root is FINALIZED where it used to persist ("payload-owned content
+    // persists (placement may return)"). A content root is the node whose
+    // FAMILY parent anchor targets the 'contentNodes' token — the same test
+    // `node.state` uses (`stateFrom`); scoped through `scopeOf(node)` by
+    // `registerContentNode` itself, so the seed's own graph scope is honored.
+    for (const n of seeds) {
+      const child = n.childAnchor()
+      const parentAnchor = child ? child.link.anchorsOf('parent')[0] : undefined
+      if (parentAnchor !== undefined && parentAnchor.target === 'contentNodes') registerContentNode(n)
+    }
     // step 3 — re-mint rows per the batches records (step 4.5 of the §3
     // recipe; fresh ids — the serialize.md §4 residual). Runs with the
     // journal suppressed — the restore must not grow the journal.
