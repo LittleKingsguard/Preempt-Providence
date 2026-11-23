@@ -19,6 +19,14 @@ to pick up next.
 > pass-2). **`H-2` REJECT** — a dispatch-time `ref` resolver forks the D2 scope-keyed def registry, puts
 > containment outside the `try`, and would formalise a **live silence**: a body-less handler is already
 > accepted, skipped at dispatch, and still emitted as an `on:<event>` listener.
+> **✎✎ ANSWER RECEIVED 2026-11-23** — `docs/handoffs-answer-modularity-2026-11-23.md` (delivered into this
+> tree). It answers P-8 (**IN-PROCESS composed envelope** → the def-registry row is MOOT and `H-2` is **WITHDRAWN**),
+> retires their `H-1` reproduction (confirming our premise finding), reproduces **`ATTACH-UNREGISTERED-SILENT-NOOP`
+> exactly**, and brings **two new items**: `POST-BOOTSTRAP-EMIT-DROP` (the first post-bootstrap structural change
+> over an authored consumer zeroed the render **4 → 0** — may outrank the whole queue) and
+> `ORPHAN-EMIT-TOP-LEVEL-LEAK` (carve-out (b) emits a detached top-level sibling; the pin's wording is wrong).
+> Our reply's §1.1 recipe was also corrected — **a freshly translated node needs detach-then-attach**, it rejects
+> `single-parent` otherwise. **The owner owes: the queue order, and a request for their probe arm** (offered in §4).
 > **THE QUEUE, in order (each red-first, no implementation in the same pass):**
 > **(1) R-2a** `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP** — the gate's **head item**; the real
 > blocker for the downstream's module activation. Probes P-1 (red) + P-2 (the registration counter-probe;

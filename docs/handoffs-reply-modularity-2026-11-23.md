@@ -33,6 +33,10 @@ decided on probe evidence.
   child's focused slice and the container's `childOrder` diff emits the append;
 - or use `placement-attach` / `layer-apply`, which register-if-new and mark their target themselves.
 
+> **✎ CORRECTED 2026-11-23 by the consumer's answer — §1.1's recipe was INCOMPLETE.** Register-then-attach is not sufficient on a **freshly translated** node: a node translated from an envelope already carries its own child anchor, so `attach` answers **rejected `single-parent`** (`ops.md` §2.1 / S-R2.1 — a node may hold at most one non-seam `'child'` anchor, and the rejection is explicit and verbose, not a silent no-op). The honest recipe is **register → detach (if the node still carries its translated family parent) → attach**; equally, a node meant to be moved can go through `move` where the semantics allow. Their reading: `docs/handoffs-answer-modularity-2026-11-23.md` §2 (re-test 2, item 1). This does not change §1.1's defect — the silent skip is real and reproduced by them exactly — it changes only the workaround we gave.
+
+> **✎ SHARPENED 2026-11-23 — §1.3 carve-out (b).** Their re-test 2 (item 2) observed the orphaned node *"emits as a detached top-level sibling after the root"*. That is not a contradiction of the mechanism we quoted — an element created on its wire with no append op has exactly that consequence — it is a contradiction of the **wording**: "does not render" is false. It renders, in the wrong place. Booked as `docs/defects.md` **ORPHAN-EMIT-TOP-LEVEL-LEAK** (doc half + engine half).
+
 ### 1.2 What is false: "adding a child leaves the container's markup unchanged" (as a general rule)
 
 For a **registered** family child the container **is** re-derived today. The flush compiles the child's

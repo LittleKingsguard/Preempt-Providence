@@ -389,6 +389,28 @@ Each line names the **enforcement** that would catch a breach, so a later unit k
 
 ---
 
+## 10. POST-GATE — the consumer's answer (`docs/handoffs-answer-modularity-2026-11-23.md`, 2026-11-23)
+
+The consumer returned a measured answer to our reply. It changes **dispositions**, not the verdict's reasoning:
+
+| Item | Effect on this record |
+| --- | --- |
+| **P-8 ANSWERED — the module graph is an IN-PROCESS composed envelope** (never persisted) | **R-6 is DEAD** (`docs/pending.md` def-registry row → MOOT). No persisted-graph consumer exists, so §4.3's parked widening has no home to serve. |
+| **`H-2` WITHDRAWN by the consumer** (their `C-10` re-grained to the §2.3 live-closure recipe) | §5 rows 5 and 7 close. The **rejection stands on independent grounds** — it was never conditional on their need. §8 P-9 is cancelled. |
+| **Their `H-1` reproduction as written: RETIRED** — a registered child DOES re-derive its container, matching §1.1 P-1/§1.2 | The gate's central premise finding is **confirmed by the consumer's own re-test**. |
+| **`ATTACH-UNREGISTERED-SILENT-NOOP` reproduced EXACTLY** by them (`{status:'applied'}`, marked, silent, no render) | R-2a confirmed by a second, independent measurement. |
+| **NEW — `POST-BOOTSTRAP-EMIT-DROP`** (their re-test 1): the first post-bootstrap structural change over an authored content-bearing consumer zeroed the render **4 → 0**; their mechanism: the plain pass-2 compile replaces an ancestor's path-state and no fragment answers the renderer's path-keyed root | **Booked OPEN** in `docs/defects.md`. It is **NOT** the VALUE-PROVIDER-RENDER-DISPOSITION class (that shipped in the version they pin). **A zeroed render may outrank the queue head** — the owner's priority call. Their arm is owed to us (§4 of their answer). |
+| **NEW — `ORPHAN-EMIT-TOP-LEVEL-LEAK`**: carve-out (b) does not "not render" — the orphaned node emits as a detached top-level sibling | **Booked OPEN.** The pin's **mechanism** is unchanged; its **wording** is wrong. Doc half can ride R-1; the engine half (should emit drop an unappended non-root?) is a separate owner question. |
+| **`attach` on a freshly translated node** rejects `single-parent` — detach first | Our **reply §1.1 recipe was incomplete** and is corrected in place. Not a defect: the single-parent rejection is pinned and explicit. |
+
+**What still stands from the gate unchanged:** both asks remain **REJECT as written** for the reasons in §4 — the
+consumer's withdrawal of `H-2` does not rehabilitate it, and their retirement of the `H-1` reproduction confirms the
+premise finding that grounded R-1/R-2a. **The queue's head may now be `POST-BOOTSTRAP-EMIT-DROP` rather than
+`ATTACH-UNREGISTERED-SILENT-NOOP`** — a silent no-op is bad; a zeroed render is worse. That reordering, and the request
+for their probe arm, are the owner's call.
+
+---
+
 **Verdict, one line.** `H-1b` is **REJECT as written** (the capability exists, and the asked shape is the
 prohibition) → replaced by **ACCEPT-NOW** `ATTACH-UNREGISTERED-SILENT-NOOP` + the stated re-emit
 sentence, with `Supervisor.invalidate` **approved only on P-5's measurement**; `H-2` is **REJECT as
