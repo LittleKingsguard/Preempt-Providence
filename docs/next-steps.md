@@ -36,6 +36,12 @@ to pick up next.
 > decides all resolver work), **Q4** (may a host-injected closure reverse as its source text?), **Q5**
 > (attach: register vs reject), **Q6** (is the re-emit sentence a decision row or only a recipe?) and
 > **Q9** (how the refusal is communicated downstream — a redirect, not a closing).
+> **REPLY TO DOWNSTREAM: `docs/handoffs-reply-modularity-2026-11-23.md`** — written 2026-11-23 on the
+> owner's instruction: a redirect (not a closing), carrying the register-then-attach workaround, the
+> stated re-emit sentence with both carve-outs, the three host-owned-closure recipes, the two premise
+> corrections, the reverse-emission conflict, what upstream will fix in order, and the ONE question back
+> to them (persisted JSON or in-process envelope — the probe that decides R-6). Copying it into the
+> downstream tree is that tree's own act; it is not delivered from here.
 > **Two facts not to re-derive:** `H-1`'s "the re-emit cannot be forced" is **not established**; `H-2`'s
 > "a handler body is only a STRING" is **false at the API level**.
 
