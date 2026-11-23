@@ -51,10 +51,11 @@ zero diagnostics. Measured: 5 nodes in, 0 nodes out, no warn.
   re-applying them would double-apply a `rows-mint`. If your host relied on the old silent fall-through, it must
   now branch on `'no-op'`.
 
-**The known trigger today, so you can recognise it rather than debug it:** a page whose def is **seam-wired**
-(`component: [{ target: 'children', reference: <def> }]`) ships that node **twice** in the condensed base, so its
-restore is refused until `CONDENSE-CENSUS-NO-DEDUPE` lands. The graph survives; the restore does not happen. That
-is our defect, not your data.
+**A trigger that is now FIXED, recorded so a stale release note does not mislead you:** a page whose def is
+**seam-wired** (`component: [{ target: 'children', reference: <def> }]`) used to ship that node **twice** in the
+condensed base, so its restore was refused. `CONDENSE-CENSUS-NO-DEDUPE` (FIXED 2026-11-23, before this release) makes
+the census dedupe by node identity, so **such a page restores normally** — and its def-root/def-child come back
+registry-only (the pinned live shape) and re-wire on compile, so do not read the smaller `allNodes()` count as a loss.
 
 ## 2a · DELTA (same day, after our own gate) — §1's "no detection" is SUPERSEDED
 
