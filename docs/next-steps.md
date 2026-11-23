@@ -8,6 +8,59 @@ circled back to on resolution. Parked/pending decisions and speculative
 proposals live in `docs/pending.md` — this file is the work queue of what
 to pick up next.
 
+## ✎✎ CURRENT UNIT — `RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s SWALLOW half (owner-queued 2026-11-23; NOT STARTED)
+
+> **Why first, in one line:** today **any** failure inside a condensed-base restore is silent **total graph loss** —
+> `allNodes() === 0`, `replay().status === 'applied'`, **no diagnostic** — because `_restoreBase` evicts the graph
+> *before* it knows the snapshot will re-seed, and `replay` wraps the call in a bare `try/catch {}`
+> (`src/core/supervisor.ts:1672-1685`). This is a loud-not-silent fix in the same family as the landed hub-less refusal.
+>
+> **RED SET FIRST (no `src/**` in that pass).** New file `tests/e2e/restore-refusal.test.ts`. Drive a **real**
+> condensed base: one shared `createLinkHub()` for `translateLegacy`, `new Supervisor({hub, maxJournalLength: 5})` and
+> the re-seed; register the translated nodes; ~35 `state-slice` `props` writes; `await sup.flush()`; two
+> `setTimeout(0)` turns; **assert `journalEntries().basePresent === true` before `replay()`** (a skipped condense
+> makes the case pass on nothing — that mistake was already made once). Model: `tests/e2e/restore-integrity.test.ts`.
+> Then make the restore fail, by whichever is authorable through the public surface: **(1)** the known real one — a
+> `component: [{reference, target: 'children' | 'type'}]` seam on a def ships a seam child anchor and trips the
+> post-seed `state === 'prototype'` check (`serialize.ts:539`); or **(2)** a crafted snapshot, if one can be handed to
+> `replay`. Assert **all three**: (i) `allNodes()` is **NOT empty** and its in-tree id set equals the pre-restore
+> census; (ii) **exactly one** `console.warn` naming the failure (flatten args; any wording with `restore` + a failure
+> word); (iii) `replay().status` is **not** a plain success — if `UndoRedoReport`'s vocabulary
+> (`'applied' | 'no-op' | 'base-boundary'`) admits nothing honest, keep `'applied'`, rely on the warn, and **say so in
+> the row**.
+>
+> **THE FIX (green), in preference order:** **(1)** reorder so **nothing that can throw runs after the eviction** —
+> `loadState`, seed construction, `reconcileParentTargets` and the census-tripwire **pre-check** all complete before
+> the `this.nodes` eviction loop; **(2)** `replay`'s bare `catch {}` becomes warn + keep-what-is-there (mirror
+> `restore-refused-no-hub`: one warn, graph untouched, `return`) — the swallow must never be the only thing between a
+> host and an empty graph; **(3) do NOT** fix the seam strip here (row (a) half: key the strip on `options.seam`
+> instead of the derived `state`).
+>
+> **Must not break:** `restore-integrity` 7/7, `restore-links` 5/5, `post-bootstrap-emit` 27/27,
+> `unit/journal-condensing`, and the hub-less refusal's single-warn shape. Trio + `npm run demo:smoke` before reporting.
+
+## ✎✎ THEN — the `0.6.0` cut (prepared, ON HOLD by the owner)
+
+> `package.json` is already `0.6.0`; `docs/releases.md` has the 0.6.0 row (contents **by reference**) and the **0.5.2**
+> landing duty is paid; `docs/decisions.md` has `RELEASE-0.6.0`. **Three provenance cells read `PENDING`.** To cut: tag
+> `v0.6.0` on the release commit and fill tag / **full 40-char commit** / date **in the same pass** (AGENTS item 12),
+> then publish. **Operational note:** npm cannot use `~/.npm` under this file sandbox — use
+> `npm_config_cache=/tmp/npmcache` (or an escalated run). Gate: `prepublishOnly` = `npm test && npm run typecheck`;
+> `prepack` = clean+build; `npm pack --dry-run` measured 103 files / 289.2 kB at prep.
+> **Landed AFTER the prep, so the release row must name them by reference:** the three restore items (`b502697` —
+> `DESTROY-SHARED-LINK-RESIDUE`, `RESTORE-REGISTERS-PROTOTYPES`, `RESTORE-PLACED-CONTENT-MEMBERSHIP`) — and note that
+> **`isContentRoot` is a `SerializedRenderDoc` addition**, i.e. a public shape the row must call out.
+
+## ✎✎ OPEN RESIDUALS, in value order
+
+> 1. **`CONDENSE-BASE-ALIASES-LIVE-GRAPH`** — contract decision (JSON round-trip of the base vs targeted deep copy); has an
+>    undo-history consequence and a JSON caveat to verify against value-provider/handler-seam cases.
+> 2. **`RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s (a) half** — key the seam strip on `options.seam`, not on the derived `state`.
+> 3. **`PATH-MODE-DIAGNOSTIC-UNGUARDED`** + **`COMPILE-MODE-OVERRIDE-ORDERING`** — both small, both gate-free.
+> 4. **`ORPHAN-EMIT-TOP-LEVEL-LEAK`** (family-mode limit; `E4` parked behind a family-state child-wire contract),
+>    **`R-VPD-1`**, **`R-VPD-2`**, **`R-VPD-4`**, **`GRAFT-RESIDUALS`** (a), the silent **`chosen`** prune.
+> 5. **Q4's resolution half is CLOSED** — `docs/decisions.md` `PATH-MODE-RESOLUTION-UNIVERSE`; do NOT reopen it.
+
 ## ✎ GATED 2026-11-23 — the `modularity` handoff (`H-1`/`H-2`): BOTH ASKS REJECTED AS WRITTEN; the queue below replaces them
 
 > **VERDICT:** `docs/specs/handoffs-review-11.md` (three-agent gate, AGENTS.md item 9 — validity +
