@@ -381,6 +381,22 @@ function baseFrom(
         warn(warnings, 'handler-body-invalid', hp, 'body must be a function or a function-source string; handler definition skipped')
         return
       }
+      // HANDLER-BODYLESS-SILENT-DEAD (R-2b) — an entry that names an
+      // `event`/`phase` but authors NO body was admitted untouched (the NP11
+      // guard above tests only a body that is PRESENT and wrong), is skipped
+      // at dispatch (handlers.ts — `typeof handler.body !== 'function'`) and is
+      // STILL published as a live-looking `on:<event>` listener at emit.
+      // Warn + KEEP, never reject: the shape is tolerated today, so dropping
+      // it would be breaking; emit is NOT filtered (that is a behaviour
+      // change) — the warn makes the existing behaviour honest. An inline
+      // entry can never be legitimately filled later: the def seam resolves
+      // from component ANCHORS and installs its own layer, it never reads the
+      // authored `handlers[]`, so "a def may supply the body" cannot apply.
+      if (h.body === undefined && (h.event !== undefined || h.phase !== undefined)) {
+        warn(warnings, 'handler-body-missing', hp, h.event !== undefined
+          ? `handler has no body, so it cannot dispatch; the handler is kept and its on:${String(h.event)} listener is still emitted`
+          : 'handler has no body, so it cannot dispatch; the handler is kept (a phase handler publishes no on:<event> listener)')
+      }
       // FORMAT MARKER (decision 4) — inline bodies default to MODERN
       // (unwrapped, the demo surface's convention); an explicit 'legacy'
       // format wraps the body via the bridge (the (event, context) arg order
