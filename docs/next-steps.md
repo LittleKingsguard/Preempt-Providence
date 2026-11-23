@@ -8,6 +8,29 @@ circled back to on resolution. Parked/pending decisions and speculative
 proposals live in `docs/pending.md` — this file is the work queue of what
 to pick up next.
 
+## ✎ INTAKE 2026-11-23 — the `modularity` handoff (`H-1`/`H-2`) — **THE GATE IS THE QUEUED ITEM**
+
+> **QUEUED, AWAITING THE GATE, NO CODE-SIDE WORK.** Downstream `Provident-Electron`
+> delivered `docs/handoff-modularity-2026-11-20.md` (committed 2026-11-23): `H-1` a
+> post-compile structural change + a public node-keyed invalidation entry; `H-2` a
+> `handlers[].ref` host resolver. Triage (evidence-anchored, **not a verdict**):
+> **`docs/specs/handoffs-triage-modularity-2026-11-20.md`**. **The owner chose gate-first
+> on 2026-11-23**: run the three-agent gate (AGENTS.md item 9 — validity + critique in
+> parallel, then change-analysis on both outputs) over `H-1b` + `H-2`; the verdict lands
+> as **`docs/specs/handoffs-review-11.md`**; nothing upstream changes before that verdict
+> and a go-ahead.
+> **Booked rows:** `docs/pending.md` `H-1b` + `H-2` (the two asks with their recorded
+> constraints) and `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP** — a genuine
+> silent no-op found *inside* `H-1`'s evidence (`attach` never registers its node, against
+> a flush that silently skips unregistered ids) but **independent of either ask**, queued
+> behind the gate **by the owner's choice, not parked**; its fix shape needs a red-first
+> probe first.
+> **Two facts the next agent must not re-derive:** (1) `H-1`'s premise "the ancestor's
+> re-emit cannot be forced" is **not established** — the composition already exists and is
+> merely undocumented; (2) `H-2`'s premise "a handler body is only a function STRING" is
+> **false at the API level** — function values are accepted, and the need is served
+> in-process by `state-slice handlers` / `layer-apply` / `addLayer`.
+
 ## ✎ LANDED IN TREE (UNCOMMITTED) — VALUE-PROVIDER-RENDER-DISPOSITION (opened 2026-11-13 as a downstream finding; implemented + documented 2026-11-13; **release 0.5.2 pending the owner**)
 
 > **✔ LANDED 2026-11-13 — the steps 1–4 of the plan below are DONE and VERIFIED (supervisor runs, this pass):** red set `tests/unit/value-provider-render-disposition.test.ts` went **6 red → 12/12 green**; the implementation is `src/core/node.ts` (dedicated `valueRecord` marker + the hoisted-seam emit gate + the `value-record-drop` warn) and `src/core/ops.ts` (`mintRowNode` sets the marker); §4.1 re-pins are `tests/unit/render.test.ts` (FRK-H1 `actionable` **1 → 2**) and `tests/unit/pass2-fit-reference-scope.test.ts` (`FROZEN_GOLDEN` **11 → 15** states, `#f:` numbering re-verified unchanged); `npm run typecheck` **clean**, `npm test` **82 files / 1442 tests + 2 files / 13 tests, all green**, `npm run demo:smoke` **exit 0** with **48 banners `0 failed`**, `[runtime-fork:growth]` **5.40×/5.75×** against the 10× bound, derived pins **0.99/0.91/1.06** and **1.50/0.79/0.40** against 2.5×, and the rows census **`fanoutStates=8 fanoutRows=8` exactly** (the marker's falsifier). Step 5 (docs) is also done: `docs/skills/designing-pages.md` (incl. §14.10 item 1 — the only normative author statement — and a new §11 matrix row), `docs/specs/node.md:288`/`:412`, `RENDER_PROCESS_NOTES.md` **§10.10.13**, a FIXED row + `R-VPD-1/2/4` rows in `docs/defects.md`, the four demo sources, and the 13 regenerated `demo/*.html` artefacts (which had **shipped the defect**: `showcase-root` occurred zero times in `feature-showcase.expected.html`). **ONE DEVIATION RECORDED:** the marker is declared without an initializer (`undefined`, not `false`) — semantics identical, better for VPD-11's non-forgeability assert; spec §6 `AM-9`. **REMAINING: nothing in code — only the owner's commit/tag/publish.** The release records are WRITTEN in this pass: `package.json` **0.5.2**, the `docs/releases.md` **0.5.2 index row** and the `docs/decisions.md` **`RELEASE-0.5.2`** index row (both with `PENDING (filled at commit time)` tag/commit/date cells — no hash or date is asserted, AGENTS item 12). The two flagged stragglers are **ANNOTATED, not rewritten** (frozen round-4 probe output): `scripts/stress-probes/RESULTS-round4.md:137` + `run-all-round4.mjs:772` now carry a dated note that the "F3-dropped" LABEL is retired while the measurement and its reverse-emission substance stand (reverse is emit-gate-independent, spec §2 C4/AM-6). **✔ ONE RED CAUGHT AND CLOSED IN THE SAME PASS:** verification then reproduced the phase-B failure (`FRS-9b` + `FRS-9g`) **with its assertion text attached**, and the diagnosis **RETRACTED the load-spike hypothesis first filed for it** — the cause was arithmetic, not timing: the test's printed-precision window multiplied the exact derivative by an extra `1/divisor`, so the margin arm's window was **6×** too tight (per-node **4×**, latent) and a correctly rounded margin fell outside its own window for **2 789 of 80 001** swept true ratios (~3.5% of the band — which is exactly what made it look intermittent, since the live pass2-ratio differs run to run). **Fixed test-side** (weights → the literal `1`) and **proved** by a new swept case **`FRS-9h`**: margin max gap `0.007656` vs window `0.007862`, per-node `0.005` vs `0.00625`, pass2-ratio `0.009268` vs `0.009736` over 1 203 401 points, fabricated arms still ≥ **71×** the window (floor 10×), and re-injecting the old weights turns it RED. Phase B is now **14/14** across 1 + 6 runs; `npm test` exit 0; `npm run typecheck` exit 0. Recorded as **FIXED** row `FRS9-PRINTED-WINDOW-UNDERCOUNT` (the original row kept as a retraction pointer), with one residual filed: the per-node fabricated arm stops being distinguishable once the true pass2-ratio reaches ≈ **8.00** — that needs the *fabrication* re-picked, never the window widened. **No engine behaviour changed**, and the smoke's growth guard passed on every run.
