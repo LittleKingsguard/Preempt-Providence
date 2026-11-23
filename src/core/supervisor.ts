@@ -1308,6 +1308,25 @@ export class Supervisor {
         this.emitStructure('placement-attach', node!.id)
         this.markPass2(container.id, trigger)
         this.markPass2(node!.id, trigger)
+        // PLACEMENT-SECOND-CONTAINER-STALE (`docs/defects.md`; gate record
+        // `docs/specs/orphan-emit-gate-review.md` §5 D-9, the owner's ruling:
+        // "if two nodes share a placement name, they both populate with nodes
+        // targeting that placement"). The marked set above is only the
+        // container the HOST passed, so every OTHER offering container is
+        // never re-derived and keeps the `childOrder` it minted BEFORE this
+        // attach — it can never append the added node. Widen the PASS-2
+        // marking (only) to every offering container of the requested name:
+        // the per-name placement Link holds one `container`-role anchor per
+        // offering container, and `anchor.owner` is the node holding it. Same
+        // coalesced tick, same trigger; the op's reported `dirtied` set and
+        // its journal entry stay byte-identical (PBED-12b pins them).
+        const others = new Set<NodeId>([container.id, node!.id])
+        for (const a of hub.linkFor(res.attachZone, 'placement').anchors) {
+          const owner = a.role === 'container' ? a.owner : undefined
+          if (!owner || others.has(owner.id)) continue
+          others.add(owner.id)
+          this.markPass2(owner.id, trigger)
+        }
         return { status: 'applied', journalId: entry!.id, dirtied: [container.id, node!.id] }
       }
       if (op.kind === 'attach') {

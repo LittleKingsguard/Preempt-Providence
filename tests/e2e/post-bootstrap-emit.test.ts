@@ -1377,3 +1377,473 @@ describe('PBED-12 — the family-mode orphan: the op-site diagnostic (gate §5 D
     ).toEqual([])
   })
 })
+
+// ============================================================================
+// PBED-13 — TWO OFFERING CONTAINERS: BOTH must populate
+//          (`PLACEMENT-SECOND-CONTAINER-STALE`; the owner's 2026-11-23 ruling)
+// ============================================================================
+//
+// **THE OWNER'S RULING** (`docs/defects.md` row
+// `PLACEMENT-SECOND-CONTAINER-STALE`, verbatim): *"If two nodes share a
+// placement name, they both populate with nodes targeting that placement."*
+//
+// So the MULTIPLICITY IS THE DESIGN, not the defect: a graft whose `content`
+// anchor targets a name that TWO containers offer mints ONE placement state per
+// offering container (2 states, 2 elements). What is broken is the POPULATION.
+//
+// **THE MEASURED DEFECT** (the row's probe, reproduced by this construction):
+// the `placement-attach` op dirties `[container, node]` — only the container
+// the HOST passed — so every OTHER offering container is never re-derived and
+// keeps the `childOrder` it minted BEFORE the graft existed. Today: the diff
+// emits exactly ONE `append` (`owner` = `#zoneA`'s wire), `#zoneB`'s html slice
+// never contains the graft, and the second graft element is created but never
+// appended — a **2-root** document stream.
+//
+// **THE FIX SHAPE THE OWNER RULED:** widen the dirty set — re-derive EVERY
+// offering container. The op SIGNATURE does not change. This case therefore
+// never asserts the `dirtied` set of the op (that is the one reading the fix is
+// allowed to move), only the document-level consequences a reader of the ruling
+// can rely on.
+//
+// **THE CONSTRUCTION'S ONE NON-OBVIOUS REQUIREMENT (a setup trap, not a
+// behaviour):** the page AND the graft must be translated on ONE
+// `createLinkHub()`. `placement-attach` mints the graft's `content` anchor
+// through `node.hubFor ?? container.hubFor ?? this.hub`, and each container's
+// `container` anchor sits on its own tree's per-name placement Link — so a
+// graft translated on its OWN hub cannot see the containers at all: its walk
+// enumerates ZERO placement branches, the multiplicity collapses to one
+// unkeyed state, and this case would measure nothing. PBED-13a asserts the
+// shared Link explicitly (and `GRAFT-ROOT-PATHKEY-COLLISION` is what an
+// un-shared hub surfaces as instead, masking this defect entirely).
+//
+// WHAT THIS BLOCK PINS, per sub-case (assertions ordered fixture-first):
+//  - **PBED-13a** FIXTURE + THE INTENDED MULTIPLICITY: both sibling containers
+//    carry a `container` anchor for the zone on ONE placement Link, the graft
+//    carries a `content` anchor for it, the graft mints exactly 2 placement
+//    states (one per offering container) and emits 2 elements on their wires.
+//    **GREEN today** — this half pins the ruling.
+//  - **PBED-13b** THE POPULATION: exactly 2 `append` ops whose child is a graft
+//    wire — one per offering container — and each offering container is an
+//    `append` owner exactly once. **RED today** (1 append).
+//  - **PBED-13c** THE DOCUMENT: the graft sits INSIDE each offering container
+//    (tag-depth-matched html slice) and the document stream is ONE tree, not
+//    the 2-root forest. **RED today**.
+//  - **PBED-13d** CONTROL — FAMILY mode keeps `ORPHAN-EMIT-TOP-LEVEL-LEAK`'s
+//    documented limit (0 appends, both containers empty) — untouched by this
+//    fix; `PBED-12c` remains the single-container family pin and still holds.
+//    **GREEN today.**
+//  - **PBED-13e** CONTROL — the SINGLE-container case the widened rule must not
+//    change: 1 append, 1 element, 1 document root (`PBED-10` owns the shape).
+//    **GREEN today.**
+//
+// RED FIRST (AGENTS.md item 8): written before the fix, against a tree where
+// the defect is live. No `src/**` change accompanies this file.
+
+/** The zone BOTH sibling containers offer in PBED-13. */
+const PBED13_ZONE = 'zone'
+
+/**
+ * The PBED-13 authored page: `div#root` with one `<aside>` sibling per
+ * `containerIds` entry, EVERY one of them a producer of the SAME zone.
+ *
+ * `placement: { placementName }` mints the `container`-role anchor
+ * (`translate.ts:1036`); `targetPlacement` would mint the consuming side
+ * instead. Sibling duplication is LEGAL — the §1.3 veto
+ * (`node.ts` `ancestorConsumesZone`) fires only against an ANCESTOR that
+ * CONSUMES the zone, so neither sibling vetoes the other (no
+ * `placement-name-vetoed` here).
+ */
+function zoneSiblingEnvelope(containerIds: string[]): LegacyInitialData {
+  return {
+    template: {
+      root: {
+        type: 'div',
+        css: { id: 'root' },
+        props: { id: 'root' },
+        children: containerIds.map((id) => ({
+          type: 'aside',
+          css: { id },
+          props: { id },
+          placement: { placementName: PBED13_ZONE },
+        })),
+      },
+      children: [],
+    },
+    content: [],
+    clientConfig: { runInstantiation: true, runRendering: true },
+  }
+}
+
+/**
+ * The graft, translated ONTO THE PAGE TREE'S HUB (see the block header's
+ * "one non-obvious requirement"): a separately translated tree ROOT placed into
+ * the authored page's containers by name. It is deliberately NOT
+ * `consumerNode()` — that helper translates on a hub of its own, which is the
+ * right shape for PBED-10..12 (one container, whose anchor the op can reach
+ * through `graft.hubFor`) and the WRONG one here.
+ */
+function graftOnHub(cssId: string, hub: ReturnType<typeof createLinkHub>): Node {
+  return translateLegacy(
+    {
+      template: { root: { type: 'span', props: { id: cssId } } },
+      content: [],
+      clientConfig: { runInstantiation: true, runRendering: true },
+    },
+    { hub },
+  ).root
+}
+
+interface RenderRead {
+  els: MinimalElement[]
+  ops: RenderOp[]
+  html: string
+}
+
+interface ZoneRun {
+  sup: Supervisor
+  /** the offering containers, in `containerIds` order. */
+  containers: Node[]
+  graft: Node
+  boot: RenderRead
+  /** the diff render after the op + its settled flush (what the adapter applies). */
+  post: RenderRead
+  /** a FRESH-baseline render over the same live states (the forest census). */
+  doc: RenderRead
+  res: ApplyOutcome
+  /** the graft's live states as the HOST holds them. */
+  graftStates: CompiledState[]
+}
+
+/**
+ * ONE PBED-13 run: authored page with `containerIds.length` sibling containers
+ * all offering the same zone → the tree's own canonical bootstrap (`compilePath`
+ * per node in `path` mode, one family compile in `family` mode) → register the
+ * graft → ONE `placement-attach` naming the zone, onto the FIRST container →
+ * the supervisor's settled flush → the diff render → a fresh-baseline document
+ * render.
+ *
+ * The supervisor gets the SAME `hub` as both translations, and the mode is
+ * DECLARED (`compileMode`), never inferred.
+ */
+async function zoneRun(opts: { mode: 'family' | 'path'; containerIds: string[] }): Promise<ZoneRun> {
+  const hub = createLinkHub()
+  const tree = translateLegacy(zoneSiblingEnvelope(opts.containerIds), { hub })
+  const sup = new Supervisor({ hub, compileMode: opts.mode })
+  for (const n of tree.nodes) sup.registerNode(n)
+  const containers = opts.containerIds.map((id): Node => {
+    const n = tree.nodes.find((x) => x.css?.id === id || x.props?.id === id)
+    if (!n) throw new Error(`PBED-13 fixture: the envelope has no #${id} node`)
+    return n
+  })
+  const series: HostSeries = {
+    prevStates: opts.mode === 'path' ? bootstrapStates(sup, tree.nodes) : familyBootstrapStates(sup, tree),
+    prevMap: null,
+  }
+  const adapter = new SSRFragmentAdapter()
+  const boot = renderPass(sup, adapter, series)
+
+  const graft = graftOnHub('graft', hub)
+  sup.registerNode(graft)
+  const res = sup.apply({ kind: 'placement-attach', node: graft, container: containers[0]!, names: [PBED13_ZONE] })
+  await sup.flush()
+  mergePass2(sup, series.prevStates)
+
+  const post = renderPass(sup, adapter, series)
+  const graftStates = [...(series.prevStates.get(graft.id) ?? [])]
+  const doc = renderPass(sup, new SSRFragmentAdapter(), { prevStates: series.prevStates, prevMap: null })
+  return { sup, containers, graft, boot, post, doc, res, graftStates }
+}
+
+/** The `owner → child` label of one append pair (a failure message that names
+ *  WIRES, not just counts — the implementer needs to see which container is
+ *  missing). */
+function pairLabel(p: { owner: NodeRef; child: NodeRef }): string {
+  return `${String(p.owner)} → ${String(p.child)}`
+}
+
+/** An offering container's emitted wire in `els` (undefined when it did not
+ *  emit — a FIXTURE break, never a behaviour under test here). */
+function containerWire(els: MinimalElement[], container: Node): NodeRef | undefined {
+  return byNodeId(els).get(container.id)?.wire
+}
+
+/** The authored id of a container, for messages + the html read. */
+function authoredIdOf(n: Node): string {
+  return String(n.css?.id ?? n.props?.id ?? n.id)
+}
+
+describe('PLACEMENT-SECOND-CONTAINER-STALE — a placement name offered by TWO containers must populate BOTH (owner ruling 2026-11-23)', () => {
+  // ==========================================================================
+  // PBED-13a — FIXTURE + the INTENDED multiplicity (GREEN today)
+  // ==========================================================================
+
+  it('PBED-13a the fixture holds and the MULTIPLICITY is intended: one placement state + one element PER offering container (GREEN today)', async () => {
+    const run = await zoneRun({ mode: 'path', containerIds: ['zoneA', 'zoneB'] })
+
+    // ---- (1) FIXTURE PRECONDITIONS — the anchors the construction needs ----
+    expect(
+      run.sup.getCompileMode(),
+      'FIXTURE: the supervisor must be in the DECLARED path mode (the `compilePath` bootstrap) — this case measures the path document',
+    ).toBe('path')
+    expect(
+      run.res.status,
+      'FIXTURE: the placement-attach must be a sanctioned APPLIED op — a rejected op would leave the tree in a shape none of these cases describe (the op SIGNATURE and its applied-ness are unchanged by the ruled fix)',
+    ).toBe('applied')
+    expect(run.containers, 'FIXTURE: the page must author two sibling offering containers').toHaveLength(2)
+    for (const c of run.containers) {
+      expect(
+        c.anchors.filter((a) => a.role === 'container' && a.target === PBED13_ZONE).length,
+        `FIXTURE: #${authoredIdOf(c)} does not OFFER zone "${PBED13_ZONE}" (no single container-role anchor for it) — a sibling that offers no zone is not an offering container, and the multiplicity this case pins cannot exist`,
+      ).toBe(1)
+    }
+    const contentAnchors = run.graft.anchors.filter((a) => a.role === 'content' && a.target === PBED13_ZONE)
+    expect(
+      contentAnchors.length,
+      `FIXTURE: the graft does not TARGET zone "${PBED13_ZONE}" exactly once (content-role anchors found: ${contentAnchors.length}) — the placement-attach must have minted it`,
+    ).toBe(1)
+    // …and every anchor pair sits on ONE per-name placement Link: otherwise the
+    // graft's walk enumerates no container branch at all and the run silently
+    // measures something else (see this block's header).
+    const contentAnchor = contentAnchors[0]!
+    for (const c of run.containers) {
+      const containerAnchor = c.anchors.find((a) => a.role === 'container' && a.target === PBED13_ZONE)!
+      expect(
+        containerAnchor.link,
+        `FIXTURE: #${authoredIdOf(c)}'s container anchor and the graft's content anchor are NOT on the same per-name placement Link — translate the page AND the graft with ONE createLinkHub() and hand that hub to the Supervisor, or the graft cannot see this container at all and this case measures nothing`,
+      ).toBe(contentAnchor.link)
+    }
+    // the two containers RENDER on distinct wires (the appends below are keyed
+    // off those wires, so they must be readable)
+    const wires: NodeRef[] = []
+    for (const c of run.containers) {
+      const w = containerWire(run.post.els, c)
+      expect(
+        w,
+        `FIXTURE: offering container #${authoredIdOf(c)} did not emit — a container that is not in the document cannot receive anything`,
+      ).toBeDefined()
+      wires.push(w!)
+    }
+    expect(
+      new Set(wires.map(String)).size,
+      `FIXTURE: the two offering containers share one wire [${wires.map(String).join(', ')}] — then an "append owner" reading could not tell them apart`,
+    ).toBe(2)
+
+    // ---- (2) THE MULTIPLICITY: INTENDED, and GREEN today -------------------
+    // The owner's ruling makes one state PER OFFERING CONTAINER the design. This
+    // half must stay standing after the fix: a fix that appends one element into
+    // both containers (or otherwise collapses the per-container states) would
+    // satisfy PBED-13b/13c while breaking the ruling.
+    const stateKeys = run.graftStates.map((s) => String(s.pathKey))
+    expect(
+      stateKeys,
+      `the graft minted ${stateKeys.length} placement state(s) for a zone TWO containers offer — one state PER OFFERING CONTAINER is the INTENDED multiplicity (owner ruling: "if two nodes share a placement name, they both populate with nodes targeting that placement")`,
+    ).toHaveLength(2)
+    expect(
+      new Set(stateKeys).size,
+      `the graft's two placement states collapsed onto ONE pathKey [${stateKeys.join(', ')}] — they are supposed to key per offering container`,
+    ).toBe(2)
+    expect(
+      run.graftStates.map((s) => String(s.parent)).sort(),
+      `the graft's placement states do not land on ONE OFFERING CONTAINER each (state.parent is the path's landing owner): expected [#${run.containers.map(authoredIdOf).join(', #')}]`,
+    ).toEqual(run.containers.map((c) => c.id).sort())
+
+    // …and each state emits its OWN element: two elements, on the two states'
+    // wires (an element count of one would mean a state has no element, which
+    // is what a "just append the same wire twice" fix could produce).
+    const graftEls = elsOfNode(run.post.els, run.graft.id)
+    expect(
+      graftEls.map((el) => String(el.wire)),
+      `the graft emitted ${graftEls.length} element(s) for its TWO placement states — one element per state is the intended multiplicity`,
+    ).toHaveLength(2)
+    expect(
+      new Set(graftEls.map((el) => String(el.wire))).size,
+      `the graft's two elements share one wire [${graftEls.map((el) => String(el.wire)).join(', ')}] — then the two offering containers could not own one each`,
+    ).toBe(2)
+    expect(
+      graftEls.map((el) => String(el.wire)).sort(),
+      'the emitted elements are not the minted placement states: every state must emit on its own pathKey wire',
+    ).toEqual([...stateKeys].sort())
+  })
+
+  // ==========================================================================
+  // PBED-13b — THE POPULATION (RED today)
+  // ==========================================================================
+
+  it('PBED-13b BOTH offering containers populate: one `append` per container, the graft as its child (RED today — the second container never receives the node)', async () => {
+    const run = await zoneRun({ mode: 'path', containerIds: ['zoneA', 'zoneB'] })
+
+    // FIXTURE (PBED-13a owns the pin): the multiplicity is present, otherwise a
+    // 2-append reading below could not mean what it says.
+    const graftWires = new Set(elsOfNode(run.post.els, run.graft.id).map((el) => String(el.wire)))
+    expect(
+      graftWires.size,
+      'FIXTURE: the graft must emit one element per offering container (PBED-13a pins it)',
+    ).toBe(2)
+
+    // ---- THE APPENDS: exactly one per offering container -------------------
+    const appends = appendsTo(run.post.ops, graftWires)
+    expect(
+      appends.map(pairLabel).sort(),
+      `the diff emitted ${appends.length} append op(s) for a graft that TWO containers offer (${appends.map(pairLabel).join(' | ') || 'none'}) — the owner's ruling requires BOTH containers to populate; today the op dirties only the container passed to placement-attach, so every OTHER offering container is never re-derived and keeps the childOrder it minted before the graft existed (PLACEMENT-SECOND-CONTAINER-STALE)`,
+    ).toHaveLength(2)
+    expect(
+      appends.map((p) => String(p.child)).sort(),
+      `the appended CHILDREN are not exactly the graft's two emitted wires [${[...graftWires].sort().join(', ')}] — one append per offering container, each owning its OWN graft element`,
+    ).toEqual([...graftWires].sort())
+
+    // ---- …and each offering container is an `append` OWNER exactly ONCE ----
+    for (const c of run.containers) {
+      const wire = containerWire(run.post.els, c)
+      expect(wire, `FIXTURE: offering container #${authoredIdOf(c)} did not emit`).toBeDefined()
+      const owned = appendPairs(run.post.ops).filter((p) => String(p.owner) === String(wire))
+      expect(
+        owned.map(pairLabel),
+        `offering container #${authoredIdOf(c)} is an append OWNER ${owned.length} time(s) — EVERY offering container must append the graft exactly once: the op's dirty set is [container, node] (only the container the host passed), so this container was never re-derived and its stored state still carries its pre-attach childOrder (PLACEMENT-SECOND-CONTAINER-STALE)`,
+      ).toHaveLength(1)
+      expect(
+        graftWires.has(String(owned[0]?.child)),
+        `offering container #${authoredIdOf(c)} appends ${String(owned[0]?.child)}, which is not one of the graft's wires [${[...graftWires].join(', ')}] — this case reads the graft's population, nothing else`,
+      ).toBe(true)
+    }
+  })
+
+  // ==========================================================================
+  // PBED-13c — THE DOCUMENT, html half: INSIDE EACH container (RED today)
+  // ==========================================================================
+
+  it('PBED-13c the rendered HTML: the graft sits INSIDE EACH offering container, not beside it (RED today — #zoneB never receives it)', async () => {
+    const run = await zoneRun({ mode: 'path', containerIds: ['zoneA', 'zoneB'] })
+    const marker = `data-node-id="${run.graft.id}"`
+
+    // FIXTURE: the graft is in the document at all (it is today — as a detached
+    // sibling, which is exactly what the slices below discriminate).
+    expect(
+      run.post.html.includes(marker),
+      `FIXTURE: the graft (${run.graft.id}) is absent from the rendered document — then nothing below can be read (it renders today; PBED-13b owns "in which container")`,
+    ).toBe(true)
+
+    // INSIDE EACH offering container, read through the tag-depth-matched slice
+    // (`outerHtmlOfAuthoredId` — a text marker alone cannot tell "assembled into
+    // the host" from "created, never appended, serialized top-level").
+    for (const c of run.containers) {
+      const authored = authoredIdOf(c)
+      const slice = outerHtmlOfAuthoredId(run.post.html, authored)
+      expect(
+        slice,
+        `FIXTURE: offering container #${authored} is absent from the rendered document (no id="${authored}" opening tag) — the html read is impossible`,
+      ).toBeDefined()
+      expect(
+        slice ?? '',
+        `#${authored} does NOT contain the graft: only the container passed to placement-attach is re-derived, so this offering container keeps its pre-attach childOrder, the graft is created on its own path wire and never appended, and the adapter serializes it OUTSIDE the container (PLACEMENT-SECOND-CONTAINER-STALE; owner ruling: "if two nodes share a placement name, they both populate with nodes targeting that placement")`,
+      ).toContain(marker)
+    }
+  })
+
+  // ==========================================================================
+  // PBED-13d — THE DOCUMENT, stream half: ONE tree (RED today — 2-root forest)
+  // ==========================================================================
+
+  it('PBED-13d the DOCUMENT STREAM is a single tree, not the 2-root forest measured today (RED today)', async () => {
+    const run = await zoneRun({ mode: 'path', containerIds: ['zoneA', 'zoneB'] })
+
+    // FIXTURE: the graft is in the document (PBED-13c owns where).
+    expect(
+      elsOfNode(run.post.els, run.graft.id).length,
+      'FIXTURE: the graft must emit in the path-mode document',
+    ).toBeGreaterThan(0)
+
+    // ONE DOCUMENT: a FRESH baseline (prevMap `null`) — exactly what a brand-new
+    // adapter receives (`PBED-11`'s forest census idiom).
+    const docRoots = treeFromOps(run.doc.ops).map((t) => String(t.wire))
+    expect(
+      docRoots,
+      `the document stream carries ${docRoots.length} roots: [${docRoots.join(', ')}] — the graft element the second offering container never claimed is a TOP-LEVEL SIBLING of the page root (the 2-root forest measured today); ONE root means every graft element was appended by its own container`,
+    ).toHaveLength(1)
+
+    // …and the DIFF ITSELF left nothing created-but-unappended (the
+    // adapter-visible half of the same fact).
+    expect(
+      treeFromOps(run.post.ops).map((t) => String(t.wire)),
+      'the post-bootstrap diff left an element created-but-never-appended — no container in the document claims it (the second offering container never appended the graft)',
+    ).toEqual([])
+  })
+
+  // ==========================================================================
+  // PBED-13e — CONTROL: family mode keeps the DOCUMENTED limit (GREEN today)
+  // ==========================================================================
+
+  it('PBED-13e CONTROL — a family-mode tree keeps ORPHAN-EMIT-TOP-LEVEL-LEAK\'s documented limit: 0 appends, both containers empty (GREEN today)', async () => {
+    // This half is `ORPHAN-EMIT-TOP-LEVEL-LEAK`'s DOCUMENTED LIMIT
+    // (`docs/defects.md`; gate `docs/specs/orphan-emit-gate-review.md` §5 D-3),
+    // UNTOUCHED by the fix this case's other halves ask for: a family-mode
+    // container is not re-minted from the placement registry at all, so
+    // widening the dirty set changes nothing for it. `PBED-12c` remains the
+    // single-container family pin (1 element, 0 appends, a 2-root stream) and
+    // still holds; this is its two-container twin.
+    const run = await zoneRun({ mode: 'family', containerIds: ['zoneA', 'zoneB'] })
+
+    expect(
+      run.sup.getCompileMode(),
+      'FIXTURE: still FAMILY mode — the compile mode is the variable between this control and PBED-13b',
+    ).toBe('family')
+    const graftEls = elsOfNode(run.post.els, run.graft.id)
+    expect(
+      graftEls.length,
+      'FIXTURE: the graft must emit in family mode too (it does — as detached top-level fragments); a zero here would make the append census below vacuous',
+    ).toBeGreaterThan(0)
+
+    // (1) ZERO appends: nothing in the document claims the graft.
+    expect(
+      appendsTo(run.post.ops, new Set(graftEls.map((el) => String(el.wire)))),
+      'a family-mode container APPENDED the graft — that is the FIXED path-mode behaviour (PBED-13b), NOT this documented limit. If this fails, change THIS FILE deliberately: the family-mode leak is a documented limit + an op-site diagnostic (gate §5 D-3) and the pin must be re-stated, never silently re-rendered',
+    ).toEqual([])
+
+    // (2) …and BOTH containers stay EMPTY in the html (neither receives the
+    // node — the same staleness, plus the family limit).
+    const marker = `data-node-id="${run.graft.id}"`
+    for (const c of run.containers) {
+      const authored = authoredIdOf(c)
+      const slice = outerHtmlOfAuthoredId(run.post.html, authored)
+      expect(slice, `FIXTURE: offering container #${authored} is absent from the family-mode document`).toBeDefined()
+      expect(
+        slice ?? '',
+        `#${authored} CONTAINS the graft in family mode — the documented family-mode limit says no container is populated (ORPHAN-EMIT-TOP-LEVEL-LEAK, gate D-3); the path-mode fix must not move this half`,
+      ).not.toContain(marker)
+    }
+  })
+
+  // ==========================================================================
+  // PBED-13f — CONTROL: ONE offering container is unchanged (GREEN today)
+  // ==========================================================================
+
+  it('PBED-13f CONTROL — the widened rule does not change the SINGLE-container case: 1 append, 1 element, 1 document root (GREEN today)', async () => {
+    // `PBED-10` owns the single-container shape's pin; this case only asserts
+    // that the widened dirty set leaves it alone.
+    const run = await zoneRun({ mode: 'path', containerIds: ['zoneA'] })
+
+    expect(
+      run.graftStates.map((s) => String(s.pathKey)),
+      'CONTROL: one offering container must mint exactly ONE placement state',
+    ).toHaveLength(1)
+    const graftEls = elsOfNode(run.post.els, run.graft.id)
+    expect(
+      graftEls.map((el) => String(el.wire)),
+      `CONTROL: the single-container case emitted ${graftEls.length} graft element(s) — the widened rule must not duplicate it`,
+    ).toHaveLength(1)
+    const graftWire = String(graftEls[0]!.wire)
+    const appends = appendsTo(run.post.ops, new Set([graftWire]))
+    expect(
+      appends.map(pairLabel),
+      'CONTROL: the single-container case must still append the graft EXACTLY once (the widened dirty set changes nothing when there is one offering container)',
+    ).toHaveLength(1)
+    expect(
+      treeFromOps(run.doc.ops).map((t) => String(t.wire)),
+      'CONTROL: the single-container document must stay ONE tree',
+    ).toHaveLength(1)
+    const only = run.containers[0]!
+    expect(
+      outerHtmlOfAuthoredId(run.post.html, authoredIdOf(only)) ?? '',
+      `CONTROL: the graft is not INSIDE the only offering container #${authoredIdOf(only)} (PBED-10 carries this pin; a widened dirty set must not regress it)`,
+    ).toContain(`data-node-id="${run.graft.id}"`)
+  })
+})
