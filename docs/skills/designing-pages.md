@@ -186,7 +186,10 @@ and the diagnostic never enters the translate `warnings` channel. Contract:
   `forkKey = pathKey` on every path-state; identity is pathKey alone — no
   `#<i>` arms). Post-render placement changes go through the dedicated
   **`placement-attach` op** (P3 §3.3) — never a state-slice (hard-blocked),
-  never `attach`-with-zone (family-only).
+  never `attach`-with-zone (family-only). **Its two known limits are stated
+  as limits in §5.4** (an unparented graft emits a second, detached top-level
+  element — `ORPHAN-EMIT-TOP-LEVEL-LEAK`; graft-into-graft still collapses
+  onto one key — `GRAFT-RESIDUALS`).
 - **Component consumption**: `target` anchor for a reference name.
 - **Component provision**: `source`/`duplex` anchor carrying the value.
 - **Depth-0 (S-R2.6)**: a node that self-provides a name (`duplex`) resolves
@@ -254,6 +257,8 @@ and the diagnostic never enters the translate `warnings` channel. Contract:
 - **Bounded pass-2**: an atomic update compiles only the changed node's walk
   path (itself + ancestors + subtree) plus every source-bearing node — the
   fallback universe. Unrelated nodes are neither recompiled nor re-flagged.
+  The slice is the same in every compile mode; **which DOMAIN its members are
+  re-derived in is the tree compile mode's decision — §5.1.**
 - `compile(slice, { focusNodeId })` scopes console warnings to one node.
 
 | Test evidence | `node.test.ts` C1–C9; `pipeline.test.ts` V2/V4/F16; T18; the demo's `[compile]` pass log (dirty-node isolation) |
@@ -298,7 +303,8 @@ and the diagnostic never enters the translate `warnings` channel. Contract:
   subsequent render consumes the supervisor's pass-2 compiled states
   (`takePass2States`) — no render-side compile. Direct payload mutations
   (append/refresh/drop) recompile only the changed zone's focused slice
-  (`focusedSliceFor`).
+  (`focusedSliceFor`). **What that slice re-emits, and which DOMAIN it is
+  derived in, is §5.1** (the tree compile mode — `PATH-DOMAIN-RE-MINT`).
 - **Exported canonical re-emit loop (2026-08-21 — ssr-synthetic-event.md
   §2.4, user ruling B)**: `renderProducingProcess(actionable, nodeById,
   adapter, prevMap)` — the harness loop promoted to one shared
@@ -320,12 +326,212 @@ and the diagnostic never enters the translate `warnings` channel. Contract:
 - **Parity**: same input ⇒ server and client render trees are structurally
   equal (PAR-5, SSR-H1).
 
-| Test evidence | `render.test.ts` SER/FRK/ORD; `e2e/ssr-render`; `e2e/markdown-display`; demo |
+| Test evidence | `render.test.ts` SER/FRK/ORD; `e2e/ssr-render`; `e2e/markdown-display`; `e2e/post-bootstrap-emit` (§5.1); demo |
+
+### 5.1 Post-bootstrap re-emit, and the tree compile mode that decides its domain (2026-11-23)
+
+**What a post-bootstrap structural change re-emits** — the sentence, as given
+to the consumer who asked for it (`docs/handoffs-reply-modularity-2026-11-23.md`
+§1.3):
+
+> A post-bootstrap structural change re-emits the dirty node's **focused
+> slice** — the changed node, its ancestor chain to the root, and its
+> subtree — as pass-2 states. The renderer diffs those against its previous
+> map, so an ancestor whose `childOrder` changed emits append/remove ops and
+> untouched branches emit nothing.
+
+That slice is `focusedSliceFor(node, all)` (barrel-exported from `src/index.ts`)
+and it is what §4's bounded pass-2 compiles. The consequence an author can
+lean on: attaching a child re-derives the **container** as well as the child,
+so the container's `childOrder` diff is what emits the one `append` — dirtying
+the ancestor chain yourself buys nothing (the slice already carries it). One
+caveat on the op itself: `attach` does **not** register its node and the flush
+skips an unregistered dirty id silently, so `registerNode` first — or use
+`placement-attach`/`layer-apply`, which register-if-new (`docs/defects.md`
+**ATTACH-UNREGISTERED-SILENT-NOOP**, OPEN). The sentence's two carve-outs
+(placement-routed nodes do not ascend; a `placement-attach` into a
+non-placement-routed container leaves the added state unappended) are
+**limits of the engine today**, stated as limits in §5.4 — not exceptions to
+the slice rule.
+
+**The mode decides the DOMAIN of those states.** Which domain a state is
+derived in is a property of the TREE, not of the dirty node: the `Supervisor`
+carries `compileMode: 'family' | 'path'` (decisions.md
+**PATH-DOMAIN-RE-MINT**, LANDED 2026-11-23; owning gate record
+`docs/specs/post-bootstrap-emit-drop-fix-review.md` §4.4 R-1 + §10 Q1–Q3):
+
+- **`family` — the default, and byte-identical to the pre-mode engine.** A
+  dirty node's focused slice is compiled by `Node.compile`; every member's
+  wire is its `nodeId` wire. The d10/d12 runtime pages (and every page that
+  never calls `compilePath`) run this way.
+- **`path`** re-mints **every member of the same bounded, coalesced slice**
+  through its own `compilePath()` — one compile per member, same tick, same
+  per-node overwrite, same relevance pre-check, same event shape. The rule is
+  one sentence: ***ancestors re-mint, descendants do not***. A node minted in
+  the path domain is re-derived in the path domain instead of being
+  overwritten by a family state, which is what closes the class where the
+  first post-bootstrap change re-keyed the ancestors from path wires to
+  node-id wires and emptied the whole SSR document (`docs/defects.md`
+  **POST-BOOTSTRAP-EMIT-DROP**, FIXED: the SSR/Markdown adapters resolve the
+  document through a `rootKey` captured on the first create and never reset —
+  FRG-H24, `docs/specs/adapters.md` §4.6).
+
+**A path-bootstrapped host does not have to opt in.** `recordResolved` (§6 —
+the documented bootstrap seam that seeds the non-draining resolved store) also
+DECLARES the mode: if every state it is handed is a path state
+(`isPathState`), the supervisor enters `path` and **never infers back**. So
+the documented host recipe — one `compilePath` pass per translated node, then
+`recordResolved(cr.actionable)` — is mode-correct with no extra call, and
+every in-tree path host works unchanged. A host that bootstraps by a route the
+supervisor never hears about declares the mode instead:
+`new Supervisor({ compileMode: 'path' })` (or `setCompileMode('path')`, with
+`getCompileMode()` for the read side); an explicit declaration is never
+overridden by a later inference. (The shipped static path demos are this shape:
+they `recordResolved` a `compilePath` sweep and apply no post-bootstrap op
+afterwards — the mode is entered, and never dispatches.)
+
+> **⛔ NOT a supported recipe: `setCompileMode('path')` over a tree
+> bootstrapped in `family` mode.** Measured (probe P-7, arm A5): the family
+> bootstrap emits its bindings and the first pass-2 in `path` mode **deletes**
+> them (`bindings {}`, no warn) — the path resolver walks self → path
+> ancestors only, so a name the family compile resolved another way stops
+> resolving (`docs/defects.md` **PATH-MODE-SILENT-UNRESOLVED**, OPEN; see
+> §5.4 item 3). Declare the mode for an unrecorded bootstrap only when that
+> bootstrap was itself `compilePath`.
+
+**Why a re-mint is safe (the wire-stability half).** `pathKey` is a pure
+function of the current graph (`pathKeyFor`), so re-minting an unchanged path
+yields the **same wire** — element reuse, focus retention and the adapter's
+captured `rootKey` all survive, which is exactly the property
+`docs/specs/placement-path-spec.md` §4.1 pins ("wire identity is stable across
+renders while the topology is unchanged"). That stability is the fix's
+acceptance criterion, not a side effect: *sticky identity is delivered by
+re-minting, not by refusing a compile* (a refusal freezes every non-placement
+node's only refresh channel and keeps the stale mint-time `childOrder` — the
+gate's §3/§4.2 record of why stance (A) was rejected as a mechanism).
+
+**Two keys worth knowing.** (i) The document root emits on the conventional
+`'root'` wire in BOTH domains (`pathKeyFor`'s token key is the document
+root's), so a path tree's root wire never moves. (ii) A graft with no family
+parent — a `placement-attach`ed translated-tree-root — keys
+**`'root/<nodeId>'`**, never `'root'`: `pathKeyFor` gained a `routed` term so
+the token key belongs to the node that roots THIS document only
+(`docs/defects.md` **GRAFT-ROOT-PATHKEY-COLLISION**, FIXED). The root wire
+therefore belongs to exactly one node per document — the duplicate-wire case
+that remains is §5.4 item 2, and it is not this construction.
+
+### 5.2 Forcing a re-emit, and its price
+
+An ordinary re-emit happens because an op dirtied something. When a host wants
+a re-emit with **no** graph edit behind it, there are two roads and only one of
+them is a recipe (`docs/handoffs-reply-modularity-2026-11-23.md` §1.4 as
+corrected 2026-11-23 — the gate record's R-3, §4.4):
+
+**1. The public composition (unjournaled).** `focusedSliceFor(node, () =>
+sup.allNodes())` → `Node.compile(slice, { focusNodeId })` →
+`supervisor.recordResolved(cr.actionable)` → your own
+`renderProducingProcess` pass. It journals nothing and touches no stack,
+because it composes public parts. But it is the **family** compile, so:
+
+> **⛔ On a path-bootstrapped tree, a direct `Node.compile` of an ancestor is
+> UNSUPPORTED.** It re-keys the ancestors out of the captured domain — the
+> exact class `POST-BOOTSTRAP-EMIT-DROP` names — and `Node.compile` stays
+> pure/family by contract: the mode lives on the `Supervisor` and a Node-side
+> mode rule would amend S2 parity (decisions.md
+> **PASS2-FIT-REFERENCE-SLICE-SCOPE**; gate §7 MUST-NOT-BREAK 6), which is
+> why it did not land that way. On a path tree, force the re-emit **through
+> the supervisor**: apply any journaled op that dirties the node
+> (`state-slice`, `attach`, `placement-attach`, …), `await sup.flush()`, then
+> drain `takePass2States()` — in `path` mode that re-mints the slice in its
+> own domain (§5.1).
+
+**2. The empty-`state-slice` escape hatch — one line, three costs.**
+`apply({ kind: 'state-slice', node, mutation: [] })` does force a re-emit, and
+it is **not** blessed as the recipe: it journals an entry whose inverse has
+zero layers, it **clears your redo stack**, and it schedules a condense past
+`maxJournalLength`. A render request is not a graph edit, and nothing in the
+contract promises an empty mutation list stays `applied`, so relying on it is
+a latent coupling. A dedicated non-journaled render-plane member
+(`Supervisor.invalidate(nodeRef)` — one id, no journal, no redo clear, no
+structure event, never ascends) is **parked**: it lands only after the P-5
+cost measurement and the owner gate (`docs/pending.md`) — it is not a member of
+the surface today.
+
+### 5.3 Host-owned behaviour with no handler source text in the graph
+
+Function body values **are** admitted in-process — `translateLegacy` keeps a
+function `body` verbatim — so §8's "handlers are runtime-only" is about the
+**persistence boundary** (`serializeNode` emits no `handlers` key at all, and
+reverse emits a live body's SOURCE text), not an API limit
+(`docs/handoffs-reply-modularity-2026-11-23.md` §2.1). A module that names
+renderer code the host owns therefore keeps a host-side **name → function
+table**, authors each node with a handler whose `name`/`event` is the key, and
+installs the closures through the layer surface — no source text enters graph
+data. Three sanctioned paths, one trap:
+
+| Path | Use when | Properties |
+| --- | --- | --- |
+| `state-slice` with `targetProp: 'handlers'` | one live in-tree node | journaled, undo-exact, pass-2'd, real closures |
+| `layer-apply` with `data.handlers` | a module-owned subtree | mints family children carrying closures; teardown = one `removeLayer` |
+| `addLayer` | pre-mount prototypes only | the name→body seam letter; UN-journaled and NOT in the pass-2 pipeline — on a live in-tree node it recompiles but the resolved states never refresh (a silent non-render) |
+
+Host-injected body layers must use a layer-id prefix outside `slice-` (it
+trips the REVERSE-OF-CLEAR detector), `sourceName: 'handler-seam'` (excluded
+from reverse) and `hook-` (the hooks namespace) — `docs/specs/handlers.md` §4.
+
+> **⛔ The trap: a handler with NO body is silently dead but visibly alive.** A
+> body-less `{name, event}` handler passes admission, is skipped at dispatch,
+> and is STILL emitted as a live-looking `on:<event>` listener — no warn, no
+> op-result code, no `dropped` entry (`docs/defects.md`
+> **HANDLER-BODYLESS-SILENT-DEAD**, OPEN: `translate.ts`'s admission guard
+> fires only on a body that is present and wrong, `handlers.ts`'s dispatch
+> skips a non-function body silently — pin H-H3 — and the emit site adds
+> `on:<event>` for any handler carrying an `event`). So install a closure for
+> EVERY authored handler key, and never read your own markup as evidence that
+> a control is wired.
+
+### 5.4 Known limits (stated as limits)
+
+Four measured limits an author must design around. Each has its own OPEN defect
+row; **none is closed by the compile-mode landing** and none may be cited as
+closed by it:
+
+1. **An unparented graft still emits twice.** `placement-attach` a
+   translated-tree-root into a **family-routed** container: the container
+   re-mints, so its `childOrder` names the graft and the append exists
+   (PBED-10) — **but** the graft's token-walk path-state is still minted with
+   no parent appending it, so it surfaces as a DETACHED TOP-LEVEL sibling and
+   the document carries the graft twice (`docs/defects.md`
+   **ORPHAN-EMIT-TOP-LEVEL-LEAK**, OPEN — its engine half; the older wording
+   "the widget does not render" is too weak: it renders, in the wrong place).
+2. **Graft-into-graft collapses onto one key.** A graft placed into a container
+   that is ITSELF an unparented graft keys every hop on the `rootNode` token,
+   so the inner graft collapses onto `root/<nodeId>` again — the same
+   duplicate-wire class one level deeper (`docs/defects.md`
+   **GRAFT-RESIDUALS** (a), OPEN).
+3. **Path mode never resolves a name provided by a DESCENDANT.** The two
+   resolvers disagree on the universe: a family compile walks self →
+   **descendants** → ancestors (`fitReference`), a path compile walks self →
+   **path ancestors** only (`resolvePathTargets`). The same condition is loud
+   in family mode (`warnings` + `console.warn`) and **silent** in path mode,
+   recorded only in `CompiledState.unresolved` (`docs/defects.md`
+   **PATH-MODE-SILENT-UNRESOLVED**, OPEN — a diagnostics asymmetry, not a
+   resolution bug: the ancestor case resolves normally). So under path mode
+   author providers on the ancestor side, and read `unresolved` yourself if
+   you need completeness — do not rely on a descendant provider.
+4. **The replace half still waits.** Removing a child leaves the parent's
+   `childOrder` naming a wire with no element until something re-derives that
+   parent (residual **R-VPD-2**, `docs/defects.md`, unchanged by the mode: the
+   general class is one drop-class narrower since
+   VALUE-PROVIDER-RENDER-DISPOSITION, never closed).
 
 ## 6. Handlers & phases
 
 - Handlers live on nodes (`handlers: HandlerDef[]`); a component may provide
   a handler as its source value.
+- **A host that owns the behaviour but not the document text** installs the
+  bodies itself — the name→function table recipe, the three layer paths and
+  the body-less-handler trap are **§5.3**.
 - **Event handlers** (`event: 'input'`, `'click'`, …): dispatched by
   `dispatchEvent(node, ctx, event, ...args)`; a DOM binding maps
   `domEvent.type` to the name and `domEvent.target.value` to an arg.
@@ -513,6 +719,8 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 
 | Test file | Documents |
 | --- | --- |
+| `tests/e2e/post-bootstrap-emit.test.ts` | **POST-BOOTSTRAP-EMIT-DROP / PATH-DOMAIN-RE-MINT — the post-bootstrap re-emit + tree-compile-mode contract (2026-11-23; decisions.md **PATH-DOMAIN-RE-MINT** row, LANDED; gate record `docs/specs/post-bootstrap-emit-drop-fix-review.md` §4.4 R-1 + §8 Phase-1 P-1..P-6 + §10 Q1–Q3/Q5; defect rows `docs/defects.md` **POST-BOOTSTRAP-EMIT-DROP** (FIXED) + **GRAFT-ROOT-PATHKEY-COLLISION** (FIXED)):** ten cases (PBED-1..10), every one asserted through the PUBLIC surface only (`Supervisor`, `apply`/`flush`/`takePass2States`/`recordResolved`/`undo`/`replay`, `renderProducingProcess`, the adapters, `translateLegacy`) — no case reads `makeCs`/`isPathState`/`forkKey`-minting internals or asserts a compiled-state shape; the emit layer's public `forkKey === wire` signal is the only path-domain reading. The host recipe under test is the documented one (§5.1/§5.2): one `compilePath` pass per translated node → `recordResolved` → every later render merges the settled pass-2 states → emit → diff → apply. **PBED-1** the authored document survives the first sanctioned post-bootstrap structural change (root + holder + card still emit; html non-empty). **PBED-2** the root's wire is STABLE at `root` — never removed under it and re-created on its node-id wire. **PBED-3** no element that emitted on a PATH wire at bootstrap re-emits on a NODE-ID wire (no silent mixed-domain document; a node the op sequence does not touch keeps its wire — placement-path-spec §4.1). **PBED-4** the same document survives on `MarkdownAdapter` (identical never-recomputed `rootKey` shape — FRG-H24). **PBED-5** (the stance selector) the change is an APPEND: exactly one `append` with `owner` = #filler's wire and `child` = the new node's wire, and the html shows the new element INSIDE #filler (a refusal keeps the mint-time `childOrder` and never appends). **PBED-6** (the CONTROL against overshoot) a post-bootstrap `state-slice` props write on the NON-placement ROOT still reaches emit (`prop:title` = the written value) — deliberately green, it turns red under a "refuse the family compile" fix. **PBED-7** the strong domain rule applied to NEW nodes: every wire after the change is a bootstrap wire or a PATH-domain wire (no nodeId wire in a path document) — PBED-3's both-renders iteration cannot see this. **PBED-8** Z1 — bootstrap → op → condense past `maxJournalLength` (base marker asserted present, else the case tests nothing) → `undo()` to base is the recorded `base-boundary` fail → the root still emits on `root` and the document is non-empty, PLUS the `replay()`/`_restoreBase` leg (the restore REPLACES the `Node` objects — the leg a per-`Node` carrier cannot survive, which is why the mode rides the SUPERVISOR). **PBED-9** Z2 — a drain-only host whose live map is REPLACED by each `takePass2States()` drain still emits the root, on its bootstrap wire. **PBED-10** the `ORPHAN-EMIT-TOP-LEVEL-LEAK` own scenario: a `placement-attach` into a FAMILY-routed container still APPENDS the added node (exactly one append whose `child` is the graft's wire), the graft's wire is not the document root's, and the graft appears AFTER the root in the document — no detached top-level sibling (the graft key is `root/<nodeId>`, `GRAFT-ROOT-PATHKEY-COLLISION` FIXED). |
+| `tests/blind/e2e-layer.test.ts` | **BLIND-TEST WRITER artifact — the E2E layer contract suite (placement-path-spec §0/§1.2/§2/§3/§4/§5, derived-state §9.2, ops §2.6, render §3; E2E-1 the 4095-state census in one pass with zero node creation, E2E-2 shallow-slice precision, E2E-3 consumer-only invalidation, E2E-4 the `placement-attach` affected set). ✎ RE-SPECIFIED 2026-11-23 (gate §10 Q5, decisions.md **PATH-DOMAIN-RE-MINT** — re-specified, never re-pointed):** the half-tree precision case's `Node.prototype.compilePath` instance set now names the re-minted ANCESTOR set EXPLICITLY — `{root, p3a, p4a}` rather than the consumers alone — because under path mode the ROOT PROVIDER (a member of both consumer slices) is re-derived in the path domain instead of being focused-compiled (`supervisor.ts` `compilePathSlice`); the a-column consumers still compile exactly once each, the b-column still runs ZERO passes, and every `not.toHaveBeenCalled()` descendant pin is byte-identical. **E2E-3's pass-2 key count is UNCHANGED AT 13** — the root re-mints the SAME `'root'` pathKey (§5.1: a re-mint of an unchanged path yields the same wire). That unchanged count is what makes the move a re-specification rather than a regression: if 13 ever moves, the MODE is wrong, not the pin. |
 | `tests/unit/value-provider-render-disposition.test.ts` | **VALUE-PROVIDER-RENDER-DISPOSITION — an AUTHORED provider IS an element and renders; only RUNTIME-MINTED value records are dropped as values, and the residual drop WARNS `value-record-drop` (2026-11-13, owner ruling; contract `docs/specs/value-provider-render-disposition.md` §2 C1–C5 + §3 FS-VPD-1…10 + §8 register `VPD-1…VPD-12`; decisions.md VALUE-PROVIDER-RENDER-DISPOSITION row, LANDED):** the §8 register as 12 `it` rows (12/12 green), derived from the spec alone. **C1 / VPD-1/2** an authored provider emits **one** actionable state at its own `pathKey` carrying its published `bindings`, `emitElements` produces its element, its children are that element's children **in order**, and its parent's `childOrder` entry resolves to a real wire — disposition is provenance-based, not child-count-based; a provider publishing a **scalar** also renders that value as its element's text (`scalarBinding`'s first string/number/boolean binding → `props.text`; arrays/objects are filtered out, so an array-valued provider emits a clean, text-less element — intended, not a leak). **C2 / VPD-4/11** the dedicated `valueRecord` marker: set at the rows-mint site only (one site covers both rows-mint paths), preserved by keyed reuse and by `clone()`, KEPT by survivor promotion while `originLayer` is cleared, and **not forgeable** through `serializeNode` → `parseNodeState` → `loadState` (the whitelist cannot admit it — a seeded provider is AUTHORED and renders). **C3 / VPD-3/12** the residual drop's diagnostic: `console.warn` ONLY (code `value-record-drop`, message naming the `pathKey` + the first consumed name), **no** `ArmDropReason` member, **no** `CompileResult.warnings` code, **no** `dropped` entry, module-level never-cleared `(code, nodeId, name)` dedup, `shouldWarn(node)` focus gating, R-W4-5 inherited verbatim. **C4 / VPD-5/6/7/9/10** the unchanged shapes: the seam exemption is evaluated **before** any provenance test (no warn, the `[6]` pin intact), a content-root provider is still dropped as `owner-terminated` **in `dropped`** with no warn, the mixed provider+consumer keeps its per-**arm** state count (never a second standalone state), and the `hasAnyTarget` / marker-alone controls stay silent. **C5** the three exclusions (content-root providers, minted-parent flattening, **no position index**) + the FS-1 `dropped`-completeness debt (`R-VPD-4`, NOT discharged — the warn is not a substitute). **Contract-mandated re-pins (§4.1):** `tests/unit/render.test.ts` FRK-H1 (`actionable` 1 → 2, `dropped` still empty), `tests/unit/pass2-fit-reference-scope.test.ts` `FROZEN_GOLDEN` (+4 `slot` provider states, `#f:` numbering re-verified), and the regenerated demo artefacts — `demo/feature-showcase.expected.html:22` now carries `<app id="showcase-root">` around its children (before this pass the tracked artefact shipped the flattened defect: ZERO occurrences of `showcase-root`). **Guards UNMOVED (§4.2):** the runtime-vs-runtime growth guard (10×), the derived `2.5×` per-REGION pins, and the rows census / fan-out (`fanoutStates ≤ 2 × fanoutRows`) — the rows census is the **marker falsifier**: if it moves, the marker is on the wrong node class. **Author-facing docs rewritten onto this contract:** `docs/skills/designing-pages.md` §14.10 item 1 + §11 rows + the `hooks-scenarios` / `rows-scenarios` page descriptions, `docs/specs/node.md` §7.1 `in-tree` row (true again for authored nodes, with the residual exception) + FS-1's "not discharged by this unit" note, `demo/hooks-scenarios.js` · `demo/rows-scenarios.js` · `demo/translate-showcase.js` + `demo/translate-showcase.template.html` · `demo/fork-stress.js`, `tests/unit/hooks.test.ts`, `RENDER_PROCESS_NOTES.md` §10.10.13, `docs/defects.md` |
 | `tests/unit/journal-read.test.ts` | **ENG-JOURNAL-ENTRY-READ-API — the sanitized journal reader (2026-09-12, Astrographer handoff, docs/specs/journal-read-access-review.md; decisions.md JOURNAL-READ-API):** `Supervisor.journalEntries(opts?)` returns a JSON-safe `JournalView` — empty-journal zeroed view with omitted optionals; applied ops → sanitized `{index,kind,status}` rows (`JSON.stringify` succeeds despite live Node refs; no op/node/snapshot/id); non-draining (journal + stacks unchanged); `afterIndex`/`limit` pagination + `fromIndex`/`totalEntries`/`truncated`; limit clamp `[1,1000]` + `afterIndex ≥ total` → empty/not-truncated; cursor-relative default window (`REDO_PEEK`, peeks the undone tail); condensed `base` marker surfaced (`basePresent`, index-0 `kind:'base'`, `undoBaseBoundary`); `maxJournalLength` echoed; malformed entry → `'unknown'` (never throws) |
 | `tests/unit/boolean-attrs.test.ts` | **HOST/U1-ENG — boolean attributes (2026-09-12, Astrographer handoff, docs/specs/handoffs-review-10.md §5.1; decisions.md BOOLEAN-ATTRS):** a closed `BOOLEAN_ATTRS` set + `booleanAttrValue`; **DOM** `checked:false` removes the attribute + reflects the property (`el.checked === false`), `checked:true` is present + reflected; string `'false'` treated false; `selected`/`disabled`; a non-boolean `prop:title:false` stays the string attribute; **SSR** false omits the attribute (never `checked="false"`), true emits it |
@@ -530,7 +738,7 @@ count-underflow/role-mismatch), never via schemas. Compile outcomes
 | `tests/unit/rows-mint-guardrails.test.ts` | **ADVERSARIAL FIX PASS — the rows-mint guardrails (2026-08-24, defects.md ADVERSARIAL-* FIXED rows; archive/findings/2026-08-24/2026-08-24-adversarial-findings.md):** G1 — rows-op `target` type-check (a string target → contained `unknown-node`; the clientAPI wire path resolves string targets); G2 — destroyed target → contained `no-usable-state`; G3 — row-shape validation (`rows-shape-invalid`, atomic — no orphan/record/layer on a bad row; `rows: []` stays the clear; a null row MEMBER in a serialized doc → NodeSchema-shape-mismatch at the boundary); G4 — the origin serialize-exclude (a post-mint full-node-list doc ships NO minted rows; seed + re-mint reproduces exactly N — never doubles); G5 — the teardown consumer walk (rows-clear + undo(rows-mint) refresh the field-name consumers to their own no-provider state); G6 — census boundary (two same-name roots → NodeSchema-shape-mismatch; children-only census legal); G7 — the def-root fallback shape (a single-element def mints); G8 — the no-promotion pin on the replace + `rows: []` clear paths (a moved row is doomed, never promoted); G9 — row `id` never hijacks the minted node id (fresh mint ids; the id stays a provider value); G10 — smuggled row `anchors` stripped + `rows-mint-anchors-rejected` warn; G11 — JSON-safety over batches/anchor values (`serialization-error`); G12 — placement-kind without `placementName` → `rows-placement-name-missing` |
 | `tests/unit/def-roundtrip.test.ts` | **FEATURE 1a — DEF-PROTOTYPE ROUND-TRIP (2026-08-24 — handoffs-review-5.md PROCEED-AS-RESHAPED; serialize.md §1/§3/§4 + decisions.md DEF-PROTOTYPE-CENSUS row, LANDED):** the CENSUS section `defPrototypes?: {name, nodeId, isRoot}[]` — emit rules (roots first, children in mint order, instance-membership reachability — a second hub's registrations never leak into another graph's slice, never-registered seeds ship none, name-less links skipped), the C2 seam-anchor strip on prototype-state content entries, the re-registration helper `reRegisterDefPrototypes(doc, hub, seeded)` (seeded instances by identity — zero construction; the post-seed `state === 'prototype'` tripwire throws `NodeSchema-shape-mismatch` when the def-root is absent), the schema-boundary codes (non-array section → envelope-mismatch; malformed/duplicate-nodeId/absent-nodeId → NodeSchema-shape-mismatch; duplicate NAMES legal), the seam re-materialization post-restore (def-root wires under the consumer — state flips prototype→in-tree, def-children re-home), and the CAVEAT FLIP (a section-absent reseed keeps `rows-prototype-unresolved` — BH-N.4 unchanged; the re-registered doc rows-mints + replaces in place via the round-tripping layerId) |
 | `tests/unit/link-hub.test.ts` | **REQ-GAP-9 (2026-08-22 — handoffs-review-2 §3, user go-ahead; docs/specs/serialize.md §3):** the public `createLinkHub()` factory + seed-path hub threading. `createLinkHub()` returns a `LinkConfigNameHub` whose `linkFor(name, kind)` shares ONE Link per (kind, name); the factory is barrel-exported from `src/index.ts` with the same function identity as the `src/core/translate.js` export (one implementation, no drift) + the `LinkConfigNameHub` TYPE is barrel-exported (compile-time check). Seed-path threading: loadState-shaped `NodeBaseData` seeds with component (`source`/`target`) + placement (`container`/`content`) anchors + one hub instance → same-name anchors across seeds land on the SAME Link (hub-link identity asserted); hub-LESS seeds keep per-node FRESH links for same names (status quo); seed values still land on the shared link (`a.value` preserved). Seed-path safety preserved: a duplicate same-name component-source seed on ONE node still warns `component-source-duplicate` + keeps ONE anchor on the shared link; a bad seed anchor (a role the shaped link cannot admit) never throws out of the constructor (the `catch {}` containment). `translateLegacy(doc)` WITHOUT opts still works — it defaults to an internal `createLinkHub()`, so same-name anchors across nodes share one link |
-| `tests/e2e/path-fork-e2e.test.ts` | **Unit 12** — the consolidated E2E constraint suite (placement-path-spec §0, the four FIXED user requirements; full-pipeline Node tests: legacy envelope → translate → register → ONE `compilePath` bootstrap → `emitElements`/`diffMinimal`/`applyOps`). **E2E-1** — the fork test has ONLY the 22 prototype nodes (+ root): 23 registered at every pipeline stage (global-registry count unchanged through compile/emit/diff/apply — zero node creations), 4095 distinct path-states (`forkKey = pathKey`, no `#`), 4095 elements on pathKey wires (per-level 2^k, create ops = 4095, zero removes), journal empty of `clone-instance` ops. **E2E-2** — a shallow props slice on a depth-2 node regenerates ONLY that node's path-states (compile-scope spies + pass-2 keys) and its element is REUSED (same wires, zero create/remove, set ops only on its wires). **E2E-3** — a component SOURCE change invalidates ONLY the per-name component Link's TARGET owners (the consumers — the §3.2 affected set): the all-consumers pressure case (every consumer's `compilePath` runs once; the non-consuming sibling runs zero passes) AND the half-tree precision case (provider consumed by the a-column only ⇒ affected = {provider, p3a, p4a}; the b-column runs ZERO compile passes; p4b's 8 max-depth states stay). **E2E-4** — a post-render third depth-4 node via `placement-attach` dirties EXACTLY {container, added node} (pass-2 keys, compile spies — d5a at depth 5 gets zero passes, no set ops on its wire) and the render diff is ONE create + appends under the container's path wire, every other element reused. Plus the consolidated guard pins: static census 23/4095/0/0, runtime re-pin arithmetic (4117 in-tree = 4095 + 22 prototypes, cloneOps 4094), the `component-source-duplicate` keep-first/skip-second/warn pin, and the §8-Q6 ratio-baseline pin (the DERIVED-TRIO family baseline + per-region pins + the runtime 3× tripwire). Authoring note pinned by E2E-4: a node's OWN pathKey carries its CONSUMER hops only (its producer zone appears in its children's keys). |
+| `tests/e2e/path-fork-e2e.test.ts` | **Unit 12** — the consolidated E2E constraint suite (placement-path-spec §0, the four FIXED user requirements; full-pipeline Node tests: legacy envelope → translate → register → ONE `compilePath` bootstrap → `emitElements`/`diffMinimal`/`applyOps`). **E2E-1** — the fork test has ONLY the 22 prototype nodes (+ root): 23 registered at every pipeline stage (global-registry count unchanged through compile/emit/diff/apply — zero node creations), 4095 distinct path-states (`forkKey = pathKey`, no `#`), 4095 elements on pathKey wires (per-level 2^k, create ops = 4095, zero removes), journal empty of `clone-instance` ops. **E2E-2** — a shallow props slice on a depth-2 node regenerates ONLY that node's path-states (compile-scope spies + pass-2 keys) and its element is REUSED (same wires, zero create/remove, set ops only on its wires). **E2E-3** — a component SOURCE change invalidates ONLY the per-name component Link's TARGET owners (the consumers — the §3.2 affected set): the all-consumers pressure case (every consumer's `compilePath` runs once; the non-consuming sibling runs zero passes) AND the half-tree precision case (provider consumed by the a-column only ⇒ affected = {provider, p3a, p4a}; the b-column runs ZERO compile passes; p4b's 8 max-depth states stay). ✎ **RE-SPECIFIED 2026-11-23** (gate §10 Q5, decisions.md **PATH-DOMAIN-RE-MINT** — re-specified under the ONE rule *ancestors re-mint, descendants do not*): the provider's own `compilePath` spy count moves **1 → 5** (all-consumers case — its own dirty pass + one re-mint per consumer slice, since path mode re-mints EVERY bounded-slice member and the provider sits in all four consumer slices) and **1 → 3** (half-tree case — its own pass + the a-column's two slices). The pre-mode reading (1) was the family focused compile, which OVERWROTE the provider's bootstrap path-state instead of re-minting it. The precision half is UNCHANGED: each consumer compiles exactly once (no descendant re-mint), the non-consuming sibling and the whole b-column stay at `not.toHaveBeenCalled()`, p4b keeps its 8 states, and the pass-2 key set does not move. **E2E-4** — a post-render third depth-4 node via `placement-attach` dirties EXACTLY {container, added node} (pass-2 keys, compile spies — d5a at depth 5 gets zero passes, no set ops on its wire) and the render diff is ONE create + appends under the container's path wire, every other element reused. Plus the consolidated guard pins: static census 23/4095/0/0, runtime re-pin arithmetic (4117 in-tree = 4095 + 22 prototypes, cloneOps 4094), the `component-source-duplicate` keep-first/skip-second/warn pin, and the §8-Q6 ratio-baseline pin (the DERIVED-TRIO family baseline + per-region pins + the runtime 3× tripwire). Authoring note pinned by E2E-4: a node's OWN pathKey carries its CONSUMER hops only (its producer zone appears in its children's keys). |
 | `tests/unit/hooks.test.ts` | **HOOKS — the value-provider slot (2026-08-16, hooks-map-review.md §7 contract amendment B; decisions.md HOOKS row — the §7.2 pin-6 TDD list, red→green):** the `hooks: string[]` field round-trips translate → reverse → re-translate (zero warnings) + the `hooks-shape-invalid` containment (non-array field / non-string member warn + skip); (a) the READ SITES — the duplex provide-and-self-apply self-seed, the consumer arm bindings (continueArm), the path-state bindings (resolvePathTargets, compilePath), and the seam read (the SED-1 type-target collapse asserted at the EMIT level — a def-named hook is exempt, the def value stays, the element takes the def type + css); (b) the E2E-3 CASCADE — the state-slice walk dirties the consumers, the pass-2 refresh carries the hook value, the state events fire; (c) the ONE-source ROUND-TRIP TRIPLE — serialize → loadState reproduces the anchor value + the field, reverse → re-translate ships the binding value + the field, and the SSR emit (emitElements) renders the hook value; (d) the SEAM GUARD — the supervisor rejects `hook-name-unresolved`/`hook-mode-blocked`, the def-named write warns `hook-seam-exempt` + no-ops (both the supervisor path and the defensive applySlice path — never a throw); (e) the CLONE-SHADOWING pin — a hook-bearing node's clone carries the field + its OWN local `hook-<name>` layer + the mirrored anchor value; independent layers; (f) the layer-stack-stays-O(1) property (25 writes → ONE replace-in-place layer; the same-value short-circuit; the clear path — `value: undefined` removes the layer + restores the authored value) |
 | `tests/unit/node.test.ts` | node lifecycle, layers, two-pass compile, forks, serialization, fail-states; **Unit 8** — the `component-source-duplicate` guard (placement-path-spec §6.2 node.ts row, §10.ab/§10.ae): a SECOND same-name source/duplex anchor on ONE node warns `component-source-duplicate`, keeps the first, and is NOT added — UNCONDITIONAL (imperative `addAnchor` AND the constructor seed path: a serialized doc carrying the pattern loads with ONE source and a warn, keep-first VALUE preserved); source+duplex share one provider namespace (name-keyed, matching resolve's `providersOn`); same-name CONTAINER anchors are unaffected (placement multiplicity legal) and different-name sources are fine; the Unit-11 re-expressed fixture shapes never trip it (regression pin); materializeAnchors' decl-path dedup is complementary (idempotent layer re-application stays silent) — the guard is the single enforcement point for everything reaching addAnchor |
 | `tests/unit/path-enum.test.ts` | the placement-path enumeration compile mode (placement-path-spec §2 — Units 4+5): `compilePath()` minting ONE compiled state per valid (node, owner-path) pair — pathKey = `root/<zone>/<ownerId>/…/<nodeId>` (§2.2), `forkKey` = `pathKey` on every path-state; the R2.2 sibling-shared owner-name topology census (depth 4 → 15 states; d12 → 4095, E2E-1 — both level-(k−1) prototypes own ONE name, consumers target it, §5.1); path-derived children at mint time (family children + placement consumers, loop arms excluded — §2.3); viability for contentNodes-owned family-'in-tree' nodes (honest family label, §2.4); the per-walk visit-set cycle guard (`circular-source` + `loop` drop, sibling walks unaffected — §1.4; a placement-requested loop branch below the chosen name is never consulted — §1.2); E2E-2 foundation (a props mutation on a placement-routed node regenerates ONLY its path-states via the supervisor pass-2 dispatch); derived `children.length` reads path-derived children; Unit-5 §1.2 first-match fan-out (ALL zones of the chosen name produce instances) + `activePlacement` = the chosen name on every placement-routed path-state (§2.5) |
@@ -1111,6 +1319,23 @@ the `markdown-adapter-scenarios.html` entry above and MD-BLIND-TEST-TEXT in
 `docs/defects.md`). **If a future page authors `type:'text'` directly, add it
 here per AGENTS.md item 3.**
 
+**Coverage note for the path-domain re-mint / tree compile mode (PATH-DOMAIN-RE-MINT, 2026-11-23) — §12: NO demo page was added by this change.** The
+landing (`docs/specs/post-bootstrap-emit-drop-fix-review.md` §4.4 R-1) is a
+`Supervisor`-internal dispatch rule expected to cost **zero** on every measured
+page: all shipped runtime pages bootstrap in `family` mode (byte-identical
+before/after) and the path pages apply no post-bootstrap ops, so no existing demo
+exercises the mode and none was rewritten. The coverage lives in the test suite:
+`tests/e2e/post-bootstrap-emit.test.ts` **PBED-1..10** (§11 — document survives,
+root-wire stability, no silent mixed domain, the Markdown arm, the append half,
+the refresh control, the strong domain rule, Z1 condense/undo/replay, Z2
+drain-only host, the orphan scenario) plus the three re-specified pins (§11:
+E2E-3a/E2E-3b spy counts, blind E2E-3's ancestor set). A demo page here would
+have to bootstrap in `path` mode **and** apply a post-bootstrap sanctioned op to
+show anything a family page does not — that shape is exactly what PBED-1..10
+already asserts end-to-end through the public host recipe (§5.1/§5.2), so a page
+would duplicate it without exercising a new pipeline stage. **If a page is ever
+added for the compile mode, add it here per AGENTS.md item 3.**
+
 ## 13. Running checks
 
 ```
@@ -1385,7 +1610,12 @@ From the post-implementation layered blind loop (`archive/findings/2026-08-15/20
    the consumer's own next compile.
 7. **A non-placement-routed provider (e.g. the root) compiles through the
    focused slice**, not `compilePath` — E2E-3 compile-scope spies see the
-   consumers only.
+   consumers only. ✎ **QUALIFIED 2026-11-23 (the tree compile mode, §5.1 —
+   decisions.md `PATH-DOMAIN-RE-MINT`):** this is the **`family`** reading. On a
+   tree bootstrapped in `path` mode EVERY bounded-slice member is re-minted
+   through its own `compilePath`, so the compile-scope spies see the ancestor
+   chain too (the root provider included — the re-specified E2E-3 pins, §11).
+   The DESCENDANT half is unchanged: *ancestors re-mint, descendants do not*.
 8. **Def re-typing is a covered-consumer chain**: a def-covered consumer
    is re-typed by the PARENT's def; its own def re-types its children
    only; the provider's own state re-types itself. Def values are
