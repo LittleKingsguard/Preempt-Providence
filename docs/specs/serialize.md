@@ -97,7 +97,7 @@ DEFECT #9 semantics, `translateLegacy` uses the same factory internally):
    back to an O(n) provider sweep when a node's hub cannot answer; a forgotten
    hub makes every pass-2 slice a universe sweep). **Seam-RESOLVED carriers
    (def-root/def-children wired under a consumer) register too; plain
-   prototypes stay out of `this.nodes`.**
+   prototypes stay out of `this.nodes`.** **✎ CORRECTED 2026-11-23 — true of the TRANSLATE path ONLY.** `_restoreBase` seeds every `loadState` entry and registers **all** seeds (`supervisor.ts:1047`, `:1050`), plain prototypes included, so a restored graph DOES hold them in `this.nodes` — a doc/behaviour divergence filed as `docs/defects.md` `RESTORE-REGISTERS-PROTOTYPES` (gate `docs/specs/serializer-census-gate-review.md` §1(c)). Read the sentence below as the translate-path pin, not as a restore invariant; the divergence closes either by skipping prototypes at `:1050` or by amending this clause, and a red set decides.
 6. **Re-mint the rows (step 4.5, rows-bearing docs only)** — ONE `rows-mint`
    op per `batches[hookName]` record (the records seed with the nodes; the
    layerId round-trips → the re-mint REPLACES in place, replay-safe, with
