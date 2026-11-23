@@ -1,7 +1,7 @@
 {
   "name": "provident-ssr",
-  "version": "0.5.2",
-  "description": "The Preempt-Providence reactive render engine — legacy-envelope translate, anchor-graph Supervisor, handlers, SSR/DOM render adapters.",
+  "version": "0.6.0",
+  "description": "The Preempt-Providence reactive render engine \u2014 legacy-envelope translate, anchor-graph Supervisor, handlers, SSR/DOM render adapters.",
   "license": "AGPL-3.0",
   "repository": {
     "type": "git",
