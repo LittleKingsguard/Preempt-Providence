@@ -265,6 +265,22 @@ unsupported until a Node-side rule exists.
 
 ---
 
+## 10. OWNER RULINGS (2026-11-23) — the gate record is BINDING
+
+| Q | Ruling | Effect |
+| --- | --- | --- |
+| **Q3** — the invariant's wording | **ACCEPTED as restated: *"a node that has been minted in the path domain is always re-derived in the path domain."*** The owner does **not** hold the refusal reading; the guarantee is delivered by re-minting under a tree compile mode. | R-1 is the sanctioned mechanism. §4.2's answer stands as the record's premise. |
+| **Q1/Q2** — the carrier | **Infer at `recordResolved` AND expose an explicit `Supervisor` override.** The mode is derived from the documented bootstrap seam (so the consumer's arm and every in-tree path host work unchanged) and a host bootstrapping by an unseen route can declare it. | R-1 §4.4(1)-(3) as written; a documented `Supervisor` option + a new ACTIVE decisions row (`X.Y.Y`-class change is `X.Y.X` = `0.6.0`). |
+| **Next** | **Extend the red set FIRST (the six §8 Phase-1 cases), then implement R-1.** | Phase 1 of §8 proceeds before any `src/**` edit. |
+
+**Still owed, and NOT ruled by this pass:** **Q4** (the resolution universe — decided on probe P-7, red case written
+first), **Q5** (the three re-specifications under *ancestors re-mint, descendants do not*, with E2E-3's key count
+unchanged at 13), **Q6** (whether a Node-side safety net is ever added, knowing it would break S2 parity), **Q7**
+(scope: R-1 alone vs also a public tree-mode API), **Q8** (whether R-1 also closes `ORPHAN-EMIT-TOP-LEVEL-LEAK`'s (b)
+half — on P-6's evidence, never by citation), **Q9** (release packaging).
+
+---
+
 **Verdict, one line.** (A) is **right as an invariant and wrong as a mechanism**: refusing the family state delivers
 "no re-key" by freezing every non-placement node's only refresh channel, keeps the stale mint-time `childOrder`, and
 therefore ships `ORPHAN-EMIT-TOP-LEVEL-LEAK` — the loud-to-silent trade already refused for (C). It is replaced by
