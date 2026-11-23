@@ -290,7 +290,9 @@ compilePath(node /* a content node or the root */):
   paths too). `CompiledState.forkKey` (`src/core/types.ts:132`) is present
   on EVERY path-state and is set unconditionally (node.ts:699-706:
   `cs.forkKey = cs.pathKey`, not only when `arm.keys.length > 0`).
-- **State identity is pathKey ALONE, unconditionally** — there is no `#<i>`
+- **✎ AMENDED 2026-11-23 — the `rootNode`-token key is ONE-PER-DOCUMENT, not per-token.** `pathKeyFor` (`src/core/node.ts:232-241`) now mints `'root'` only for the node that roots THIS document (`familyParentTokenOf(node) === 'rootNode' && walk.hops.length === 0 && !routed`). A node that carries the root token but is **family-parentless** — the translated-tree-root **graft** that `placement-attach` places into a family-routed container — falls through to the hop loop with zero contributed segments and keys **`'root/<nodeId>'`**, precisely so it cannot collide with the document root's wire. Defect `GRAFT-ROOT-PATHKEY-COLLISION` (`docs/defects.md`), gate record `docs/specs/post-bootstrap-emit-drop-fix-review.md`. **Residual, do not read this as complete:** a graft placed into a container that is itself an unparented graft still collapses onto one key (`GRAFT-RESIDUALS` (a) in the defect list), and the graft's token-walk state still emits as a floating top-level element (`GRAFT-RESIDUALS` (b) / `ORPHAN-EMIT-TOP-LEVEL-LEAK`).
+
+**State identity is pathKey ALONE, unconditionally** — there is no `#<i>`
   arm suffix anywhere in the path model (F-2; §10.ab). Component resolution
   is bound to the ancestor path, and the walk own→descendants→ancestors is
   a pure function of the tree (✎ 2026-09-23 citation repair, `STALE-RESOLVE-ANCHORS`:

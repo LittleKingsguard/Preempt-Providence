@@ -227,10 +227,21 @@ function chosenPlacementName(node: Node, walks: PathWalk[]): string | null {
  *  the node's own id. Each placement hop contributes '/<zone>/<ownerId>';
  *  family hops contribute '/<ownerId>'; the hop landing on the ROOT node
  *  contributes nothing (the 'root' prefix IS the root). The root node's own
- *  key is 'root' — the root is the only node whose family parent is the
- *  'rootNode' token, so no other node can collide. */
-function pathKeyFor(node: Node, walk: PathWalk): string {
-  if (familyParentTokenOf(node) === 'rootNode') return 'root'
+ *  key is 'root'.
+ *
+ *  GRAFT-ROOT-PATHKEY-COLLISION (2026-11-23): the 'rootNode' token alone does
+ *  NOT make a node the document root. A translated-tree-root graft carries the
+ *  token (it roots its OWN tree) and is then placed into another tree's
+ *  container by `placement-attach`; it has NO family parent there, so it holds
+ *  two walks — its token walk (no hops) and its placement walk (`routed`). The
+ *  token wire 'root' belongs to the node that roots THIS document, i.e. the
+ *  token holder with no other route; a graft keys off its own id instead
+ *  ('root/<nodeId>', '#'-free, unique per live element, derived from the walk
+ *  alone so it is stable across renders) and its placement walk keys off its
+ *  hops. Two live elements therefore never share a wire, and the container's
+ *  `childOrder` names a wire that exists (§2.3/§4.1). */
+function pathKeyFor(node: Node, walk: PathWalk, routed: boolean): string {
+  if (familyParentTokenOf(node) === 'rootNode' && walk.hops.length === 0 && !routed) return 'root'
   const segs: string[] = []
   for (let i = walk.hops.length - 1; i >= 0; i -= 1) {
     const h = walk.hops[i]!
@@ -1457,6 +1468,10 @@ export class Node {
     // consulted — later names are pruned SILENTLY (no drops, no warnings);
     // family-first walks and the chosen name's own branches pass through
     const chosen = chosenPlacementName(this, walks)
+    // GRAFT-ROOT-PATHKEY-COLLISION — a walk with hops means this node is
+    // ROUTED through another node (a container/owner), so the 'rootNode' token
+    // is not its only route: it is a graft, not the document root (pathKeyFor).
+    const routed = walks.some((x) => x.hops.length > 0)
     for (const w of walks) {
       if (chosen !== null) {
         const firstZone = firstHopZone(w)
@@ -1477,13 +1492,13 @@ export class Node {
         dropped.push({ arm: [this.id], reason: 'owner-terminated' })
         continue
       }
-      actionable.push(this.mintPathState(w))
+      actionable.push(this.mintPathState(w, routed))
     }
     return { actionable, dropped, warnings }
   }
 
-  private mintPathState(walk: PathWalk): CompiledState {
-    const pathKey = pathKeyFor(this, walk)
+  private mintPathState(walk: PathWalk, routed: boolean): CompiledState {
+    const pathKey = pathKeyFor(this, walk, routed)
     const pathNodes = new Set<NodeId>([this.id, ...walk.hops.map(h => h.owner.id)])
     const cs: CompiledState = {
       nodeId: this.id,
