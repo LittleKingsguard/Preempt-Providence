@@ -20,7 +20,7 @@ import { placementChangeIrrelevant, activePlacementOf, hookWriteGuard } from './
 import { placementAttach, derivePlacementTrigger, detachNodeSafe, layerApply, rowsMint, rowsClear } from './ops.js'
 import { serializeSlice, loadState, reRegisterDefPrototypes } from './serialize.js'
 import { isPathState } from './render-helpers.js'
-import type { Anchor, CompiledState, CompileResult, LinkConfigNameHub, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
+import type { Anchor, CompiledState, CompileResult, LinkConfigNameHub, NodeBaseData, NodeId, NodeState, PlacementTrigger, RowsMintOp } from './types.js'
 
 let journalSeq = 0
 
@@ -986,14 +986,21 @@ export class Supervisor {
     }
   }
 
-  /** Feature 3 (D4) — the SYNCHRONOUS graph-REPLACE restore: drain the
-   *  pending-destroy queue + evict the pre-base nodes, clear this.nodes, run
-   *  the §3 recipe (loadState → seed with the SAME hub → reconcileParentTargets
-   *  → reRegisterDefPrototypes → registerNode per node → re-mint rows per the
-   *  batches records), then schedule a FULL pass-2 refresh. The async sweep
-   *  cannot interleave (the drain ran synchronously). Re-runnable: a second
-   *  restore drains the first restore's nodes the same way. */
-  private _restoreBase(snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown }): void {
+  /** Feature 3 (D4) — the SYNCHRONOUS graph-REPLACE restore: PRE-FLIGHT the
+   *  snapshot (step 0b), then drain the pending-destroy queue + evict the
+   *  pre-base nodes, clear this.nodes, run the §3 recipe (loadState → seed with
+   *  the SAME hub → reconcileParentTargets → reRegisterDefPrototypes →
+   *  registerNode per node → re-mint rows per the batches records), then
+   *  schedule a FULL pass-2 refresh. The async sweep cannot interleave (the
+   *  drain ran synchronously). Re-runnable: a second restore drains the first
+   *  restore's nodes the same way.
+   *
+   *  RETURNS whether the graph was RESTORED: `true` = re-seeded, `false` = the
+   *  restore was REFUSED (the hub-less refusal below and the invalid-snapshot
+   *  pre-flight) and the graph is exactly the pre-base graph. `replay()` reads
+   *  it — a refusal must never be reported as an applied replay
+   *  (RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS (b)). */
+  private _restoreBase(snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown }): boolean {
     // step 0 — RESTORE-INTEGRITY (b): a restore NEEDS this supervisor's hub,
     // and it must refuse BEFORE the eviction below. The seeds are built with
     // `new Node(d, hub, …)`: with no hub their placement/component anchors
@@ -1011,7 +1018,57 @@ export class Supervisor {
       console.warn(
         "restore-refused-no-hub: a condensed-base restore needs the supervisor's hub to re-seed the graph (construct it as `new Supervisor({ hub: createLinkHub() })` and translate with the same hub); without it the restored seeds cannot rejoin the shared Links, so the graph would be EVICTED and left EMPTY. Restore refused — the current graph is kept as-is",
       )
-      return
+      return false
+    }
+    const doc = snapshot as unknown as { template: unknown; content: unknown[]; defPrototypes?: unknown }
+    // step 0b — RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS (2026-11-23), the (b) SWALLOW
+    // half, part 1: a PURE PRE-FLIGHT of the snapshot, BEFORE any eviction. The
+    // eviction below is irreversible, so a snapshot that cannot be re-seeded
+    // must be refused while the pre-base graph is still intact — the shipped
+    // failure mode was the opposite: the eviction ran first, `reconcileParentTargets`
+    // → `Link.addAnchor` then threw `LinkConfigError: unique-order`, and
+    // `replay()`'s base branch swallowed it in a bare `catch {}` ⇒ empty graph,
+    // `status: 'applied'`, no diagnostic.
+    //
+    // The checks are DATA ONLY — `loadState` (pure parse+validate) and pure
+    // reads of the parsed data: NO `new Node` (construction calls `registerNode`,
+    // so a scratch build before the eviction would clobber `scope.byId` for a
+    // colliding id and mis-resolve family parents — a preflight must not mutate
+    // the live graph), no registry write, no hub `Link` touched.
+    //
+    // THE PRODUCER DEFECT (measured 2026-11-23 — record it here because the
+    // defect row's (a) description is WRONG): a host that registers the
+    // bootstrap nodes through the documented `state !== 'prototype'` filter
+    // registers a SEAM-WIRED def-root — compiling a
+    // `component: [{ target: 'children', reference: '<def>' }]` consumer wires
+    // the def-root under it, flipping its derived `state` from 'prototype' to
+    // 'in-tree' — while that node STAYS in the scope's def-prototype registry.
+    // `condense()` builds its census as `const kids = this.allNodes()` followed
+    // by the registry prototypes with a PLAIN CONCAT (no dedupe), so the one
+    // node object is pushed TWICE and `serializeSlice` ships the same node ID
+    // twice in `doc.content` (measured on the RR-1 page: content ids
+    // [node-1, node-2, node-3, node-4, node-5, node-4, node-3] — node-3 is the
+    // def-root, node-4 its def-child). The row's (a) claim that the C2 strip is
+    // keyed on derived STATE is false: it is keyed on registry-CENSUS membership
+    // (`prototypeInstances.has(kid)`), so the strip already works. The real
+    // producer defect is the UNDEDUPED census — a separate unit, deliberately
+    // NOT fixed here (a dedupe would make this case pass as a successful restore
+    // instead of a loud refusal, i.e. for the wrong reason).
+    let parsedSeeds: NodeBaseData[]
+    try {
+      parsedSeeds = loadState(doc as never)
+    } catch (e) {
+      console.warn(
+        `restore-refused-invalid-snapshot: the condensed base could not be parsed (${(e as Error)?.message ?? String(e)}) — seeding would throw after the graph was already EVICTED and left EMPTY. Restore refused — the current graph is kept as-is`,
+      )
+      return false
+    }
+    const refusal = this._baseSnapshotRefusal(doc, parsedSeeds)
+    if (refusal !== undefined) {
+      console.warn(
+        `restore-refused-invalid-snapshot: ${refusal} — seeding would throw after the graph was already EVICTED and left EMPTY. Restore refused — the current graph is kept as-is`,
+      )
+      return false
     }
     // step 1 — drain + evict every pre-base node (synchronous critical section).
     // DEFECT-A fix (2026-08-25, X19/X20): drain only THIS scope's pending
@@ -1073,12 +1130,13 @@ export class Supervisor {
     }
     // step 2 — the §3 recipe (D1: the round-trip, executed in-process).
     // The template (root) seeds FIRST, then the content states (the §3
-    // ordering — a def-root must precede its def-children).
-    const doc = snapshot as unknown as { template: unknown; content: unknown[] }
+    // ordering — a def-root must precede its def-children). The `loadState`
+    // parse already ran in the pre-flight (step 0b) and is REUSED here — a
+    // second parse would be the same data twice on the critical section.
     const seeds: Node[] = []
     const scope = this.graphScope ?? undefined
     seeds.push(new Node(doc.template as never, hub, undefined, false, scope))
-    for (const d of loadState(doc as never)) seeds.push(new Node(d as never, hub, undefined, false, scope))
+    for (const d of parsedSeeds) seeds.push(new Node(d as never, hub, undefined, false, scope))
     reconcileParentTargets(seeds)
     reRegisterDefPrototypes(doc as never, hub, seeds as never[], scope)
     // RESTORE-REGISTERS-PROTOTYPES (`docs/defects.md`; gate
@@ -1145,6 +1203,88 @@ export class Supervisor {
       n.markDirty('remote')
       this.markPass2(n.id)
     }
+    return true
+  }
+
+  /** RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS (2026-11-23), the (b) SWALLOW half,
+   *  part 2 — the PRE-FLIGHT's checks over an ALREADY-PARSED condensed base
+   *  (`loadState` ran in `_restoreBase` step 0b). Returns the refusal REASON, or
+   *  `undefined` when the snapshot can be re-seeded into a live graph.
+   *
+   *  DATA ONLY by construction: no `new Node` (construction registers the node,
+   *  which would clobber `scope.byId` for a colliding id and mis-resolve family
+   *  parents before the eviction — a preflight that constructed a scratch
+   *  generation would itself mutate the live graph), no registry write, no hub
+   *  `Link` touched. Everything below reads the parsed doc and the parsed seeds.
+   *
+   *  WHAT IS **NOT** CHECKED HERE (deliberate, and named as a residual): the
+   *  post-seed `state === 'prototype'` tripwire in `reRegisterDefPrototypes`
+   *  needs CONSTRUCTION, so it cannot be pre-flighted — and it is currently
+   *  unreachable anyway (the C2 strip drops the seam child anchors by
+   *  registry-census membership, `serialize.ts:240-247`). If a future snapshot
+   *  ever trips it, the throw happens AFTER the eviction: the graph is then
+   *  emptied, but `replay()`'s `restore-failed` warn makes it LOUD instead of
+   *  silent. Closing that residual needs the recipe to seed into a scratch
+   *  scope, i.e. a contract change. */
+  private _baseSnapshotRefusal(
+    doc: { template: unknown; content: unknown[]; defPrototypes?: unknown },
+    seeds: NodeBaseData[],
+  ): string | undefined {
+    // (1) NODE-ID UNIQUENESS — the id of `doc.template` PLUS the id of every
+    // `doc.content` item must be distinct: a repeated id cannot be re-seeded
+    // (`reconcileParentTargets` → `Link.addAnchor` throws
+    // `LinkConfigError: unique-order` on the duplicated seed, measured), and
+    // that throw is exactly what used to land after the eviction.
+    //
+    // The `doc.template` read is defensive (only a non-empty string counts — a
+    // malformed snapshot such as `{ template: null, content: [] }` has none; it
+    // is already refused by the parse above, this keeps the check shape-safe).
+    //
+    // ONE EXEMPTION, measured on the live recipe: the template id is ALLOWED to
+    // appear ONCE among `doc.content` ids, because `condense()`'s census IS
+    // `allNodes()`, which CONTAINS the root — so the template ships in `content`
+    // too (measured on the CONTROL page: `template.id === 'node-41'` and
+    // `content` ids `[node-41, node-42, node-44, node-43]`), and the recipe
+    // already seeds that id twice (template + its content copy) in a restore
+    // that SUCCEEDS today (`allNodes()` 2 → 2, `status: 'applied'`, no warn).
+    // Treating the by-construction root copy as a duplicate would refuse every
+    // healthy condense — a SECOND content occurrence is the duplication.
+    const template = doc.template as { id?: unknown } | null | undefined
+    const templateId = typeof template?.id === 'string' && template.id.length > 0 ? template.id : undefined
+    const occurrences = new Map<string, number>()
+    const countId = (id: string | undefined): void => {
+      if (id === undefined) return
+      occurrences.set(id, (occurrences.get(id) ?? 0) + 1)
+    }
+    countId(templateId)
+    for (const item of doc.content) {
+      // the parse above already enforced `typeof item.id === 'string'` for every
+      // content entry (`parseNodeState`) — this read is schema-safe.
+      countId((item as { id: string }).id)
+    }
+    for (const [id, count] of occurrences) {
+      if (count <= (id === templateId ? 2 : 1)) continue
+      return `the condensed snapshot ships one node twice (id "${id}" appears ${count}× among the seeded entries) — a snapshot with a repeated id cannot be re-seeded (\`reconcileParentTargets\` throws \`LinkConfigError: unique-order\` on the duplicated seed); the producer defect is \`condense()\`'s UNDEDUPED census (\`allNodes()\` + the def-prototype registry, plain concat)`
+    }
+    // (2) CENSUS MEMBERSHIP — every `doc.defPrototypes` entry's `nodeId` must be
+    // one the snapshot actually ships. This is the same precondition
+    // `reRegisterDefPrototypes` enforces as `NodeSchema-shape-mismatch`
+    // (`serialize.ts:552-554`); checking it here means a bad doc is refused
+    // BEFORE the eviction instead of throwing through it. The seed id set is the
+    // recipe's own: the template seed (first) plus every parsed content seed.
+    const census = doc.defPrototypes
+    if (Array.isArray(census) && census.length > 0) {
+      const seededIds = new Set<string>()
+      if (templateId !== undefined) seededIds.add(templateId)
+      for (const seed of seeds) if (typeof seed.id === 'string') seededIds.add(seed.id)
+      for (const entry of census) {
+        if (typeof entry !== 'object' || entry === null) continue
+        const nodeId = (entry as { nodeId?: unknown }).nodeId
+        if (typeof nodeId !== 'string' || seededIds.has(nodeId)) continue
+        return `the def-prototype census names node "${nodeId}", which the condensed snapshot does not ship — \`reRegisterDefPrototypes\` would reject the doc (\`NodeSchema-shape-mismatch\`)`
+      }
+    }
+    return undefined
   }
 
   /** INTERNAL (handoffs-review-4.md §3c — redo/replay use it): re-apply an op
@@ -1731,12 +1871,30 @@ export class Supervisor {
         // contained (mirror `condense`'s D5 containment at the journal point):
         // a malformed/corrupted base snapshot would otherwise throw a bare
         // TypeError OUT of replay (the try below wraps only the apply path).
+        // RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS (2026-11-23) — the (b) SWALLOW
+        // half: containment must NEVER be the only thing between a host and an
+        // empty graph. `_restoreBase` now refuses (returns false) BEFORE the
+        // eviction for a snapshot it cannot re-seed, and reports whether the
+        // graph was restored; a throw that still escapes (the post-eviction
+        // residual: the post-seed `state === 'prototype'` tripwire) is LOUD
+        // here instead of silent. Both the refusal warn and this one are
+        // mutually exclusive per restore — a refusal returns `false` and never
+        // reaches the catch.
+        let restored = false
         try {
-          if (snapshot) this._restoreBase(snapshot)
-        } catch {
-          // a corrupted base degrades to a no-op graph-restore — replay never
-          // throws; the post-base re-applies below still run.
+          if (snapshot) restored = this._restoreBase(snapshot)
+        } catch (e) {
+          // the swallow must never be the only thing between a host and an empty graph
+          console.warn(`restore-failed: ${(e as Error)?.message ?? String(e)} — the graph is left as-is; a condensed-base restore must never empty the graph silently`)
+          return this.report('no-op', dirtied)
         }
+        // A REFUSED base leaves the graph as the PRE-base graph, so the
+        // post-base entries must NOT be re-applied: re-applying them against the
+        // un-rolled-back graph is a DOUBLE apply (rows-mint is not idempotent).
+        // `'no-op'` is the honest word — nothing was applied — and it is already
+        // in `UndoRedoReport`'s vocabulary (`'applied' | 'no-op' |
+        // 'base-boundary'`); no new status value is invented.
+        if (!restored) return this.report('no-op', dirtied)
         continue
       }
       // DEFECT-JOURNAL-REPLAY-APPEND + DEFECT-CLONE-REPLAY-NONIDEMPOTENT

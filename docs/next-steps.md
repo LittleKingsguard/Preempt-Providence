@@ -8,9 +8,48 @@ circled back to on resolution. Parked/pending decisions and speculative
 proposals live in `docs/pending.md` — this file is the work queue of what
 to pick up next.
 
-## ✎✎ CURRENT UNIT — `RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s SWALLOW half (owner-queued 2026-11-23; NOT STARTED)
+## ✎✎ CURRENT UNIT — `CONDENSE-CENSUS-NO-DEDUPE` (NOT STARTED)
 
-> **Why first, in one line:** today **any** failure inside a condensed-base restore is silent **total graph loss** —
+> **Why first, in one line:** `condense()` builds its census as a **plain concat** of `allNodes()` and the
+> def-prototype registry (`supervisor.ts:959-962`), so a node in BOTH ships **twice** in the condensed base — and
+> until that is deduped, **any page whose def is seam-wired (`component: [{target:'children', reference:<def>}]`)
+> cannot be restored at all**: the restore refuses it loudly (`RESTORE-REFUSES-NOT-EMPTIES`), which is the correct
+> behaviour for an unrestorable snapshot but a capability hole. Measured content ids: `[node-1, node-2, node-3,
+> node-4, node-5, node-4, node-3]`. One condition on the registry loop (`kids.includes(r)` / a Set) closes it.
+>
+> **RED SET FIRST (no `src/**` in that pass), and it is a RE-SHAPE, not a new file.** `tests/e2e/restore-refusal.test.ts`
+> RR-1 currently pins the **refusal** (graph kept, exactly one warn, `status: 'no-op'`) because that is what the
+> swallow fix produces TODAY. When the dedupe lands, the honest outcome for that page is a **successful restore**, so
+> in the same pass: RR-1's assertions become the SUCCESS contract (same graph back, `status: 'applied'`, **zero**
+> warns), a NEW case pins that the condensed base ships every id **once** (read `journalEntries()` → the base entry's
+> `op.snapshot`; no duplicates), and the refusal path keeps its own coverage (the preflight's `restore-refused-*`
+> shape) via a case that hands the restore a genuinely unrestorable base — if one cannot be authored through the
+> public surface, say so in the row and rely on `MAL-6` + the hub-less case. **Never delete RR-2** (the control).
+> Then decide the ROOT question in the same pass: the root ships twice on EVERY healthy condense (as `doc.template`
+> AND inside `content`, since the census is `allNodes()`), so either make `content` root-less or pin the double-ship
+> as intended and keep the preflight's one-occurrence exemption.
+>
+> **Must not break:** `restore-refusal` 2/2, `restore-integrity` 7/7, `restore-links` 5/5, `post-bootstrap-emit`
+> 27/27, `journal-condensing`, `MAL-6`, and `condense-aborted` / `condense-skipped-size` (D5 containment is
+> untouched — the dedupe is inside the census, not the guard). Trio + `npm run demo:smoke` before reporting.
+
+## ✎✎ LANDED 2026-11-23 — the PREVIOUS unit (`RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s SWALLOW half; its brief kept verbatim below as the record)
+
+> **✎ LANDED 2026-11-23 — and the row's stated mechanism was WRONG, which is why this brief is kept only as a record.**
+> **What shipped:** a **data-only PRE-FLIGHT** before any eviction (`loadState` + node-id uniqueness + census
+> membership; no `new Node`, no registry write, no `Link` touch — construction registers, so a scratch build would
+> clobber `byId`), a `boolean` return from `_restoreBase`, and `replay`'s bare `catch {}` replaced by **one
+> `restore-failed:` warn + `status: 'no-op'`**, with the post-base entries **not** re-applied (a refused base leaves
+> the graph pre-base, so re-applying them is a double apply). Measured: **5 nodes → 5 nodes (ids identical), exactly
+> one warn, `status: 'no-op'`** (was 5 → 0 / `'applied'` / 0 warns). Trio green (1502 + 14), smoke exit 0.
+> **What the brief below gets WRONG (do not act on it):** there is **no** seam-tripwire chain — the C2 strip is keyed
+> on **registry-census membership** (`prototypeInstances.has(kid)`), so a seam-wired def-root's anchor IS stripped;
+> the real throw is `LinkConfigError: unique-order` from `reconcileParentTargets` on a **DUPLICATED SEED**, because
+> `condense()`'s census has no dedupe. That producer defect is the CURRENT UNIT above (`CONDENSE-CENSUS-NO-DEDUPE`).
+> **Residuals accepted:** a post-eviction throw the data preflight cannot foresee is loud-but-empty (closing it needs
+> a scratch-scope recipe, a contract change), and a snapshot-less base marker now also reports `'no-op'`.
+>
+> **The ORIGINAL brief (now superseded — historical):** today **any** failure inside a condensed-base restore is silent **total graph loss** —
 > `allNodes() === 0`, `replay().status === 'applied'`, **no diagnostic** — because `_restoreBase` evicts the graph
 > *before* it knows the snapshot will re-seed, and `replay` wraps the call in a bare `try/catch {}`
 > (`src/core/supervisor.ts:1672-1685`). This is a loud-not-silent fix in the same family as the landed hub-less refusal.
@@ -55,7 +94,7 @@ to pick up next.
 
 > 1. **`CONDENSE-BASE-ALIASES-LIVE-GRAPH`** — contract decision (JSON round-trip of the base vs targeted deep copy); has an
 >    undo-history consequence and a JSON caveat to verify against value-provider/handler-seam cases.
-> 2. **`RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s (a) half** — key the seam strip on `options.seam`, not on the derived `state`.
+> 2. **`RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s (a) half** — ✎ **CLOSED 2026-11-23, WITHDRAWN AS FALSE:** "key the seam strip on `options.seam` instead of the derived `state`" described a keying the code never had (`serialize.ts` strips by **registry-census membership**), so `serialize.ts` needs no change and `docs/specs/serialize.md` now says so. The **swallow** half LANDED 2026-11-23; the REAL producer item (the undeduped `condense()` census) is the CURRENT UNIT above.
 > 3. **`PATH-MODE-DIAGNOSTIC-UNGUARDED`** + **`COMPILE-MODE-OVERRIDE-ORDERING`** — both small, both gate-free.
 > 4. **`ORPHAN-EMIT-TOP-LEVEL-LEAK`** (family-mode limit; `E4` parked behind a family-state child-wire contract),
 >    **`R-VPD-1`**, **`R-VPD-2`**, **`R-VPD-4`**, **`GRAFT-RESIDUALS`** (a), the silent **`chosen`** prune.

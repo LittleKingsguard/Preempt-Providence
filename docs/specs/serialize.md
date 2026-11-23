@@ -31,9 +31,18 @@ Every node state carries `id` + `anchors[]` (typed refs — string targets only;
 schema boundary, SER-F3). Children are **derived, never stored** — the family
 shape is reconstructed from anchor refs on load. Handler bodies (functions)
 are runtime-only and never serialize (SER-H8). **Seam child anchors
-(`role: 'child'` + `options.seam`) on PROTOTYPE-state content entries are
-stripped at emit (C2)** — the seed's one-child limit would drop them anyway,
-and the strip removes the dangling `parent: <consumer-id>` refs. **A
+(`role: 'child'` + `options.seam`) on content entries that are instances of
+the emitted census are stripped at emit (C2)** — the seed's one-child limit
+would drop them anyway, and the strip removes the dangling
+`parent: <consumer-id>` refs. **✎ CORRECTED 2026-11-23 (restore red set,
+`RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`): the key is CENSUS MEMBERSHIP, not
+derived `state`** — the code tests `prototypeInstances.has(kid)`
+(`serialize.ts:240-247`), so a def-root that has been seam-wired (derived
+`'in-tree'`, registered by a host that follows the `state !== 'prototype'`
+filter) **is** stripped, exactly like an out-of-tree prototype. The earlier
+sentence in this clause ("on PROTOTYPE-state content entries") described a
+keying the code never had, and it was the (false) basis of the withdrawn (a)
+half of that defect row. **A
 def-bearing doc ships the FULL `TranslatedTree.nodes` list (prototypes
 included) — the census's builder contract: a census `nodeId` absent from the
 doc is a crafted doc (rejected at the schema boundary).**

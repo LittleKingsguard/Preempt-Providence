@@ -1729,3 +1729,61 @@ list (specs + skill + summary + migration citations) is recorded there.
   UNMOVED:** the
   runtime-vs-runtime growth guard (10×), the derived `2.5×` per-REGION pins,
   the rows census / fan-out (the marker falsifier) and `warningsMain === 0`.
+
+### 10.10.x — RESTORE-REFUSES-NOT-EMPTIES (2026-11-23)
+
+- **DECIDED: a condensed-base restore that cannot complete REFUSES before the
+  eviction and keeps the graph; the swallow is gone.** The recorded defect
+  (`docs/defects.md` **RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS** (b), FIXED) was
+  measured on the canonical host recipe: `_restoreBase` evicted every pre-base
+  node **before** it knew the snapshot could be re-seeded, and `replay()`'s
+  base branch wrapped the call in a bare `catch {}` — so a failure left
+  **`allNodes() === 0`, `replay().status === 'applied'`, and zero
+  diagnostics**. Silent total graph loss on a documented-legal shape.
+- **DECIDED: the preflight is DATA-ONLY, and that is a contract, not an
+  optimisation.** It runs `loadState` plus `_baseSnapshotRefusal` (node-id
+  uniqueness across the shipped entries; census membership for every
+  `doc.defPrototypes` `nodeId`) BEFORE `drainPendingDestroy` and the eviction
+  loops. It may not construct: `new Node` calls `registerNode`, so a scratch
+  build before the eviction would clobber `scope.byId` for a colliding id and
+  mis-resolve family parents — **a mutating preflight is not a preflight.**
+  One exemption is itself contract: the template id may appear once among the
+  content ids, because `condense()`'s census IS `allNodes()` (the root ships in
+  `content` by construction on every healthy condense).
+- **DECIDED: `'no-op'` is the refused-restore status, and no vocabulary is
+  added.** `_restoreBase` returns whether the graph was RESTORED; `replay()`
+  maps a refusal to `report('no-op', dirtied)` and **stops there** — the
+  post-base journal entries are NOT re-applied, because a refused base leaves
+  the graph at its PRE-base state and re-applying them is a double apply
+  (rows-mint is not idempotent). Exactly one diagnostic per refusal
+  (`restore-refused-invalid-snapshot:` / `restore-failed:`), never both.
+- **The defect row's stated mechanism was FALSE and is corrected in place.**
+  The row claimed `serializeSlice`'s C2 strip is keyed on the derived `state`
+  and therefore ships a seam-wired def-root's anchor; the code keys on
+  **registry-census membership** (`prototypeInstances.has(kid)`), so the strip
+  works and `reRegisterDefPrototypes` passes. The measured chain is a
+  **duplicated seed**: the seam flip makes the def-root derive `'in-tree'`, a
+  host following the pinned `state !== 'prototype'` registration filter
+  registers it, the node is then in **both** `allNodes()` and the def-prototype
+  registry, and `condense()`'s census is a **plain concat with no dedupe** —
+  measured content ids `[node-1, node-2, node-3, node-4, node-5, node-4,
+  node-3]`, so `reconcileParentTargets` → `Link.addAnchor` throws
+  `LinkConfigError: unique-order` after the eviction. That producer defect is
+  re-filed OPEN as **`CONDENSE-CENSUS-NO-DEDUPE`** and is the next unit; the
+  swallow fixed here is what made it fatal.
+- **Residuals, accepted and named:** a post-eviction throw the data preflight
+  cannot foresee (the post-seed `state === 'prototype'` tripwire — unreachable
+  today — and any construction/rows-mint failure) is **loud-but-empty** rather
+  than loud-and-kept; closing it needs the recipe to seed into a scratch scope,
+  a contract change. A base marker with no `snapshot` now also reports
+  `'no-op'` and skips the post-base re-applies.
+- **Encoding:** `docs/decisions.md` **`RESTORE-REFUSES-NOT-EMPTIES`**;
+  `docs/defects.md` (the corrected FIXED row + the new OPEN
+  `CONDENSE-CENSUS-NO-DEDUPE`); `docs/specs/undo-redo-report.md` **U19**
+  (re-specified); `docs/specs/serialize.md` (the C2 clause, corrected to
+  census membership); `docs/skills/designing-pages.md` §5.4 limit 6 + §11;
+  `docs/releases.md` 0.6.0 item (10); code `src/core/supervisor.ts`
+  (`_restoreBase` step 0b + `_baseSnapshotRefusal` + `replay`'s base branch);
+  red set `tests/e2e/restore-refusal.test.ts` (RR-1 defect, RR-2 control).
+  **Trio:** `npm test` phase A 1502/1502 + phase B 14/14, `npm run typecheck`
+  clean, `npm run demo:smoke` exit 0 (growth guard inside bound).
