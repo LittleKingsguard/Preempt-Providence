@@ -432,15 +432,15 @@ compilePath(node /* a content node or the root */):
   re-opens `GRAFT-ROOT-PATHKEY-COLLISION` (two live elements on wire `root`).
   Suppressing a walk does not touch the walk set, so the key function behaves
   identically (gate §4.1, row "How bad is the `routed` coupling for `E5`?").
-- **✎ 2026-11-23 — UNTOUCHED by this rule: the N-way placement duplication.** A **✎ RULED 2026-11-23 (owner):** the N-state multiplicity is **INTENDED** — *"if two nodes share a placement name, they both populate with nodes targeting that placement"* — so it is **not** a duplication class. What fails is the **population**: only the container passed to `placement-attach` is dirtied, so every other offering container keeps its pre-attach `childOrder` and never appends (`docs/defects.md` `PLACEMENT-SECOND-CONTAINER-STALE`, measured).
+- **✎ 2026-11-23 — the N-way multiplicity.** **✎ RULED 2026-11-23 (owner):** the N-state multiplicity is **INTENDED** — *"if two nodes share a placement name, they both populate with nodes targeting that placement"* — so it is **not** a duplication class. The **population** half was the defect and it is **FIXED 2026-11-23** (`docs/defects.md` `PLACEMENT-SECOND-CONTAINER-STALE`): `placement-attach` now marks pass-2 for **every** owner of the per-name placement Link (`role === 'container'`), not only the container in its payload, so each offering container re-derives and claims the child — `PBED-13` pins 2 appends, the graft inside every offering container, and a single-tree document. The op's reported `dirtied` and the journal entry are **unchanged** (`[container, added]`), which is why the **E2E-4 affected-set pin did not move**; the pass-2 set is now wider than the reported one. **Residual:** `family` mode re-derives the extra containers and still appends nothing (the D-3 documented limit).
   node placed by NAME into N offering containers still mints **one placement
   state per container** (`P-EMIT-14` pins two states for two containers, and
   asserts every survivor sits in a distinct offering container with
-  `forkKey === pathKey`). Whether that multiplicity is intended (two
-  presentations of one node — §1.1/§1.3) or is itself a duplication class is
-  **UNRULED**: defect row `docs/defects.md` `PLACEMENT-NAME-DUPLICATION` (gate
-  §4.3 / **D-9**). Do not "fix" it as a follow-up to `E5` — `E5` removes the
-  token walk and nothing else.
+  `forkKey === pathKey`). The multiplicity is **INTENDED, not a duplication
+  class** (owner ruling, above; the old `PLACEMENT-NAME-DUPLICATION` reading was
+  wrong and the row is now `PLACEMENT-SECOND-CONTAINER-STALE`, FIXED). Do not
+  "fix" the multiplicity as a follow-up to `E5` — `E5` removes the token walk and
+  nothing else, and `P-EMIT-14` pins the two-state shape on purpose.
 - **✎ 2026-11-23 — the `chosen` prune is still a silent exit** (gate §4.1, last
   row). A walk pruned by the §1.2 first-match filter (`compilePath`'s
   `firstHopZone(w) !== chosen` continue) leaves **no `dropped` entry and no

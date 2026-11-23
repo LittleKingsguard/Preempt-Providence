@@ -533,16 +533,16 @@ landing as closing a row it did not close:
    **Design rule:** place into a container that offers the zone by a `content`
    anchor (a placement-routed container), or keep the tree in path mode from the
    first render.
-2. **The token-walk duplicate is FIXED; a name offered by SEVERAL containers is only partly populated.**
-   `E5` means a routed graft no longer mints a token-identity state, so it renders **once** (`PBED-11`).
-   The placement model itself is **one state per container that offers the name**, and the owner's ruling
-   is explicit: **if two nodes share a placement name, they both populate with the nodes targeting that
-   placement**. Measured today: with two containers offering `zone`, the node mints **two** states and
-   emits **two** elements, yet only **one** gets appended — the container you passed to
-   `placement-attach`; the other keeps the `childOrder` it minted *before* the attach and never receives
-   it (the op dirties only `[container, node]`). In `family` mode neither is appended (limit 1). Defect
-   `PLACEMENT-SECOND-CONTAINER-STALE`; until it is fixed, **place into ONE container per name** and treat
-   a second offering container as unsupported.
+2. **A name offered by SEVERAL containers now populates in ALL of them — in path mode.**
+   The placement model is **one state per container that offers the name**, and the owner's ruling is
+   explicit: **if two nodes share a placement name, they both populate with the nodes targeting that
+   placement**. FIXED 2026-11-23 (`PLACEMENT-SECOND-CONTAINER-STALE`): `placement-attach` now
+   re-derives **every** owner of the per-name placement Link, so the node is appended inside **each**
+   offering container and the document stays a single tree (`PBED-13`). Two residuals:
+   **(a) the op's reported `dirtied` is still only `[container, added]`** — read the pass-2 states if you
+   need to know what actually re-rendered; **(b) in `family` mode the extra containers re-derive but
+   still append nothing** (limit 1), so multi-container population is a **path-mode** guarantee today.
+   Place into one container per name if you are staying in family mode.
 3. **Path mode never resolves a name provided by a DESCENDANT — and now says
    so.** The two resolvers disagree on the universe: a family compile walks
    self → **descendants** → ancestors (`fitReference`), a path compile walks
