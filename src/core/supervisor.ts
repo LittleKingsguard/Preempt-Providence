@@ -1286,6 +1286,22 @@ export class Supervisor {
         const hub = (node as Node).hubFor ?? container.hubFor ?? this.hub
         if (!hub) return { status: 'rejected', error: { code: 'link-config', detail: 'no link hub for placement-attach' } }
         const res = placementAttach(node as Node, container, names, hub)
+        // ORPHAN-EMIT-TOP-LEVEL-LEAK (`docs/defects.md`, engine half;
+        // `docs/specs/orphan-emit-gate-review.md` §5 D-3 — the ACCEPTED
+        // disposition for the FAMILY-mode orphan: a documented limit PLUS a
+        // diagnostic at the op site, never in emit). This branch is the only
+        // place holding BOTH predicate facts: the container's routing (the same
+        // expression pass-2 dispatch computes as `placementRouted`, below) and
+        // the supervisor's compile mode. Container NOT placement-routed + mode
+        // `family` ⇒ nothing appends the added node's state, so it emits as a
+        // DETACHED TOP-LEVEL SIBLING, silently. WARN ONLY: the op still applies,
+        // journals and dirties as before, and no state/render is touched (a
+        // `path`-mode tree re-mints the container and appends — PBED-10 — and a
+        // `content`-anchored container's path-states own the child: both silent).
+        if (this.compileMode === 'family' && !container.anchors.some(a => a.role === 'content')) {
+          const authored = (container.css?.id as string | undefined) ?? (container.props?.id as string | undefined)
+          console.warn(`[placement-attach] placement-orphan: container ${container.id}${authored ? ` (#${authored})` : ''} is not placement-routed (no content anchor), so in FAMILY mode the added node's state will not be appended — it emits as a detached top-level sibling (ORPHAN-EMIT-TOP-LEVEL-LEAK); switching the tree to path mode re-mints the container and claims it, at the cost of a full re-key`)
+        }
         const trigger = (op as { trigger?: PlacementTrigger }).trigger
           ?? derivePlacementTrigger(res.attachZone, res.containerAnchorMinted)
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [container.id, node!.id] })

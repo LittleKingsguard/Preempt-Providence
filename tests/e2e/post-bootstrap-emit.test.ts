@@ -81,7 +81,7 @@
  * RED FIRST (AGENTS.md item 8): written before any fix, against a tree where
  * the defect is live. No `src/**` change accompanies this file.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Supervisor, type Node } from '../../src/core/node.js'
 import { translateLegacy, createLinkHub, type LegacyInitialData, type TranslatedTree } from '../../src/core/translate.js'
 import { renderProducingProcess, treeFromOps } from '../../src/core/render-helpers.js'
@@ -132,6 +132,35 @@ function mergePass2(sup: Supervisor, prevStates: Map<string, CompiledState[]>): 
   for (const [id, arr] of sup.takePass2States()) if (sup.getNode(id)?.isInTree) prevStates.set(id, arr)
 }
 
+/**
+ * The **FAMILY**-mode half of the same host recipe (PBED-12): a family-mode
+ * supervisor is bootstrapped by ONE family compile over the whole slice —
+ * `translated.root.compile(translated.nodes)` → `recordResolved`, the recipe
+ * every family-bootstrapped demo runs (`demo/producing-host.js:156`,
+ * `demo/feature-showcase.js:333`, `demo/hooks-scenarios.js:279`).
+ *
+ * It is NOT interchangeable with `bootstrapStates` above: that one bootstraps
+ * through `compilePath` (the PATH domain), which under an EXPLICIT
+ * `compileMode: 'family'` is not re-derived by pass-2 — the tree is left
+ * mixed-domain and every authored element is re-keyed to a family wire
+ * (`POST-BOOTSTRAP-EMIT-DROP`, pinned by PBED-1..9). PBED-12 measures the
+ * family-mode ORPHAN, so it needs the honest family document: one tree, one
+ * root, and the graft as its only unclaimed sibling.
+ */
+function familyBootstrapStates(sup: Supervisor, tree: TranslatedTree): Map<string, CompiledState[]> {
+  const cr = tree.root.compile(tree.nodes)
+  const grouped = new Map<string, CompiledState[]>()
+  for (const s of cr.actionable) {
+    const arr = grouped.get(s.nodeId) ?? []
+    arr.push(s)
+    grouped.set(s.nodeId, arr)
+  }
+  const prevStates = new Map<string, CompiledState[]>()
+  for (const [id, arr] of grouped) if (sup.getNode(id)?.isInTree) prevStates.set(id, arr)
+  sup.recordResolved(cr.actionable)
+  return prevStates
+}
+
 /** One render pass: emit the live states → diff against the host's `prevMap` →
  *  apply to the adapter → read the document back through `toString()`. */
 function renderPass<P, E>(
@@ -165,8 +194,16 @@ function renderPass<P, E>(
  * `MarkdownAdapter` arm: markdown has no element/id surface, so an id-bearing
  * but text-less envelope renders as `''` in BOTH renders and could not show a
  * loss.
+ *
+ * `fillerRouted` (PBED-12e ONLY — opt-in, every other case keeps the envelope
+ * above byte-identical) gives `#filler` a `targetPlacement`, i.e. a `content`
+ * anchor: the container then IS placement-routed and its pass-2 compile is
+ * `compilePath` (`supervisor.ts` `runPass2AndFlush`: `placementRouted ? …`).
+ * NOTE: `placementName` alone does NOT do this — it mints the PRODUCER
+ * (`container`) anchor, which is what `#holder` carries; the consumer side is
+ * `targetPlacement` → a `content` anchor (`translate.ts:1036` vs `:1078`).
  */
-function placementEnvelope(opts: { cardText?: string } = {}): LegacyInitialData {
+function placementEnvelope(opts: { cardText?: string; fillerRouted?: boolean } = {}): LegacyInitialData {
   return {
     template: {
       root: {
@@ -175,7 +212,12 @@ function placementEnvelope(opts: { cardText?: string } = {}): LegacyInitialData 
         props: { id: 'root' },
         children: [
           { type: 'aside', css: { id: 'holder' }, props: { id: 'holder' }, placement: { placementName: 'zone' } },
-          { type: 'div', css: { id: 'filler' }, props: { id: 'filler' } },
+          {
+            type: 'div',
+            css: { id: 'filler' },
+            props: { id: 'filler' },
+            ...(opts.fillerRouted ? { placement: { targetPlacement: ['zone'] } } : {}),
+          },
         ],
       },
       children: [
@@ -203,7 +245,18 @@ interface Fixture {
   card: Node
 }
 
-function fixture(opts: { cardText?: string; maxJournalLength?: number; sharedHub?: boolean } = {}): Fixture {
+function fixture(opts: {
+  cardText?: string
+  maxJournalLength?: number
+  sharedHub?: boolean
+  /** PBED-12: DECLARE the tree's compile mode (`Supervisor({ compileMode })`).
+   *  Absent ⇒ the shipped default — the mode is then INFERRED from the
+   *  bootstrap states (`supervisor.ts` `recordResolved`, which flips a
+   *  path-bootstrapped tree to `path`), which is what PBED-1..11 run under. */
+  compileMode?: 'family' | 'path'
+  /** PBED-12e: give `#filler` a `content` anchor (see `placementEnvelope`). */
+  fillerRouted?: boolean
+} = {}): Fixture {
   // `sharedHub` gives the SUPERVISOR the tree's own `LinkConfigNameHub` — the
   // documented host shape (`createLinkHub` is the public same-name shared-Link
   // factory; idiom: tests/unit/journal-condensing.test.ts `makeSupervisor`).
@@ -224,6 +277,7 @@ function fixture(opts: { cardText?: string; maxJournalLength?: number; sharedHub
   const sup = new Supervisor({
     ...(hub ? { hub } : {}),
     ...(opts.maxJournalLength !== undefined ? { maxJournalLength: opts.maxJournalLength } : {}),
+    ...(opts.compileMode !== undefined ? { compileMode: opts.compileMode } : {}),
   })
   for (const n of tree.nodes) sup.registerNode(n)
   return { sup, tree, root: tree.root, holder: authored('holder'), filler: authored('filler'), card: authored('card') }
@@ -966,5 +1020,360 @@ describe('POST-BOOTSTRAP-EMIT-DROP — a post-bootstrap structural change must n
       occurrences,
       `the graft's data-node-id appears ${occurrences}× in the adapter's html — the same node rendered as ${occurrences} elements`,
     ).toBe(1)
+  })
+})
+
+// ============================================================================
+// PBED-12 — the FAMILY-MODE ORPHAN and its op-site diagnostic
+//          (`ORPHAN-EMIT-TOP-LEVEL-LEAK` engine half; gate `E6`, D-3)
+// ============================================================================
+//
+// THE ACCEPTED REMEDY (`docs/specs/orphan-emit-gate-review.md` §5 D-3(a), and
+// §8 P-3b): the family-mode orphan is a DOCUMENTED LIMIT **plus a diagnostic at
+// the op site** — never in emit (`E1`/`E2`/`E3` REJECTED: every live residual is
+// root-shaped, so an emit filter either exempts them or drops the seven
+// legitimate literal-batch inputs; `E4` PARKED). The op site is
+// `placementAttach` (`src/core/ops.ts:125-146`) because it holds BOTH facts the
+// predicate needs and emit holds neither:
+//
+//   1. the CONTAINER's routing — `container.anchors.some(a => a.role ===
+//      'content')` is exactly the expression the supervisor's pass-2 dispatch
+//      already uses for the same question (`supervisor.ts:774`
+//      `placementRouted`), and a routed container's compile is `compilePath`,
+//      whose `pathChildrenFor` (`node.ts:260`) claims the placed child;
+//   2. the SUPERVISOR's compile mode — `getCompileMode()` (public); in `path`
+//      mode EVERY dirty node is re-derived in the path domain
+//      (`compilePathSlice`), so the container re-mints and appends.
+//
+// When BOTH conditions of the leak hold (container NOT routed, mode `family`),
+// nothing appends the added node's state, and it emits as a DETACHED TOP-LEVEL
+// SIBLING — silently. The diagnostic makes that behaviour honest and changes
+// nothing else: the op still applies, the state still emits.
+//
+// WHAT THIS BLOCK PINS, per sub-case:
+//  - **PBED-12a** the warn FIRES, once, at the op, naming the container.
+//    **RED today** — no such diagnostic exists.
+//  - **PBED-12b** the op still APPLIES with its today shape (the warn must not
+//    reject). GREEN today.
+//  - **PBED-12c** DELIBERATE CONFIRMATION of the leak shape: 1 element, 0
+//    appends, a 2-root document stream, the graft serialized top-level AFTER
+//    the page root. GREEN today — **a future "fix" of the family-mode leak
+//    must change THIS FILE rather than silently re-render.**
+//  - **PBED-12d** CONTROL — `path` mode stays SILENT (the container re-mints
+//    and appends; `PBED-10` is the proof of the append).
+//  - **PBED-12e** CONTROL — a `content`-anchored container in a `family`-mode
+//    tree stays SILENT (its path-states own the child).
+//  - **PBED-12f** NO BEHAVIOUR CHANGE beside the diagnostic: the added node's
+//    token walk stays SUPPRESSED (`E5`) — exactly one state, on its placement
+//    wire, one element, still unappended.
+//
+// RED FIRST (AGENTS.md item 8): written before the diagnostic exists. Only
+// `PBED-12a` is red; every other sub-case pins behaviour the engine already
+// has. No `src/**` change accompanies this file.
+
+/** One PBED-12 run: the family/path-mode construction, the op, its settled
+ *  flush, the diff render and a fresh-baseline DOCUMENT render of the same live
+ *  states (what a brand-new adapter receives — the forest census). */
+interface OrphanRun {
+  sup: Supervisor
+  root: Node
+  filler: Node
+  graft: Node
+  boot: { els: MinimalElement[]; ops: RenderOp[]; html: string }
+  post: { els: MinimalElement[]; ops: RenderOp[]; html: string }
+  doc: { els: MinimalElement[]; ops: RenderOp[]; html: string }
+  res: ApplyOutcome
+  /** flattened `console.warn` lines captured from just BEFORE the op … */
+  warnsAtOp: string[]
+  /** … through the supervisor's settled flush. */
+  warnsAfterFlush: string[]
+  /** the added node's live states as the HOST holds them (`pathKey` identity). */
+  graftStates: CompiledState[]
+}
+
+/**
+ * THE PBED-12 CONSTRUCTION — one `placement-attach` of a separately translated
+ * tree ROOT (a graft) into `#filler`, on a supervisor whose compile mode is
+ * DECLARED, after that tree's own canonical bootstrap (`opts.mode` decides
+ * which: a family compile for `family`, `compilePath` per node for `path`).
+ *
+ * `console.warn` is spied for the whole window (`vi.spyOn`, args flattened with
+ * `args.map(String).join(' ')`) — the existing op-site diagnostic channel
+ * (`placement-name-vetoed`, `ops.ts:139`), restored by the block's `afterEach`.
+ */
+async function orphanRun(opts: { mode: 'family' | 'path'; fillerRouted?: boolean; zone?: string }): Promise<OrphanRun> {
+  const { sup, tree, root, filler } = fixture({
+    compileMode: opts.mode,
+    ...(opts.fillerRouted ? { fillerRouted: true } : {}),
+  })
+  const series: HostSeries = {
+    prevStates: opts.mode === 'path' ? bootstrapStates(sup, tree.nodes) : familyBootstrapStates(sup, tree),
+    prevMap: null,
+  }
+  const adapter = new SSRFragmentAdapter()
+  const boot = renderPass(sup, adapter, series)
+
+  const graft = consumerNode('graft')
+  sup.registerNode(graft)
+
+  const lines: string[] = []
+  const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(' '))
+  })
+  const res = sup.apply({ kind: 'placement-attach', node: graft, container: filler, names: [opts.zone ?? 'zone'] })
+  const warnsAtOp = [...lines]
+  await sup.flush()
+  mergePass2(sup, series.prevStates)
+  const warnsAfterFlush = [...lines]
+  const post = renderPass(sup, adapter, series)
+  const graftStates = [...(series.prevStates.get(graft.id) ?? [])]
+  const doc = renderPass(sup, new SSRFragmentAdapter(), { prevStates: series.prevStates, prevMap: null })
+  warn.mockRestore()
+
+  return { sup, root, filler, graft, boot, post, doc, res, warnsAtOp, warnsAfterFlush, graftStates }
+}
+
+/** The emitted elements of ONE node, read over `els` AS AN ARRAY (never through
+ *  the last-wins `byNodeId` Map — the graft can hold several). */
+function elsOfNode(els: MinimalElement[], nodeId: string): MinimalElement[] {
+  return els.filter((el) => el.props['data:node-id'] === nodeId)
+}
+
+/** The `append` ops whose CHILD is one of `wires` — "was this element claimed by
+ *  a parent in the document?" (the orphan test). */
+function appendsTo(ops: RenderOp[], wires: ReadonlySet<string>): Array<{ owner: NodeRef; child: NodeRef }> {
+  return appendPairs(ops).filter((p) => wires.has(String(p.child)))
+}
+
+describe('PBED-12 — the family-mode orphan: the op-site diagnostic (gate §5 D-3 / §8 P-3b)', () => {
+  // the op-site channel is `console.warn`; every case restores whatever it spied
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // ==========================================================================
+  // PBED-12a — THE WARN FIRES in the exact leak condition (RED TODAY)
+  // ==========================================================================
+
+  it('PBED-12a a placement-attach into a NON-placement-routed container in a family-mode tree WARNS once, at the op, naming the container (RED today)', async () => {
+    const run = await orphanRun({ mode: 'family' })
+
+    // ---- FIXTURE: both halves of the predicate really are in hand ----------
+    expect(
+      run.sup.getCompileMode(),
+      'FIXTURE: the supervisor must still be in FAMILY mode at the op (a path-mode supervisor re-mints the container and there is nothing to warn about)',
+    ).toBe('family')
+    expect(
+      run.filler.anchors.some((a) => a.role === 'content'),
+      'FIXTURE: #filler must NOT carry a `content` anchor — that anchor is what makes a container placement-routed',
+    ).toBe(false)
+    expect(
+      run.graft.anchors.some((a) => a.role === 'content'),
+      'FIXTURE: the ADDED node must carry a `content` anchor (it is the placement consumer the op attaches)',
+    ).toBe(true)
+
+    // ---- THE DIAGNOSTIC: exactly ONE line, from the OP ---------------------
+    expect(
+      run.warnsAtOp,
+      `the placement-attach emitted ${run.warnsAtOp.length} console.warn line(s) at the op: ${JSON.stringify(run.warnsAtOp)} — the family-mode orphan is silent today and must warn (ORPHAN-EMIT-TOP-LEVEL-LEAK, gate D-3(a))`,
+    ).toHaveLength(1)
+
+    // …and it NAMES THE CONTAINER. The message SHAPE is the implementer's
+    // (nothing here pins wording); a stable identifier is required: the
+    // container's authored id (#filler) or its node id — plus a word that says
+    // what is wrong with it (`placement` / `append` / `orphan`).
+    const line = run.warnsAtOp[0] ?? ''
+    expect(
+      line.includes(run.filler.id) || line.includes('filler'),
+      `the diagnostic does not name the container: expected #filler or ${run.filler.id} in ${JSON.stringify(line)}`,
+    ).toBe(true)
+    expect(
+      /placement|append|orphan/i.test(line),
+      `the diagnostic names the container but not what is wrong with it (no "placement"/"append"/"orphan" word): ${JSON.stringify(line)}`,
+    ).toBe(true)
+
+    // ---- …and NOTHING ELSE warns: the diagnostic is at the OP, not in emit --
+    expect(
+      run.warnsAfterFlush,
+      'a further diagnostic appeared during the settled flush — the diagnostic belongs at the OP SITE, where the container routing and the compile mode are both in hand (gate D-3(a))',
+    ).toHaveLength(1)
+  })
+
+  // ==========================================================================
+  // PBED-12b — the op STILL APPLIES (GREEN TODAY: the warn must not reject)
+  // ==========================================================================
+
+  it('PBED-12b the diagnostic does not change the op: the placement-attach still APPLIES, with today\'s result shape (GREEN today)', async () => {
+    const run = await orphanRun({ mode: 'family' })
+
+    expect(
+      run.res.status,
+      'the placement-attach was not APPLIED — a warn+skip (or a throw) is a BEHAVIOUR change; D-3(a) rules the diagnostic, not a veto',
+    ).toBe('applied')
+    if (run.res.status !== 'applied') return
+
+    expect(
+      [...(run.res.dirtied ?? [])].sort(),
+      'the applied result shape moved: the E2E-4 affected set is still exactly the container + the added node',
+    ).toEqual([run.filler.id, run.graft.id].sort())
+    expect(run.res.journalId, 'the applied op must still be journaled (the result shape is unchanged)').toBeTypeOf('string')
+  })
+
+  // ==========================================================================
+  // PBED-12c — THE LEAK SHAPE, PINNED AS TODAY'S BEHAVIOUR (GREEN TODAY)
+  // ==========================================================================
+
+  it('PBED-12c DELIBERATE CONFIRMATION — the family-mode leak, pinned as today\'s behaviour: 1 element, 0 appends, a 2-root document stream (GREEN today)', async () => {
+    const run = await orphanRun({ mode: 'family' })
+
+    const pageRootWire = byNodeId(run.boot.els).get(run.root.id)?.wire
+    expect(pageRootWire, 'FIXTURE: the page root must emit at bootstrap').toBeDefined()
+
+    // (1) THE ADDED NODE EMITS — once. Its token walk is not minted (`E5`), so
+    // the ONE placement state is the whole of it.
+    const graftEls = elsOfNode(run.post.els, run.graft.id)
+    expect(
+      graftEls.map((el) => String(el.wire)),
+      `the added node emitted ${graftEls.length} element(s) — in family mode it must be exactly ONE (its placement walk; the token walk is suppressed, E5)`,
+    ).toHaveLength(1)
+    const graftWires = new Set(graftEls.map((el) => String(el.wire)))
+
+    // (2) …with ZERO APPENDS: nothing in the document claims it.
+    expect(
+      appendsTo(run.post.ops, graftWires),
+      'the family-mode container APPENDED the added node — that is the FIXED behaviour (path mode / `E4`), not today\'s. If this case fails, change THIS FILE deliberately: the family-mode leak is a documented limit + a diagnostic (gate §5 D-3), and the pin must be re-stated, never silently re-rendered',
+    ).toEqual([])
+
+    // (3) THE DOCUMENT STREAM IS A FOREST: the page root + the floating graft,
+    // and nothing else. Read over a FRESH baseline (prevMap `null`) over the
+    // same live states — exactly what a brand-new adapter receives.
+    const docRoots = treeFromOps(run.doc.ops).map((t) => String(t.wire))
+    expect(
+      docRoots,
+      `the document stream carries ${docRoots.length} roots: [${docRoots.join(', ')}] — the family-mode orphan shape is 2 (the page root + the floating graft); a third root means a different defect moved in (see PBED-12d/e), and a single root means the leak was FIXED`,
+    ).toHaveLength(2)
+    expect(docRoots, 'the page root must still be a document root').toContain(String(pageRootWire))
+    expect(docRoots, 'the added node is not a document root — the leak shape moved').toContain(String(graftEls[0]!.wire))
+
+    // (4) …and the RENDERED document shows the CONSEQUENCE the authors meet:
+    // the graft IS in the html, but as a detached TOP-LEVEL SIBLING after the
+    // page root (`adapters.ts` `toString`'s floating branch) — silently.
+    const marker = `data-node-id="${run.graft.id}"`
+    const graftAt = run.post.html.indexOf(marker)
+    expect(graftAt, 'the added node is absent from the rendered document — it must at least render (the leak is that it renders OUTSIDE its container)').toBeGreaterThan(-1)
+    const rootHtml = outerHtmlOfAuthoredId(run.post.html, 'root')
+    expect(rootHtml, 'the page root is absent from the rendered document').toBeDefined()
+    expect(
+      rootHtml ?? '',
+      'the added node is INSIDE the page root — that is the fixed shape, not today\'s family-mode behaviour',
+    ).not.toContain(marker)
+    const rootEnd = run.post.html.indexOf(rootHtml ?? '') + (rootHtml ?? '').length
+    expect(
+      graftAt,
+      'the added node must serialize as a detached TOP-LEVEL SIBLING: after the page root\'s closing tag (ORPHAN-EMIT-TOP-LEVEL-LEAK)',
+    ).toBeGreaterThanOrEqual(rootEnd)
+  })
+
+  // ==========================================================================
+  // PBED-12d — CONTROL: path mode stays SILENT (GREEN TODAY)
+  // ==========================================================================
+
+  it('PBED-12d CONTROL — the same construction on a `path`-mode supervisor is SILENT: the container re-mints and APPENDS the graft (GREEN today)', async () => {
+    const run = await orphanRun({ mode: 'path' })
+
+    expect(
+      run.sup.getCompileMode(),
+      'FIXTURE: the supervisor must be in path mode (declared, never inferred over)',
+    ).toBe('path')
+    expect(
+      run.warnsAtOp,
+      `a path-mode placement-attach warned: ${JSON.stringify(run.warnsAtOp)} — this tree has no orphan to report (the container is re-derived in the path domain and appends), so the diagnostic must be SILENT`,
+    ).toEqual([])
+    expect(run.warnsAfterFlush, 'a path-mode flush warned — the silence control must hold through the settled pass too').toEqual([])
+
+    // the reason there is nothing to warn about: the append EXISTS (PBED-10's
+    // proof, re-stated here so this control cannot pass vacuously).
+    const graftWires = new Set(elsOfNode(run.post.els, run.graft.id).map((el) => String(el.wire)))
+    expect(graftWires.size, 'FIXTURE: the added node must emit in path mode').toBeGreaterThan(0)
+    expect(
+      appendsTo(run.post.ops, graftWires).length,
+      'CONTROL: path mode did not append the added node, so this control would not prove the diagnostic is mode-scoped (PBED-10 owns the append pin)',
+    ).toBeGreaterThan(0)
+    expect(treeFromOps(run.doc.ops).map((t) => String(t.wire)), 'CONTROL: the path-mode document must be ONE tree').toHaveLength(1)
+  })
+
+  // ==========================================================================
+  // PBED-12e — CONTROL: a placement-ROUTED container stays SILENT (GREEN TODAY)
+  // ==========================================================================
+
+  it('PBED-12e CONTROL — a `content`-anchored container in a family-mode tree is SILENT (its path-states own the child) (GREEN today)', async () => {
+    // The container difference is the ONLY difference from PBED-12a: `#filler`
+    // carries a `content` anchor (authored `targetPlacement` — NOT
+    // `placementName`, which mints the producer anchor), so pass-2 compiles it
+    // with `compilePath` and its `pathChildrenFor` claims the added node.
+    // The attach is requested on a SEPARATE zone (`inner`) so `#holder` is not
+    // a second OFFERING container for the same name — that multiplicity is the
+    // unruled N-way duplication (gate §4.3 / D-9) and does not belong in a
+    // control. (The routed container still mints one state per path it is
+    // itself reachable by, so the added node can emit on more than one wire —
+    // hence the census below is "every element is CLAIMED", never a count.)
+    const run = await orphanRun({ mode: 'family', fillerRouted: true, zone: 'inner' })
+
+    expect(run.sup.getCompileMode(), 'FIXTURE: still family mode — the routing of the container is the variable').toBe('family')
+    expect(
+      run.filler.anchors.some((a) => a.role === 'content'),
+      'FIXTURE: #filler must carry a `content` anchor here (that IS the control variable)',
+    ).toBe(true)
+    expect(
+      run.warnsAtOp,
+      `a family-mode placement-attach into a ROUTED container warned: ${JSON.stringify(run.warnsAtOp)} — its path-states own the child, so the leak condition does not hold and the diagnostic must be SILENT`,
+    ).toEqual([])
+    expect(run.warnsAfterFlush, 'a routed-container flush warned — the silence control must hold through the settled pass too').toEqual([])
+
+    // …and the child really is OWNED: every element of the added node is an
+    // append child (no orphan), which is what "the container is routed" buys.
+    const graftEls = elsOfNode(run.post.els, run.graft.id)
+    expect(graftEls.length, 'FIXTURE: the added node must emit').toBeGreaterThan(0)
+    const claimed = new Set(appendsTo(run.post.ops, new Set(graftEls.map((el) => String(el.wire)))).map((p) => String(p.child)))
+    expect(
+      graftEls.filter((el) => !claimed.has(String(el.wire))).map((el) => String(el.wire)),
+      'CONTROL: the routed container left an element of the added node unappended — then this control is not the "path-states own the child" construction it claims to be',
+    ).toEqual([])
+  })
+
+  // ==========================================================================
+  // PBED-12f — NO BEHAVIOUR CHANGE beside the diagnostic (GREEN TODAY)
+  // ==========================================================================
+
+  it('PBED-12f the diagnostic lands with NO behaviour change: the added node\'s token walk stays SUPPRESSED (E5), one state on its placement wire, one element, still unappended (GREEN today)', async () => {
+    const run = await orphanRun({ mode: 'family' })
+
+    // (1) THE ADDED NODE'S OWN STATE CENSUS — `E5` in the family-mode tree:
+    // one PLACEMENT state, and NOT the zero-hop token identity (`root/<id>`),
+    // which would be a second element on a wire of its own.
+    expect(
+      run.graftStates.map((s) => String(s.pathKey)),
+      `the added node holds ${run.graftStates.length} state(s): the routed graft mints ONE placement state and its token walk stays suppressed (ORPHAN-EMIT gate §5 D-2 / E5)`,
+    ).toHaveLength(1)
+    const wire = String(run.graftStates[0]?.pathKey)
+    expect(wire, "the surviving state is the graft's TOKEN identity — the graft would emit a detached fragment beside its placement element (the duplicate `E5` removed)").not.toBe(`root/${run.graft.id}`)
+    expect(
+      run.graftStates[0]?.forkKey !== undefined && String(run.graftStates[0]?.forkKey) === wire,
+      `the surviving state is not a PATH state (forkKey must equal its pathKey "${wire}")`,
+    ).toBe(true)
+
+    // (2) …and it emits exactly ONE element, on exactly that wire.
+    expect(
+      elsOfNode(run.post.els, run.graft.id).map((el) => String(el.wire)),
+      'the added node must emit exactly one element, on its placement wire — the diagnostic must not be accompanied by a re-render',
+    ).toEqual([wire])
+
+    // (3) …on a wire no token identity owns, and still UNCLAIMED: the leak is
+    // untouched (PBED-12c owns its document-level pin; this repeats the two
+    // readings that a "make the warn do something" change would move first).
+    expect(
+      appendsTo(run.post.ops, new Set([wire])),
+      'the added node is now APPENDED in family mode — the diagnostic must not change the op\'s behaviour (PBED-12c carries the deliberate pin)',
+    ).toEqual([])
   })
 })

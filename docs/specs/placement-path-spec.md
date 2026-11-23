@@ -309,7 +309,7 @@ compilePath(node /* a content node or the root */):
   paths too). `CompiledState.forkKey` (`src/core/types.ts:132`) is present
   on EVERY path-state and is set unconditionally (node.ts:699-706:
   `cs.forkKey = cs.pathKey`, not only when `arm.keys.length > 0`).
-- **✎ AMENDED 2026-11-23 — the `rootNode`-token key is ONE-PER-DOCUMENT, not per-token.** `pathKeyFor` (`src/core/node.ts:232-241`) now mints `'root'` only for the node that roots THIS document (`familyParentTokenOf(node) === 'rootNode' && walk.hops.length === 0 && !routed`). A node that carries the root token but is **family-parentless** — the translated-tree-root **graft** that `placement-attach` places into a family-routed container — falls through to the hop loop with zero contributed segments and keys **`'root/<nodeId>'`**, precisely so it cannot collide with the document root's wire. Defect `GRAFT-ROOT-PATHKEY-COLLISION` (`docs/defects.md`), gate record `docs/specs/post-bootstrap-emit-drop-fix-review.md`. **Residual, do not read this as complete:** a graft placed into a container that is itself an unparented graft still collapses onto one key (`GRAFT-RESIDUALS` (a) in the defect list), and the graft's token-walk state still emits as a floating top-level element (`GRAFT-RESIDUALS` (b) / `ORPHAN-EMIT-TOP-LEVEL-LEAK`).
+- **✎ AMENDED 2026-11-23 — the `rootNode`-token key is ONE-PER-DOCUMENT, not per-token.** `pathKeyFor` (`src/core/node.ts:232-241`) now mints `'root'` only for the node that roots THIS document (`familyParentTokenOf(node) === 'rootNode' && walk.hops.length === 0 && !routed`). A node that carries the root token but is **family-parentless** — the translated-tree-root **graft** that `placement-attach` places into a family-routed container — falls through to the hop loop with zero contributed segments and keys **`'root/<nodeId>'`**, precisely so it cannot collide with the document root's wire. Defect `GRAFT-ROOT-PATHKEY-COLLISION` (`docs/defects.md`), gate record `docs/specs/post-bootstrap-emit-drop-fix-review.md`. **Residual, do not read this as complete:** a graft placed into a container that is itself an unparented graft still collapses onto one key (`GRAFT-RESIDUALS` (a) in the defect list). **✎ 2026-11-23 (`E5` landed, gate §5 D-2):** the token-walk state that used to emit as a floating top-level element is no longer **minted** at all for a `routed` node (§2.4's amendment; `GRAFT-RESIDUALS` (b) FIXED, `PBED-11` pins one element / one create / one document root).
 - **✎ CONSISTENCY NOTE 2026-11-23 (read with §2.1's tree-mode amendment):** the
   compile mode changes WHICH compile re-derives a state, never the KEY function.
   `pathKeyFor` stays a pure function of the current graph, so a re-mint of an
@@ -396,6 +396,57 @@ compilePath(node /* a content node or the root */):
 - Arm disposition stays the three-reason shape (node.md §2
   `ArmDropReason`): prototype/owner/token-terminated paths drop silently;
   loop-terminated paths drop + `circular-source`.
+- **✎ AMENDED 2026-11-23 — a SUPPRESSED walk is NOT a dropped arm** (`ORPHAN-EMIT`
+  gate §5 **D-2**, remedy `E5`; defect row `docs/defects.md` `GRAFT-RESIDUALS`
+  (b), FIXED). The clause above quantifies over ARMS that were considered and
+  rejected. A fourth outcome now exists and it is deliberately **silent**: a
+  `routed` node's **zero-hop token walk** (`hops.length === 0`) **mints
+  nothing** — no `dropped` entry, no `warnings` entry, no `console.warn`. The
+  rule, in `compilePath` (`src/core/node.ts`): the existing prune/termination
+  arms run FIRST into a survivor set (`mintable`), then
+  `suppressToken = routed && mintable.some(w => w.hops.length > 0)` skips the
+  zero-hop walk before `mintPathState`. It is a **MINT removal, not a drop**, so
+  both closed unions stay byte-identical — `ArmDropReason` (`docs/specs/node.md`
+  §2) and `CompileResult.warnings` (`node.md` §2) — and FS-1's *"recorded in
+  `dropped` with the correct `ArmDropReason`"* (`node.md` §9) is not qualified
+  by it: there is no arm to record. The gate ruled that **not creating the thing
+  that would need dropping** is the honest alternative to inventing a silent
+  drop class (`docs/specs/orphan-emit-gate-review.md` §5 D-2, §7 #10). **Where
+  the record lives:** the source comment (`node.ts`) and this clause —
+  nowhere else. A suppression is therefore never a `dropped` count: a routed
+  graft's state count is its placement-walk count.
+- **✎ 2026-11-23 — why the last-state guard falls out of that predicate**
+  (D-2 condition 2; pinned by `tests/unit/path-emit.test.ts` **P-EMIT-15**).
+  Because `suppressToken` is decided on the **survivor set**, it literally reads
+  *"a NON-token walk will mint"*. The naive rule — *suppress whenever
+  `routed`* — is **wrong**: a routed node whose placement walks were all pruned
+  (`chosen` filter) or terminated (prototype/owner-token) would lose its LAST
+  surviving walk, emit ZERO states, and vanish from the document with nothing
+  recording it — and its container's `childOrder` would then name a wire no
+  element emits (the `R-VPD-2` ghost; gate §7 #2). **No non-token survivor ⇒ no
+  suppression ⇒ the token walk mints.**
+- **✎ 2026-11-23 — `routed` and the `!routed` key term are load-bearing.**
+  `routed` stays derived from the **walk set** (`walks.some(w => w.hops.length >
+  0)`, computed before anything is minted and threaded into `mintPathState`),
+  and `pathKeyFor`'s `!routed` term (§2.2) must stay: deleting it as "dead code"
+  re-opens `GRAFT-ROOT-PATHKEY-COLLISION` (two live elements on wire `root`).
+  Suppressing a walk does not touch the walk set, so the key function behaves
+  identically (gate §4.1, row "How bad is the `routed` coupling for `E5`?").
+- **✎ 2026-11-23 — UNTOUCHED by this rule: the N-way placement duplication.** A
+  node placed by NAME into N offering containers still mints **one placement
+  state per container** (`P-EMIT-14` pins two states for two containers, and
+  asserts every survivor sits in a distinct offering container with
+  `forkKey === pathKey`). Whether that multiplicity is intended (two
+  presentations of one node — §1.1/§1.3) or is itself a duplication class is
+  **UNRULED**: defect row `docs/defects.md` `PLACEMENT-NAME-DUPLICATION` (gate
+  §4.3 / **D-9**). Do not "fix" it as a follow-up to `E5` — `E5` removes the
+  token walk and nothing else.
+- **✎ 2026-11-23 — the `chosen` prune is still a silent exit** (gate §4.1, last
+  row). A walk pruned by the §1.2 first-match filter (`compilePath`'s
+  `firstHopZone(w) !== chosen` continue) leaves **no `dropped` entry and no
+  warning**. That hole is what D-2's condition 2 keeps from turning a leak into
+  a *disappearance*; it is **not** what condition 2 closes. Recorded so no
+  silent-exit census is read as complete.
 
 ### 2.5 `activePlacement` (derived, never authored)
 
@@ -519,6 +570,23 @@ R2.3).
   never as a mode-independent fact.** The live residual is therefore narrow — **family-mode trees only** —
   and is disposed as a documented limit plus an op-site diagnostic (gate §5 **D-3**), with the emit-side
   remedies `E1`/`E2`/`E3` **rejected** and `E4` **parked** pending the family-state child-wire contract.
+- **✎ 2026-11-23 — the FAMILY-MODE disposition is a documented LIMIT, not a pending fix** (gate §5 **D-3**,
+  remedy `E6`; defect row `docs/defects.md` `ORPHAN-EMIT-TOP-LEVEL-LEAK`, engine half). Nothing in emit is
+  owed and nothing may be added there: every live residual of this class is **root-shaped**
+  (`cs.parent === null`), so an emit filter either exempts exactly the states the row is about or drops the
+  seven legitimate literal/subset batches (gate §2, §4.1). **The diagnostic LANDED 2026-11-23** — it fires from
+  the **supervisor's `placement-attach` branch** (`src/core/supervisor.ts`, where both facts the predicate needs
+  are already in hand: the target container's routing and `this.compileMode`), **one `console.warn` line per op**
+  naming the container, synchronously inside `apply` (the settled flush adds none), and **only** when
+  `compileMode === 'family'` **and** the container carries no `content` anchor. It changes nothing else: the op
+  still applies, the state still emits, the element is still unappended (pinned deliberately by
+  `tests/e2e/post-bootstrap-emit.test.ts` **PBED-12**). Note the standalone `placementAttach` in `src/core/ops.ts`
+  still cannot see the compile mode, so a host calling that executor directly gets **no** diagnostic — a recorded
+  gap, not a silent one. A warn is **not** a record (`R-VPD-4`), and the escape is the documented mode channel:
+  switching the tree to `path` mode
+  (§2.1 / `docs/decisions.md` **PATH-DOMAIN-RE-MINT**) at the price of a **full re-key of the document** from
+  nodeId wires to pathKey wires (the relocation drain, §3.3's move bullet). The limit itself is stated for
+  authors in `docs/skills/designing-pages.md` §5.4.
 - **Scope pin — attach into a family-routed container (PINNED — stress-
   test review loop round 4, scenario 40(c); ✎ SCOPE-QUALIFIED 2026-11-23 — `family` compile mode only, see the
   qualifier above):** a `placement-attach` into
@@ -542,10 +610,22 @@ R2.3).
   "no render" and was previously stated nowhere. The landed graft fix
   (`GRAFT-ROOT-PATHKEY-COLLISION` — the one-per-document root token, §2.2) gives
   the unparented graft a DISTINCT wire, so it no longer collides with the root's
-  wire; it does **not** suppress the floating element, so the graft's token-walk
-  state still emits detached and the document carries the graft twice
-  (`GRAFT-RESIDUALS` (b)). That residual overlaps this row's engine half — do
-  not read either row as closing the other. Mode/scheme ownership:
+  wire. **✎ 2026-11-23 — `E5` LANDED: the SECOND copy is gone.** A `routed`
+  node's zero-hop token walk is no longer minted (§2.4's amendment, gate §5
+  D-2), so the graft now emits **one element per placement walk** instead of
+  token + N. In the PBED-11 construction (ONE offering container) that is one
+  `create`, a fresh document stream reconstructs exactly **one** `treeFromOps`
+  root, and the graft's `data:node-id` appears **once** in the html
+  — pinned by `tests/e2e/post-bootstrap-emit.test.ts` **PBED-11** (the duplicate
+  census; `PBED-10` keys a last-wins `Map` and structurally cannot see a
+  duplicate) and `tests/unit/path-emit.test.ts` **P-EMIT-14**, with the
+  last-state guard in **P-EMIT-15**. `docs/defects.md` `GRAFT-RESIDUALS` (b) is
+  FIXED by that change. **What `E5` does NOT touch:** the family-mode
+  non-append immediately above (`makeCs` is byte-identical — that is
+  `ORPHAN-EMIT-TOP-LEVEL-LEAK`'s documented-limit half, D-3), the **N-way
+  placement duplication** (`PLACEMENT-NAME-DUPLICATION`, §2.4's N-way-duplication
+  amendment),
+  and the silent `chosen` prune. Mode/scheme ownership:
   `docs/decisions.md` **PATH-DOMAIN-RE-MINT**.
 
 ---
