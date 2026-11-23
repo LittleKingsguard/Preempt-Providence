@@ -8,28 +8,36 @@ circled back to on resolution. Parked/pending decisions and speculative
 proposals live in `docs/pending.md` — this file is the work queue of what
 to pick up next.
 
-## ✎ INTAKE 2026-11-23 — the `modularity` handoff (`H-1`/`H-2`) — **THE GATE IS THE QUEUED ITEM**
+## ✎ GATED 2026-11-23 — the `modularity` handoff (`H-1`/`H-2`): BOTH ASKS REJECTED AS WRITTEN; the queue below replaces them
 
-> **QUEUED, AWAITING THE GATE, NO CODE-SIDE WORK.** Downstream `Provident-Electron`
-> delivered `docs/handoff-modularity-2026-11-20.md` (committed 2026-11-23): `H-1` a
-> post-compile structural change + a public node-keyed invalidation entry; `H-2` a
-> `handlers[].ref` host resolver. Triage (evidence-anchored, **not a verdict**):
-> **`docs/specs/handoffs-triage-modularity-2026-11-20.md`**. **The owner chose gate-first
-> on 2026-11-23**: run the three-agent gate (AGENTS.md item 9 — validity + critique in
-> parallel, then change-analysis on both outputs) over `H-1b` + `H-2`; the verdict lands
-> as **`docs/specs/handoffs-review-11.md`**; nothing upstream changes before that verdict
-> and a go-ahead.
-> **Booked rows:** `docs/pending.md` `H-1b` + `H-2` (the two asks with their recorded
-> constraints) and `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP** — a genuine
-> silent no-op found *inside* `H-1`'s evidence (`attach` never registers its node, against
-> a flush that silently skips unregistered ids) but **independent of either ask**, queued
-> behind the gate **by the owner's choice, not parked**; its fix shape needs a red-first
-> probe first.
-> **Two facts the next agent must not re-derive:** (1) `H-1`'s premise "the ancestor's
-> re-emit cannot be forced" is **not established** — the composition already exists and is
-> merely undocumented; (2) `H-2`'s premise "a handler body is only a function STRING" is
-> **false at the API level** — function values are accepted, and the need is served
-> in-process by `state-slice handlers` / `layer-apply` / `addLayer`.
+> **VERDICT:** `docs/specs/handoffs-review-11.md` (three-agent gate, AGENTS.md item 9 — validity +
+> critique independent/read-only, then change-analysis). Triage `docs/specs/handoffs-triage-modularity-2026-11-20.md`;
+> source `docs/handoff-modularity-2026-11-20.md` (committed 2026-11-23).
+> **`H-1b` REJECT** — the asked shape (dirty the ancestor chain to the root / a new op kind for it) *is*
+> the prohibited whole-tree recompile (`ops.md:288`, G18, the E2E-4 "nothing deeper" pin), and the
+> capability already composes (one mark → `focusedSliceFor` = ancestors ∪ descendants → slice-wide
+> pass-2). **`H-2` REJECT** — a dispatch-time `ref` resolver forks the D2 scope-keyed def registry, puts
+> containment outside the `try`, and would formalise a **live silence**: a body-less handler is already
+> accepted, skipped at dispatch, and still emitted as an `on:<event>` listener.
+> **THE QUEUE, in order (each red-first, no implementation in the same pass):**
+> **(1) R-2a** `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP** — the gate's **head item**; the real
+> blocker for the downstream's module activation. Probes P-1 (red) + P-2 (the registration counter-probe;
+> if P-2 does not show container+root states, the `H-1b` adjudication reopens).
+> **(2) R-2b** `docs/defects.md` **HANDLER-BODYLESS-SILENT-DEAD** (NEW) — the containment warn; probe P-7.
+> **(3) R-1** the documentation bundle — the **stated re-emit sentence** (with both carve-outs:
+> placement-routed nodes do not ascend; a `placement-attach` into a family-routed container orphans the
+> path-state), the empty-`state-slice` escape hatch **with its price** (journal entry, `redoStack` cleared,
+> condense pressure), and the host-owned-closure recipe (`state-slice handlers` / `layer-apply` /
+> pre-mount `addLayer`). P-4 and P-6 assert the sentence before it is written.
+> **(4) R-3** `Supervisor.invalidate` — **NOT approved**: pending probe **P-5** (the forced-re-emit cost
+> probe) + the owner gate (Q1/Q2/Q8). **(5) R-6** the def-registry live-function body — **PARKED** behind
+> **P-8**, a DOWNSTREAM-SIDE probe (is the module graph persisted JSON or an in-process envelope?).
+> **The owner owes** `handoffs-review-11.md` §9 Q1-Q9 — in particular **Q3** (the persistence question that
+> decides all resolver work), **Q4** (may a host-injected closure reverse as its source text?), **Q5**
+> (attach: register vs reject), **Q6** (is the re-emit sentence a decision row or only a recipe?) and
+> **Q9** (how the refusal is communicated downstream — a redirect, not a closing).
+> **Two facts not to re-derive:** `H-1`'s "the re-emit cannot be forced" is **not established**; `H-2`'s
+> "a handler body is only a STRING" is **false at the API level**.
 
 ## ✎ LANDED IN TREE (UNCOMMITTED) — VALUE-PROVIDER-RENDER-DISPOSITION (opened 2026-11-13 as a downstream finding; implemented + documented 2026-11-13; **release 0.5.2 pending the owner**)
 

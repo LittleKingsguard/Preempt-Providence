@@ -60,7 +60,7 @@ then re-read by the supervisor. Every anchor below was read in the tree, not inf
 
 | # | Case | Verdict | Anchor |
 | --- | --- | --- | --- |
-| **(a)** | **`attach` of a node that was never `registerNode`d** — the only add-kind that omits registration, against a flush that **silently skips** ids absent from `this.nodes`, while the op still returns `{status:'applied', dirtied:[node.id]}` | **GENUINE CANDIDATE DEFECT** (silent no-op — nothing renders, nothing warns) | `supervisor.ts:1198-1211` (no `registerNode`, vs `:1186`/`:1244`/`:1290-1293`); skip `:671-676`; duty `docs/specs/contract.md:494` (REQ-GAP-9 "skipping step 4 renders a graph that never reaches pass-2"), `ops.md:106` pins registration only for `placement-attach` |
+| **(a)** | **`attach` of a node that was never `registerNode`d** — the only add-kind that omits registration, against a flush that **silently skips** ids absent from `this.nodes`, while the op still returns `{status:'applied', dirtied:[node.id]}` | **GENUINE CANDIDATE DEFECT** (silent no-op — nothing renders, nothing warns) | `supervisor.ts:1198-1211` (no `registerNode`, vs `:1186`/`:1244`/`:1290-1293`); skip `:671-676`; duty `docs/decisions.md:63` (REQ-GAP-9: "skipping step 4 renders a graph that never reaches pass-2"; the recipe step itself is `docs/specs/contract.md:494`), `ops.md:106` pins registration only for `placement-attach` |
 | **(b)** | `placement-attach` into a container that is **not** placement-routed | **PINNED AS EXPECTED — not a gap** | `docs/specs/placement-path-spec.md:485-495` |
 | **(c)** | `detach` / `destroy` — no upward re-emit (`destroy` evicts the id before the flush) | **KNOWN OPEN RESIDUAL** (`R-VPD-2` ghost-`childOrder`) | `supervisor.ts:1164-1170`, `:1216`; `docs/defects.md:16` |
 
@@ -83,7 +83,7 @@ Case (a) is filed as `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP**
 **Version note.** The handoff's third reading ("the first post-bootstrap mint drops an
 authored bootstrap consumer") describes the class closed by
 **VALUE-PROVIDER-RENDER-DISPOSITION**, which shipped **in 0.5.2 — the version the
-downstream pins** (`docs/decisions.md:15`, `docs/defects.md:70`). It must be re-tested
+downstream pins** (`docs/decisions.md:15`, `docs/defects.md:71`). It must be re-tested
 at 0.5.2 before it is carried as live.
 
 ---
