@@ -53,6 +53,9 @@ type Actor = string
 
 ### 2.1 `attach`
 
+> **✎ AMENDED 2026-11-23 — `attach` REGISTERS its node (register-if-new).** The op registers the attached node in the supervisor's registry before marking pass-2, matching `placement-attach`'s pinned step 1 (§2.6) and the three other add-ops. Before this, an `attach` of a never-registered node reported `applied` while the flush silently discarded its mark — the flush skips dirty ids absent from the supervisor's node map — so nothing rendered (defect `ATTACH-UNREGISTERED-SILENT-NOOP`, `docs/defects.md`; measured by the P-1/P-2 probes). The `dirtied` set is UNCHANGED (`[node.id]`): the container and root reach pass-2 through the slice compile, never through an explicit mark (the E2E-4 pin). Two recorded residuals: `undo()` of an attach does not un-register the node (the same state a host-side `registerNode` already produced), and `attach` performs no cross-graph `scopeOf` check on its target, unlike `clone-instance`.
+
+
 | Step | Action | Ledger ref |
 | --- | --- | --- |
 | 1 | Create or reuse the destination's family `'parent'` anchor on its `'parent-child'` `Link` (satisfies `LinkConfig.parent.count: 1` even before the addend has children) | S-R3.13 |

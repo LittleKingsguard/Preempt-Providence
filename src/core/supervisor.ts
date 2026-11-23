@@ -1304,6 +1304,17 @@ export class Supervisor {
         const prio = (op as { priority?: number }).priority
         if (prio !== undefined) options.priority = prio
         ;(node as Node).addAnchor('child', node as Node, options, link)
+        // ATTACH-UNREGISTERED-SILENT-NOOP (`docs/defects.md` row of that name;
+        // tests/e2e/attach-registration.test.ts) — register-if-new, matching
+        // the other four add-ops (placement-attach above, clone-instance,
+        // layer-apply, rows-mint) and `placement-attach`'s pinned step 1
+        // (`docs/specs/ops.md` §2.6). Without it the markPass2 below is
+        // dropped by the flush's unregistered-id skip (`runPass2AndFlush`),
+        // so the op reports applied while nothing renders. registerNode is
+        // idempotent, so a re-attach of an already-registered node is
+        // unchanged. The dirty set stays `[node.id]` (the container is not
+        // marked — E2E-4's placement pin) and the journal shape is unchanged.
+        this.registerNode(node as Node)
         const entry = this.journalIfApplied(op, { status: 'applied', dirtied: [node!.id] })
         this.emitStructure('attach', node!.id); this.markPass2(node!.id)
         return { status: 'applied', journalId: entry!.id, dirtied: [node!.id] }

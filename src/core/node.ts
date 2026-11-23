@@ -401,6 +401,33 @@ function warnValueRecordDrop(node: Node, name: string): void {
   )
 }
 
+/** `PATH-MODE-SILENT-UNRESOLVED` (docs/defects.md row of that name) — the PATH
+ *  compile's `unresolved-reference` diagnostic signatures. MODULE-level and
+ *  NEVER cleared, mirroring the C4 repetition bound
+ *  (`docs/specs/bodyruns-drop-diagnostics.md` §3 C4) and its `node.ts` sibling
+ *  `valueRecordDropSignatures` above: the bound is per PROCESS, not per
+ *  document. Signature = `` `${code}\u0000${pathKey}\u0000${referenceName}` ``
+ *  — the state's `pathKey` (path identity IS the pathKey, P3 §2.2), never
+ *  widened and never reset. Deliberately NOT shared with family mode's
+ *  `compile` channel, whose per-compile behaviour is unchanged. */
+const pathUnresolvedReferenceSignatures = new Set<string>()
+
+/** The path mode's `unresolved-reference` emission — the SAME channel shape the
+ *  family mode uses (`node.ts` `compile`: `console.warn('unresolved-reference
+ *  at', pathKey)`), deduped per `(code, pathKey, referenceName)`. Returns true
+ *  only for a FIRST emission, so the caller can mirror it into
+ *  `CompileResult.warnings` without a second dedup rule. Resolution is not
+ *  touched: this is the loud half only (the resolver keeps its self →
+ *  path-ancestors universe). */
+function warnPathUnresolvedReference(pathKey: string, referenceName: string): boolean {
+  const code = 'unresolved-reference'
+  const signature = `${code}\u0000${pathKey}\u0000${referenceName}`
+  if (pathUnresolvedReferenceSignatures.has(signature)) return false
+  pathUnresolvedReferenceSignatures.add(signature)
+  console.warn(`${code} at`, pathKey)
+  return true
+}
+
 export class Node {
   readonly isNode = true as const
   readonly id: string
@@ -1492,7 +1519,19 @@ export class Node {
         dropped.push({ arm: [this.id], reason: 'owner-terminated' })
         continue
       }
-      actionable.push(this.mintPathState(w, routed))
+      const cs = this.mintPathState(w, routed)
+      actionable.push(cs)
+      // PATH-MODE-SILENT-UNRESOLVED — the LOUD half: the path resolve's
+      // unresolved entries (`resolvePathTargets` → `cs.unresolved`) reach the
+      // SAME two channels family mode uses (the `compile` push + `console.warn`
+      // above), deduped per `(code, pathKey, referenceName)`. The state's own
+      // `unresolved` content is untouched — dedup silences a repeated
+      // diagnostic, never the record the renderer/supervisor reads.
+      for (const u of cs.unresolved) {
+        if (warnPathUnresolvedReference(cs.pathKey, u.referenceName)) {
+          warnings.push({ code: 'unresolved-reference', pathKey: cs.pathKey })
+        }
+      }
     }
     return { actionable, dropped, warnings }
   }
