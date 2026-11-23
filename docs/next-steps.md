@@ -10,6 +10,14 @@ to pick up next.
 
 ## ✎✎ CURRENT UNIT — `CONDENSE-CENSUS-NO-DEDUPE` (NOT STARTED)
 
+> **✎ STATE AS OF THE LAST PASS (2026-11-23, read this first):** the mutation-detection gate ran
+> (`docs/specs/restore-base-mutation-detection-gate-review.md`) → **step 1 LANDED** as
+> `tests/unit/condense-base-invariance.test.ts` (a PIN, no `src/**`: the engine's replace-not-mutate discipline, promoted
+> from a per-op bisect, incl. the post-restore window and the marker-replacement artefact as an explicit negative
+> control). **Step 2 — the reshaped `restore-base-mutated` warn — AWAITS THE OWNER**, because it amends
+> `CONDENSE-BASE-IS-A-LIVE-VIEW` clause (2) ("no detection") and needs a downstream delta notice; its full spec,
+> amendment set and rejected alternatives are in the gate record §5/§6. **Nothing else in the queue moved.**
+
 > **Why first, in one line:** `condense()` builds its census as a **plain concat** of `allNodes()` and the
 > def-prototype registry (`supervisor.ts:959-962`), so a node in BOTH ships **twice** in the condensed base — and
 > until that is deduped, **any page whose def is seam-wired (`component: [{target:'children', reference:<def>}]`)

@@ -625,7 +625,14 @@ landing as closing a row it did not close:
 > ruling is the sentence "attempts to mutate history are unsupported behaviour").
 > Change state through the managed channel (`apply` / `state-slice` / the ops) and
 > **re-read from the graph after a condense** instead of holding objects across
-> it. The identity half is intended too: an untouched restore hands back the
+> it. **Note what the channel can and cannot do to a nested value:** `targetProp`
+> is `props.${string}` with a **single** segment, so `'props.theme.mode'` writes a
+> LITERAL key `"theme.mode"` — it does not traverse. To change a nested value,
+> write the WHOLE carrier (`targetProp: 'props.theme'`, the full object) — which is
+> exactly the replace-don't-mutate discipline that keeps the condensed base intact
+> (`src/core/supervisor.ts` `applyPropSlice`; `docs/specs/api.md`'s `LayerMutation`
+> union). Reaching into the object you already hold is the one path that rewrites
+> history. The identity half is intended too: an untouched restore hands back the
 > **same** objects, so never test for freshness — `docs/specs/serialize.md`'s
 > "Feature 3 base" clause is the contract, and no clone is queued.
 
