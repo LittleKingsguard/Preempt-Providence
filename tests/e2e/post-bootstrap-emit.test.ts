@@ -84,7 +84,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Supervisor, type Node } from '../../src/core/node.js'
 import { translateLegacy, createLinkHub, type LegacyInitialData, type TranslatedTree } from '../../src/core/translate.js'
-import { renderProducingProcess, treeFromOps } from '../../src/core/render-helpers.js'
+// `isPathState` — PBED-14 only: the engine's own state-domain predicate, used
+// as the fixture's "did the bootstrap and the declared mode AGREE?" read (the
+// file's PBED-1..13 cases deliberately do NOT read state shapes; see the header).
+import { renderProducingProcess, treeFromOps, isPathState } from '../../src/core/render-helpers.js'
 import { SSRFragmentAdapter, MarkdownAdapter } from '../../src/core/adapters.js'
 import type { MinimalElement, RenderAdapter, RenderOp } from '../../src/core/render.js'
 import type { CompiledState, NodeRef } from '../../src/core/types.js'
@@ -1845,5 +1848,558 @@ describe('PLACEMENT-SECOND-CONTAINER-STALE — a placement name offered by TWO c
       outerHtmlOfAuthoredId(run.post.html, authoredIdOf(only)) ?? '',
       `CONTROL: the graft is not INSIDE the only offering container #${authoredIdOf(only)} (PBED-10 carries this pin; a widened dirty set must not regress it)`,
     ).toContain(`data-node-id="${run.graft.id}"`)
+  })
+})
+
+// ============================================================================
+// PBED-14 — `compileMode:'path'` declared over a FAMILY-bootstrapped tree:
+//          REFUSE LOUDLY (the owner's 2026-11-23 ruling on gate §5 ruling 3)
+// ============================================================================
+//
+// **THE OWNER'S RULING** (`docs/specs/path-mode-resolution-gate-review.md` §5
+// ruling 3, 2026-11-23): the compile-mode override — `compileMode: 'path'`
+// declared over a tree whose bootstrap was FAMILY — must **"refuse loudly."**
+// (The gate offered "forbid it, documented as unsupported" or "make it refuse
+// loudly"; the owner took the second.)
+//
+// **THE CONFIGURATION AND ITS MEASURED COST** (probe P-7 arm **A5**,
+// `docs/defects.md` row `PATH-MODE-SILENT-UNRESOLVED`, closed; the arm's facts
+// re-measured by this file's construction): the family bootstrap emits a
+// binding (`theme: 'dark'`) into the consumer's state; the FIRST `path`-mode
+// pass-2 **DELETES it** (`bindings {}`, an `unresolved` entry left behind) —
+// silently, because the bootstrap's states are FAMILY states (`forkKey`
+// absent) and a path re-mint replaces them, so the resolution universe the
+// binding came from (the family walk) is gone.
+//
+// **WHAT THE RULING IS, AND IS NOT.** It is a DIAGNOSTIC ruling: the engine
+// must say something clear when this configuration is actually exercised,
+// instead of deleting an emitted binding in silence. It is NOT a semantics
+// change — the deletion still happens, the op still applies, nothing is
+// rejected or skipped; the warn makes the loss honest. `PBED-14a` pins the
+// deletion as today's behaviour for exactly that reason, and `PBED-14d` pins
+// that the diagnostic changed nothing.
+//
+// **THE TREE (deliberately minimal — only what A5 needs).** `div#root` with
+// ONE child of interest: `div#panel`, a CONSUMER that references `theme` into
+// `props.theme`, with `#inner > #deeper` beneath it and `#deeper` the PROVIDER
+// (`theme: 'dark'`). The provider is a DESCENDANT of the consumer — the one
+// direction the family walk (`fitReference`: self → descendants → ancestors)
+// resolves and the path walk (`resolvePathTargets`: self → path ancestors
+// only) does not — so the bootstrap's binding is a genuine family-universe
+// fact, not a restatement of the path domain.
+//
+// The consumer is deliberately **NOT** placement-routed: a `content`-anchored
+// dirty node compiles through `compilePath` in BOTH modes
+// (`supervisor.ts` `runPass2AndFlush`'s `placementRouted` branch), so it could
+// never exhibit the MODE mismatch. A plain family-chain consumer is the shape
+// where the declared mode alone decides the route —
+// `compilePathSlice(slice)` under `path` vs `compile(focusedSlice)` under
+// `family`.
+//
+// **THE SANCTIONED OP** is the same one `PBED-6` uses: ONE `state-slice` props
+// write on the consumer. It dirties exactly that node (no topology change), so
+// the ONLY difference between the two modes' pass-2 is the compile route —
+// which is precisely the variable the owner ruled on.
+//
+// WHAT THIS BLOCK PINS, per sub-case (fixture preconditions first, always):
+//  - **PBED-14a** the diagnostic FIRES, exactly once, on a supervisor whose
+//    mode is declared `path` over a family bootstrap, and NAMES the mode
+//    mismatch; the deletion it reports is unchanged (the bootstrap state
+//    carries `theme: 'dark'`, the post-flush state does not).
+//    **RED today** — no such diagnostic exists.
+//  - **PBED-14b** CONTROL — path bootstrap + path mode (the SUPPORTED
+//    configuration) warns nothing; `PBED-10`/`PBED-13` are its behaviour pins,
+//    so this case reads diagnostics only. **GREEN today.**
+//  - **PBED-14c** CONTROL — family bootstrap + family mode warns nothing, and
+//    the binding SURVIVES the same op (the contrast that proves the deletion
+//    in 14a is the mode mismatch, not the op). **GREEN today.**
+//  - **PBED-14d** CONTROL — the diagnostic is a diagnostic only: the op is
+//    still `applied`, it is still journaled, and the emitted element census is
+//    unchanged versus the same construction that does not warn (nothing was
+//    rejected, skipped or filtered). **GREEN today.**
+//
+// RED FIRST (AGENTS.md item 8): written before the diagnostic exists. Only
+// `PBED-14a` is red; `14b`/`14c`/`14d` pin behaviour the engine already has.
+// No `src/**` change accompanies this file.
+
+/**
+ * The PBED-14 authored page (see this block's header): a family-chain CONSUMER
+ * (`#panel`, `component.reference 'theme' → props.theme`) over a DESCENDANT
+ * PROVIDER (`#deeper`, `value: 'dark'`), with `#inner` in between — probe P-7's
+ * `#panel`/`#inner`/`#deeper` shape, which is the only family-vs-path
+ * resolution difference the A5 arm needs.
+ *
+ * Every PBED-14 case builds its OWN tree from this envelope: node ids are
+ * minted from a module counter, so each run's states get distinct `pathKey`s
+ * and one case can never be silenced by another's diagnostics (the
+ * `PATH-MODE-DIAGNOSTIC-UNGUARDED` per-process dedup class).
+ */
+function pb14Envelope(): LegacyInitialData {
+  return {
+    template: {
+      root: {
+        type: 'div',
+        css: { id: 'root' },
+        props: { id: 'root' },
+        children: [
+          {
+            type: 'div',
+            css: { id: 'panel' },
+            props: { id: 'panel' },
+            component: { reference: 'theme', target: 'props.theme' },
+            children: [
+              {
+                type: 'div',
+                css: { id: 'inner' },
+                props: { id: 'inner' },
+                children: [
+                  {
+                    type: 'span',
+                    css: { id: 'deeper' },
+                    props: { id: 'deeper' },
+                    component: { reference: 'theme', value: 'dark' },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    },
+    content: [],
+    clientConfig: { runInstantiation: true, runRendering: true },
+  }
+}
+
+/** The STATE-level twin of `isPathDomain(el)`: a path state carries
+ *  `forkKey === pathKey` (set at mint, `node.ts` `mintPathState`); a FAMILY
+ *  state carries no `forkKey` at all. A public field of the compiled state, not
+ *  a compile-mode probe — and deliberately the engine's OWN predicate
+ *  (`render-helpers.ts` `isPathState`, the one `supervisor.ts:714` already uses
+ *  to infer the bootstrap's domain), so a case can never disagree with the
+ *  engine about which domain a recorded state belongs to. */
+function stateIsPathDomain(s: CompiledState): boolean {
+  return isPathState(s)
+}
+
+/** The authored ids PBED-14's document always carries — the census that a
+ *  diagnostic did not reject/skip/filter an element reads it off the emitted
+ *  elements (`PBED-14d`). */
+const PB14_AUTHORED_IDS = ['root', 'panel', 'inner', 'deeper'] as const
+
+/**
+ * THE MODE-MISMATCH DIAGNOSTIC, read off the flattened `console.warn` lines.
+ *
+ * The owner ruled the CONTENT (a clear diagnostic when `compileMode: 'path'`
+ * is exercised over a family bootstrapped tree), never the WORDING: any line
+ * that names the mode class (a word carrying `mode` / `compil…` / `bootstrap…`)
+ * AND `path` counts. The filter is deliberately tolerant for that reason —
+ * and deliberately NARROW enough to exclude the OTHER diagnostics this
+ * construction legitimately emits: the path resolver's landed loud half reports
+ * the deleted reference as `unresolved-reference at <pathKey>` (the
+ * `PATH-MODE-SILENT-UNRESOLVED` loud channel), which names neither the mode
+ * nor `path` and must never be mistaken for the ruling's diagnostic.
+ */
+const PB14_MODE_WORD = /mode|compil|bootstrap/i
+const PB14_PATH_WORD = /path/i
+
+function modeMismatchWarns(lines: readonly string[]): string[] {
+  return lines.filter((l) => PB14_MODE_WORD.test(l) && PB14_PATH_WORD.test(l))
+}
+
+interface Pb14Run {
+  sup: Supervisor
+  root: Node
+  panel: Node
+  /** the consumer's live states IMMEDIATELY after the bootstrap (before any op). */
+  bootStates: CompiledState[]
+  /** every recorded bootstrap state is a PATH state (true ⇔ the bootstrap and
+   *  the declared mode AGREE — the supported configuration's precondition). */
+  bootAllPath: boolean
+  boot: RenderRead
+  /** the consumer's live states after the op + the supervisor's settled flush. */
+  postStates: CompiledState[]
+  post: RenderRead
+  res: ApplyOutcome
+  /** the journal as the host reads it after the op (`journalEntries()`). */
+  journal: ReturnType<Supervisor['journalEntries']>
+  /** flattened `console.warn` lines, per phase of the construction. */
+  warnsAtBootstrap: string[]
+  warnsAfterFirstFlush: string[]
+  warnsAfterSecondFlush: string[]
+  /** the second sanctioned op's outcome (the one-shot probe) — never asserted
+   *  for its own shape, only for the extra diagnostics it must NOT add. */
+  second: ApplyOutcome
+}
+
+/**
+ * ONE PBED-14 run: translate the A5 page → `Supervisor({ compileMode })` (the
+ * mode is always DECLARED, never inferred) → the tree's own canonical
+ * bootstrap in the requested domain (`opts.bootstrap`: `family` =
+ * `tree.root.compile(tree.nodes)` → `recordResolved`, `path` = one
+ * `compilePath` per node → `recordResolved`) → the bootstrap render → ONE
+ * sanctioned `state-slice` props write on the consumer → `flush()` → the
+ * post-flush render → ONE MORE sanctioned op + `flush()` (the one-shot probe)
+ * → a final render.
+ *
+ * `console.warn` is spied from BEFORE the bootstrap (the diagnostic may
+ * legitimately be raised at the bootstrap seam — `recordResolved` is where the
+ * two facts first coexist — or at the first path-mode pass-2; this run must
+ * hear it either way) and restored at the end. Args are flattened with
+ * `args.map(String).join(' ')` (the `PBED-12` idiom).
+ *
+ * READ THE `els` ARRAY, NOT THE ADAPTER'S `toString()`: under a declared
+ * `path` mode over a FAMILY bootstrap the re-mint re-keys every wire (family
+ * wires → path wires), so a long-lived `SSRFragmentAdapter` zeroes its document
+ * — `POST-BOOTSTRAP-EMIT-DROP`'s own mechanism (`PBED-1..4`), a SECOND
+ * consequence of the same override. The element census these cases read is the
+ * emit layer's output, which the override does not change.
+ */
+async function pb14Run(opts: { mode: 'family' | 'path'; bootstrap: 'family' | 'path' }): Promise<Pb14Run> {
+  const lines: string[] = []
+  const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(' '))
+  })
+
+  const tree = translateLegacy(pb14Envelope())
+  const authored = (cssId: string): Node => {
+    const n = tree.nodes.find((x) => x.css?.id === cssId || x.props?.id === cssId)
+    if (!n) throw new Error(`PBED-14 fixture: the envelope has no #${cssId} node`)
+    return n
+  }
+  const root = tree.root
+  const panel = authored('panel')
+
+  const sup = new Supervisor({ compileMode: opts.mode })
+  for (const n of tree.nodes) sup.registerNode(n)
+
+  const series: HostSeries = {
+    prevStates: opts.bootstrap === 'path' ? bootstrapStates(sup, tree.nodes) : familyBootstrapStates(sup, tree),
+    prevMap: null,
+  }
+  const bootStates = [...(series.prevStates.get(panel.id) ?? [])]
+  const bootAllPath =
+    series.prevStates.size > 0 && [...series.prevStates.values()].every((arr) => arr.every(stateIsPathDomain))
+
+  const adapter = new SSRFragmentAdapter()
+  const boot = renderPass(sup, adapter, series)
+  const warnsAtBootstrap = [...lines]
+
+  const res = sup.apply({
+    kind: 'state-slice',
+    node: panel,
+    mutation: [{ targetProp: 'props.tick', mode: 'replace', value: '1' }],
+  })
+  await sup.flush()
+  mergePass2(sup, series.prevStates)
+  const postStates = [...(series.prevStates.get(panel.id) ?? [])]
+  const post = renderPass(sup, adapter, series)
+  const warnsAfterFirstFlush = [...lines]
+  const journal = sup.journalEntries()
+
+  // THE ONE-SHOT PROBE: a second sanctioned op + flush on the SAME supervisor.
+  const second = sup.apply({
+    kind: 'state-slice',
+    node: panel,
+    mutation: [{ targetProp: 'props.tick', mode: 'replace', value: '2' }],
+  })
+  await sup.flush()
+  mergePass2(sup, series.prevStates)
+  renderPass(sup, adapter, series)
+  const warnsAfterSecondFlush = [...lines]
+  sup.takePass2States()
+  warn.mockRestore()
+
+  return {
+    sup,
+    root,
+    panel,
+    bootStates,
+    bootAllPath,
+    boot,
+    postStates,
+    post,
+    res,
+    journal,
+    warnsAtBootstrap,
+    warnsAfterFirstFlush,
+    warnsAfterSecondFlush,
+    second,
+  }
+}
+
+describe("PBED-14 — compileMode:'path' over a FAMILY-bootstrapped tree must REFUSE LOUDLY (owner ruling 2026-11-23)", () => {
+  // the diagnostic channel is `console.warn`; restore whatever a case spied
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // ==========================================================================
+  // PBED-14a — THE DIAGNOSTIC FIRES (RED TODAY)
+  // ==========================================================================
+
+  it("PBED-14a a declared `path` mode over a FAMILY bootstrap WARNS once, naming the mode mismatch, and the deletion it reports is unchanged (RED today)", async () => {
+    const run = await pb14Run({ mode: 'path', bootstrap: 'family' })
+
+    // ---- FIXTURE (1): the configuration really is the A5 one --------------
+    expect(
+      run.sup.getCompileMode(),
+      'FIXTURE: the supervisor must be in the DECLARED path mode at the op (a mode inferred over by `recordResolved` would be the supported configuration, not the mismatch this case measures)',
+    ).toBe('path')
+    expect(
+      run.bootStates.length,
+      'FIXTURE: the family bootstrap must mint exactly ONE state for the consumer',
+    ).toBe(1)
+    expect(
+      stateIsPathDomain(run.bootStates[0]!),
+      "FIXTURE: the recorded bootstrap state must be a FAMILY state (no `forkKey`): if it were a path state, `path` mode and the bootstrap would AGREE and there would be no universe to lose",
+    ).toBe(false)
+
+    // ---- FIXTURE (2): the bootstrap state CARRIES the binding -------------
+    // Without this the deletion 14a pins could be a no-op, and a diagnostic
+    // about a lost binding would be reporting nothing.
+    expect(
+      run.bootStates[0]!.bindings,
+      'FIXTURE: the FAMILY bootstrap must resolve the DESCENDANT-provided "theme" into the consumer\'s state — the binding whose silent deletion this ruling is about (probe P-7 arm A5; the family walk reaches 3 levels down, resolve.ts fitReference)',
+    ).toMatchObject({ theme: 'dark' })
+    expect(
+      run.bootStates[0]!.unresolved,
+      'FIXTURE: the bootstrap resolved "theme", so it must record NO unresolved entry for it',
+    ).toHaveLength(0)
+    const bootPanelEl = byNodeId(run.boot.els).get(run.panel.id)
+    expect(bootPanelEl, 'FIXTURE: the consumer must emit at bootstrap').toBeDefined()
+    expect(
+      bootPanelEl!.props['prop:theme'],
+      'FIXTURE: the bootstrap binding must reach EMIT — the emitted consumer element must carry `prop:theme` (the loss is visible in the document, not only in the state)',
+    ).toBe('dark')
+
+    // ---- (1) THE DIAGNOSTIC: exactly ONE line, naming the mode mismatch ---
+    // Captured from BEFORE the bootstrap through the settled flush, so it does
+    // not matter whether the engine raises it at the `recordResolved` seam
+    // (where the declared mode and the family states first coexist) or at the
+    // first path-mode pass-2: the ruling's requirement is that the
+    // configuration, once EXERCISED, is loud.
+    const atFirstFlush = modeMismatchWarns(run.warnsAfterFirstFlush)
+    expect(
+      atFirstFlush,
+      `compileMode:'path' declared over a FAMILY-bootstrapped tree emitted ${atFirstFlush.length} console.warn line(s) naming the mode mismatch — the owner ruled it must REFUSE LOUDLY (gate §5 ruling 3, 2026-11-23: "Refuse loudly."), because the first path-mode pass-2 SILENTLY DELETES the binding the family bootstrap emitted (probe P-7 arm A5). Lines per phase — bootstrap: ${JSON.stringify(modeMismatchWarns(run.warnsAtBootstrap))}, after the op+flush: ${JSON.stringify(modeMismatchWarns(run.warnsAfterFirstFlush))}; ALL measured warn lines: ${JSON.stringify(run.warnsAfterFirstFlush)}`,
+    ).toHaveLength(1)
+
+    // ---- (2) …and it is ONE-SHOT per supervisor: a second op adds none ----
+    // The condition is a PER-SUPERVISOR configuration fact (declared mode +
+    // recorded bootstrap domain); it does not become truer on every op, and a
+    // per-op warn would flood a host that writes on every tick.
+    const atSecondFlush = modeMismatchWarns(run.warnsAfterSecondFlush)
+    expect(
+      atSecondFlush,
+      `a SECOND sanctioned op + flush on the same supervisor added ${atSecondFlush.length - atFirstFlush.length} more mode-mismatch line(s) (${JSON.stringify(atSecondFlush)}): the diagnostic is owed ONCE per supervisor, keyed on the configuration — not once per op`,
+    ).toHaveLength(1)
+
+    // ---- (3) THE DELETION, PINNED AS UNCHANGED BEHAVIOUR ------------------
+    // The ruling is a DIAGNOSTIC, not a fix: the path re-mint still replaces
+    // the family-bootstrapped states, so the binding is still gone after the
+    // flush. The warn makes that loss HONEST; it does not restore it. If a
+    // future change makes this binding SURVIVE, change THIS FILE deliberately
+    // — that would be a resolution-semantics change, which the owner
+    // explicitly did not rule (`docs/decisions.md`
+    // `PATH-MODE-RESOLUTION-UNIVERSE`).
+    expect(
+      run.postStates.length,
+      'FIXTURE: the path-mode pass-2 must settle exactly ONE state for the consumer',
+    ).toBe(1)
+    expect(
+      stateIsPathDomain(run.postStates[0]!),
+      'FIXTURE: the post-flush state must be a PATH state — that is the re-mint that replaces the family bootstrap state',
+    ).toBe(true)
+    expect(
+      run.postStates[0]!.bindings,
+      `the consumer's binding SURVIVED the path-mode pass-2 (bindings ${JSON.stringify(run.postStates[0]!.bindings)}) — that is a RESOLUTION change, not the diagnostic this ruling ordered. Today the family-bootstrapped binding is replaced by the path state's bindings (A5), and only the diagnostic may be added`,
+    ).not.toMatchObject({ theme: 'dark' })
+    expect(
+      run.postStates[0]!.unresolved,
+      'the post-flush state must record WHY the binding is gone (`unresolved-reference` for "theme") — the state channel the deletion leaves behind',
+    ).toContainEqual({ referenceName: 'theme', code: 'unresolved-reference' })
+    const postPanelEl = byNodeId(run.post.els).get(run.panel.id)
+    expect(postPanelEl, 'the consumer stopped emitting after the sanctioned op').toBeDefined()
+    expect(
+      postPanelEl!.props['prop:theme'],
+      'the emitted consumer element still carries `prop:theme` — then the A5 deletion this ruling reports is not live any more and this case must be re-stated deliberately',
+    ).toBeUndefined()
+  })
+
+  // ==========================================================================
+  // PBED-14b — CONTROL: path bootstrap + path mode (the SUPPORTED config)
+  // ==========================================================================
+
+  it('PBED-14b CONTROL — a PATH bootstrap under a declared `path` mode is the SUPPORTED configuration and warns NOTHING (GREEN today)', async () => {
+    // The behaviour pins this control does NOT restate: `PBED-10` (the append
+    // under path enumeration) and `PBED-13` (the per-container population).
+    // This case reads DIAGNOSTICS only.
+    const run = await pb14Run({ mode: 'path', bootstrap: 'path' })
+
+    // ---- FIXTURE: the mode and the bootstrap AGREE ------------------------
+    expect(run.sup.getCompileMode(), 'FIXTURE: the supervisor must be in path mode').toBe('path')
+    expect(
+      run.bootAllPath,
+      'FIXTURE: every recorded bootstrap state must be a PATH state — that is what makes this the supported configuration (the mode the tree was bootstrapped in is the mode declared on the supervisor)',
+    ).toBe(true)
+    expect(run.bootStates, 'FIXTURE: the path bootstrap must mint a state for the consumer').toHaveLength(1)
+
+    // ---- THE CONTROL: no mode-mismatch diagnostic -------------------------
+    expect(
+      modeMismatchWarns(run.warnsAtBootstrap),
+      `the SUPPORTED configuration (path bootstrap + declared path mode) warned at the bootstrap: ${JSON.stringify(modeMismatchWarns(run.warnsAtBootstrap))} — there is no mismatch to report, and a diagnostic here would fire on every path-mode host`,
+    ).toEqual([])
+    expect(
+      modeMismatchWarns(run.warnsAfterFirstFlush),
+      `the SUPPORTED configuration warned at the op/flush: ${JSON.stringify(modeMismatchWarns(run.warnsAfterFirstFlush))} — the diagnostic must be scoped to the OVERRIDE (a family bootstrap under a declared path mode), never to path mode itself`,
+    ).toEqual([])
+    expect(
+      modeMismatchWarns(run.warnsAfterSecondFlush),
+      'the SUPPORTED configuration warned on a second op — nothing but the configuration may raise this diagnostic',
+    ).toEqual([])
+
+    // ---- …and nothing was LOST, because nothing was there to lose ---------
+    // The path walk does not reach a descendant provider, so the path
+    // bootstrap never emitted this binding: the re-mint is a no-op on
+    // `bindings` here. That is exactly why the supported configuration has
+    // nothing to report (and why 14a's deletion is the override's doing).
+    expect(
+      run.bootStates[0]!.bindings,
+      'FIXTURE: the path bootstrap must NOT resolve the descendant-provided "theme" (the path walk covers path ancestors only) — this control is vacuous without that reading',
+    ).toEqual({})
+    expect(
+      run.postStates[0]!.bindings,
+      'CONTROL: the op CHANGED the consumer\'s bindings in the supported configuration — then this control cannot distinguish "the mode mismatch deletes a binding" from "any op deletes a binding"',
+    ).toEqual(run.bootStates[0]!.bindings)
+  })
+
+  // ==========================================================================
+  // PBED-14c — CONTROL: family bootstrap + family mode
+  // ==========================================================================
+
+  it('PBED-14c CONTROL — a FAMILY bootstrap under a declared `family` mode warns NOTHING and the binding SURVIVES the same op (GREEN today)', async () => {
+    const run = await pb14Run({ mode: 'family', bootstrap: 'family' })
+
+    // ---- FIXTURE: same bootstrap domain, matching declared mode -----------
+    expect(run.sup.getCompileMode(), 'FIXTURE: the supervisor must be in family mode').toBe('family')
+    expect(
+      stateIsPathDomain(run.bootStates[0]!),
+      'FIXTURE: the family bootstrap must record a FAMILY state for the consumer',
+    ).toBe(false)
+    expect(
+      run.bootStates[0]!.bindings,
+      'FIXTURE: the family bootstrap must resolve the descendant-provided "theme" (this control is vacuous without it)',
+    ).toMatchObject({ theme: 'dark' })
+
+    // ---- THE CONTROL: no mode-mismatch diagnostic -------------------------
+    expect(
+      modeMismatchWarns(run.warnsAtBootstrap),
+      `a FAMILY bootstrap under a declared FAMILY mode warned: ${JSON.stringify(modeMismatchWarns(run.warnsAtBootstrap))} — the two agree, so there is no universe to lose`,
+    ).toEqual([])
+    expect(
+      modeMismatchWarns(run.warnsAfterFirstFlush),
+      `a FAMILY bootstrap under a declared FAMILY mode warned at the op/flush: ${JSON.stringify(modeMismatchWarns(run.warnsAfterFirstFlush))} — the diagnostic is owed only to the OVERRIDE`,
+    ).toEqual([])
+    expect(
+      modeMismatchWarns(run.warnsAfterSecondFlush),
+      'a FAMILY bootstrap under a declared FAMILY mode warned on a second op',
+    ).toEqual([])
+
+    // ---- …and the same op does NOT delete the binding ---------------------
+    // THE CONTRAST that gives 14a its meaning: identical tree, identical op,
+    // identical bootstrap recipe; the ONLY variable is the declared mode. In
+    // family mode the pass-2 re-compiles the consumer over the bounded family
+    // slice (which is descendant-closed, `focusedSliceFor`), so the binding
+    // survives — the deletion 14a pins is the path re-mint's doing.
+    expect(
+      run.postStates[0]!.bindings,
+      `the same sanctioned op DELETED the binding in FAMILY mode (bindings ${JSON.stringify(run.postStates[0]!.bindings)}) — then 14a's deletion would not be attributable to the compile-mode override`,
+    ).toMatchObject({ theme: 'dark' })
+    const postPanelEl = byNodeId(run.post.els).get(run.panel.id)
+    expect(postPanelEl, 'the consumer stopped emitting after the sanctioned op in family mode').toBeDefined()
+    expect(
+      postPanelEl!.props['prop:theme'],
+      'the emitted consumer element lost `prop:theme` in FAMILY mode — the deletion is not mode-attributable then',
+    ).toBe('dark')
+  })
+
+  // ==========================================================================
+  // PBED-14d — CONTROL: the diagnostic is a DIAGNOSTIC only
+  // ==========================================================================
+
+  it('PBED-14d CONTROL — the warning changes NO behaviour: the op still applies, it is journaled, and the emitted element census is unchanged (GREEN today)', async () => {
+    // The comparison run is the SAME construction (same envelope, same family
+    // bootstrap recipe, same sanctioned op) whose supervisor is NOT declared
+    // `path` — i.e. the configuration that has no warning to give. The
+    // declared mode is the only variable, and it is exactly the variable the
+    // ruling keys the diagnostic on; anything the warn may not do (reject the
+    // op, skip the compile, filter an element) shows up as a census difference
+    // between the two runs.
+    const warned = await pb14Run({ mode: 'path', bootstrap: 'family' })
+    const unwarned = await pb14Run({ mode: 'family', bootstrap: 'family' })
+
+    // ---- FIXTURE: the two runs really are the two configurations ----------
+    expect(warned.sup.getCompileMode(), 'FIXTURE: the first run is the overridden one').toBe('path')
+    expect(unwarned.sup.getCompileMode(), 'FIXTURE: the comparison run is the family-mode one').toBe('family')
+    expect(
+      [stateIsPathDomain(warned.bootStates[0]!), stateIsPathDomain(unwarned.bootStates[0]!)],
+      'FIXTURE: both runs must be bootstrapped by the SAME (family) recipe — the path state the overridden run ends up holding is the post-flush RE-MINT, never its bootstrap',
+    ).toEqual([false, false])
+    expect(
+      stateIsPathDomain(warned.postStates[0]!),
+      'FIXTURE: the overridden run must end up holding the path re-mint — that is the pass-2 the diagnostic reports',
+    ).toBe(true)
+    expect(warned.boot.els.length, 'FIXTURE: the overridden run must emit a document at bootstrap').toBeGreaterThan(0)
+
+    // ---- (1) THE OP STILL APPLIES ----------------------------------------
+    expect(
+      warned.res.status,
+      'the sanctioned op was NOT applied under the declared path mode — a warn+reject (or a throw) is a BEHAVIOUR change: the owner ruled a DIAGNOSTIC (gate §5 ruling 3), not a veto',
+    ).toBe('applied')
+    expect(warned.second.status, 'the second sanctioned op was not applied either').toBe('applied')
+
+    // ---- (2) …and it is still JOURNALED ----------------------------------
+    if (warned.res.status !== 'applied') return
+    expect(warned.res.journalId, 'the applied op must still carry a journal id').toBeTypeOf('string')
+    expect(
+      warned.journal.entries.map((e) => `${e.kind}:${e.status}`),
+      `the journal does not hold the one sanctioned op as a plain applied state-slice (measured: ${JSON.stringify(warned.journal.entries)}) — a diagnostic must not change what is recorded`,
+    ).toEqual(['state-slice:applied'])
+    expect(warned.journal.totalEntries, 'exactly one op was journaled at the time it was read').toBe(1)
+
+    // ---- (3) NOTHING WAS REJECTED, SKIPPED OR FILTERED --------------------
+    // The census is the EMIT layer's element list (`els`), never the adapter's
+    // `toString()`: in this configuration the path re-mint ALSO re-keys every
+    // wire (family wires → path wires), so a long-lived `SSRFragmentAdapter`
+    // zeroes its document — `POST-BOOTSTRAP-EMIT-DROP`'s mechanism, which
+    // `PBED-1..4` pin in their own direction. That is a SECOND consequence of
+    // the same override, not the diagnostic's doing, and this control measures
+    // only the diagnostic's.
+    //
+    // (a) within the run: the flush did not shrink the emitted set.
+    expect(
+      warned.post.els.length,
+      `the post-flush EMIT produced ${warned.post.els.length} element(s) where the bootstrap produced ${warned.boot.els.length} — the diagnostic must not drop an element`,
+    ).toBe(warned.boot.els.length)
+    expect(
+      warned.post.els.map((el) => String(el.props['prop:id'])).sort(),
+      `the post-flush EMIT is not the authored element set — a diagnostic must not reject, skip or filter an element (measured: ${JSON.stringify(warned.post.els.map((el) => String(el.props['prop:id'])))})`,
+    ).toEqual([...PB14_AUTHORED_IDS].sort())
+    // (b) against the configuration that does not warn: the SAME census.
+    expect(
+      warned.post.els.length,
+      `the overridden run emitted ${warned.post.els.length} element(s) while the same construction without the diagnostic emitted ${unwarned.post.els.length} — the warning is a diagnostic and must not change what the compile produces (owner ruling: the DELETION still happens; the warn names it)`,
+    ).toBe(unwarned.post.els.length)
+    expect(
+      warned.post.els.map((el) => String(el.props['prop:id'])).sort(),
+      'the emitted element SET differs between the overridden run and the same construction that does not warn — nothing may be rejected, skipped or filtered by a diagnostic',
+    ).toEqual(unwarned.post.els.map((el) => String(el.props['prop:id'])).sort())
+    // (c) …and the second op changed nothing either (the one-shot probe must
+    // not have become a gate): the journal grew by exactly one entry.
+    expect(
+      warned.journal.totalEntries + 1,
+      'the second sanctioned op was not journaled — the diagnostic turned into a gate after its first emission',
+    ).toBe(warned.sup.journalEntries().totalEntries)
   })
 })

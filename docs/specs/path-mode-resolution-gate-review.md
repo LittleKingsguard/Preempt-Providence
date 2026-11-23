@@ -108,7 +108,19 @@ change.
   Q8 forbids. If descendant resolution is ever wanted, the honest shape is a **page-data** remedy (invert the
   relation for that reference class), not engine work.
 
-## 5. Rulings requested of the owner
+## 5. OWNER RULINGS (2026-11-23) — BINDING
+
+| # | Ruling | Effect |
+| --- | --- | --- |
+| **1** | **Q8 amendment RATIFIED** | The struck sentence stays struck; the true clause (path-only applies to every path-state; the family walk exists only in `family` mode) is now the contract, not a proposal. |
+| **2** | **The (c2) sentence RATIFIED** | A routed graft whose placement walks are all non-viable keeps its zero-hop token walk; that state is a **path-state**, not a family-chain state, and resolves path-only. |
+| **3** | **The compile-mode override: REFUSE LOUDLY** — implemented | `recordResolved` now raises ONE `console.warn` (one-shot per supervisor) when `compileMode` is explicitly `'path'` while the recorded bootstrap states are **family** states, i.e. before the first path-mode pass-2 deletes them. Diagnostic only: the deletion still happens, the op still applies, the journal and the element census are unchanged (pinned by `PBED-14a..d`). The seam is the earliest point where both facts coexist, so a host hears it before losing a wire. **Residual, recorded:** the REVERSE ordering (`recordResolved` family *then* `setCompileMode('path')`) still says nothing — the mismatch is only observable at `recordResolved`; closing it needs a second emission site inside `setCompileMode`. |
+
+## 5b. Rulings still open
+
+None. The three items this gate requested are ruled. The smaller follow-ons live in their own rows:
+`docs/defects.md` **PATH-MODE-DIAGNOSTIC-UNGUARDED** (a test-only guard for the per-process diagnostic) and the new
+`docs/defects.md` **COMPILE-MODE-OVERRIDE-ORDERING** (the reverse ordering above).
 
 1. **Ratify the Q8 amendment** (the carve-out sentence is factually false; the repair is a correction, not a new
    policy).

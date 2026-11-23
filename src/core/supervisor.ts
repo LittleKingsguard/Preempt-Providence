@@ -235,6 +235,15 @@ export class Supervisor {
   /** True once a host DECLARED the mode (`{ compileMode }` / `setCompileMode`)
    *  — an explicit declaration is never overridden by the inference. */
   private compileModeExplicit = false
+  /** PATH-MODE-SILENT-UNRESOLVED loud half (owner ruling 2026-11-23, gate §5
+   *  ruling 3 — "Refuse loudly"): ONE-SHOT per supervisor instance. The
+   *  condition is a per-supervisor CONFIGURATION fact (declared `path` mode +
+   *  a bootstrap that recorded the family domain), so it must not repeat per
+   *  op — and it must not use the module-level never-cleared signature sets
+   *  other diagnostics dedupe with (`node.ts:404-429`): those dedupe per
+   *  `pathKey` and node ids are per-document, which would yield one line per
+   *  TREE rather than one per supervisor. */
+  private modeMismatchWarned = false
   private undoStack: JournalEntry[] = []
   private redoStack: JournalEntry[] = []
   private client: ClientAPI | null = null
@@ -713,6 +722,28 @@ export class Supervisor {
   recordResolved(actionable: CompiledState[]): void {
     if (!this.compileModeExplicit && actionable.length > 0 && actionable.every(isPathState)) {
       this.compileMode = 'path'
+    }
+    // PATH-MODE-SILENT-UNRESOLVED loud half (owner ruling 2026-11-23, gate §5
+    // ruling 3 — "Refuse loudly"; probe P-7 arm A5): a DECLARED `path` mode
+    // over a bootstrap that recorded the FAMILY domain. The recorded bootstrap
+    // states' domain is known HERE — this is the same predicate the inference
+    // above reads, so the mismatch is exactly the branch the inference skips.
+    // The consequence is stated, never repaired: the first path-mode pass-2
+    // re-mints every bounded-slice member in the path domain, replacing the
+    // family-universe bindings (a descendant-provided value becomes
+    // `unresolved-reference`) with the path re-mints. DIAGNOSTIC ONLY — the
+    // states are still recorded, later ops still apply, nothing is rejected.
+    if (
+      !this.modeMismatchWarned &&
+      this.compileModeExplicit &&
+      this.compileMode === 'path' &&
+      actionable.length > 0 &&
+      !actionable.every(isPathState)
+    ) {
+      this.modeMismatchWarned = true
+      console.warn(
+        'compile-mode bootstrap mismatch: compileMode is declared \'path\' but the recorded bootstrap states are FAMILY states (no pathKey) — the first path-mode pass-2 re-mints every bounded-slice member in the path domain, so family-universe bindings (including a descendant-provided value) are replaced by path bindings and reported as unresolved-reference. Diagnostic only: the recorded states persist, ops still apply; to keep the family bindings, bootstrap the tree in family mode (compileMode \'path\' over a path bootstrap is the supported configuration).',
+      )
     }
     this.storeResolved(this.groupByNode(actionable))
   }
