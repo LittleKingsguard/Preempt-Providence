@@ -150,7 +150,7 @@ removes **one** of the N+1 unappended states; the remainder needs the documented
 | **D-6** | **The §3.3 pin is MODE-BLIND** (new doc defect) | **DOC FIX OWED — `X.X.Y`** | The pin's mechanism sentence is true **only in family mode**; post-`PATH-DOMAIN-RE-MINT` the container re-mints and the append **exists** (`PBED-10` green). Amend with a **mode qualifier** and cross-cite `PBED-10`; **do not delete** the pin — the family-mode reading is the live residual | `placement-path-spec` §3.3 |
 | **D-7** | `E2` (first element is the root) | **REJECT** | Stance (C) in emit; order-dependent; deletes every second root | — |
 | **D-8** | `E3` (caller-declared roots) | **REJECT** | Closes the row by redefinition; the caller cannot derive the set | — |
-| **D-9** | The N-way placement duplication (§4.3) | **NEW, OPEN** | A node placed by name into **two** zones mints **two** placement states, both unappended in family mode. Whether that is correct (two presentations) or a second duplication class is **unruled** — and `E5` does not touch it | this record §4.3 |
+| **D-9** | The N-way placement multiplicity (§4.3) | **RULED BY THE OWNER 2026-11-23 — the multiplicity is INTENDED; the POPULATION is defective. This record's "duplication" framing was WRONG.** | Owner, verbatim: *"If two nodes share a placement name, they both populate with nodes targeting that placement."* One placement state per offering container is the design. **Measured:** with two containers offering `zone`, path mode mints 2 states and emits 2 elements, but the diff emits **exactly one `append`** — the passed container receives the graft and the other does **not** (its html check fails), leaving a 2-root forest; family mode appends none. **Cause:** `placement-attach` dirties `[container, node]` only, so every other offering container keeps its pre-attach `childOrder` forever. **Booked as `docs/defects.md` `PLACEMENT-SECOND-CONTAINER-STALE`** — needs its own gate because widening the dirty set moves the ACTIVE E2E-4 affected-set pin and must be priced against the pass-2 growth guard. `E5` touches none of it | `docs/defects.md` PLACEMENT-SECOND-CONTAINER-STALE | **Q7'** — approve widening the attach's dirty set to every offering container? |
 
 ---
 
@@ -217,7 +217,7 @@ unclaimed-state class at zero render cost. **Recommended**, since no demo page c
 4. **`E4`** — park with its revisit condition, or reject outright so nobody reopens it?
 5. **D-6** — approve the mode-blind pin amendment as a doc-only `X.X.Y` in the same pass as `E5`?
 6. **The guard** — P-3a/P-3b as the only witness, or also fund the `forestRoots` census?
-7. **The N-way placement duplication (§4.3, D-9)** — is "one placement state per offering container" intended? `E5`
+7. **The N-way multiplicity (D-9) — ANSWERED BY THE OWNER 2026-11-23: it is INTENDED** (*"if two nodes share a placement name, they both populate"*). The open question is the **population** half: may the `placement-attach` dirty set widen from `[container, node]` to **every container offering the requested name** — moving the ACTIVE E2E-4 affected-set pin, and needing a pass-2 growth-guard price check? (`PLACEMENT-SECOND-CONTAINER-STALE`.)
    does not touch it, and it is now the **largest** remaining unappended-state source.
 8. **Packaging** — does `E5` ride the release that carries `PATH-DOMAIN-RE-MINT`, and does the D-3 diagnostic ship
    separately (`X.X.Y`)?

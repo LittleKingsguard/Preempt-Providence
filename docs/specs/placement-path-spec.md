@@ -432,7 +432,7 @@ compilePath(node /* a content node or the root */):
   re-opens `GRAFT-ROOT-PATHKEY-COLLISION` (two live elements on wire `root`).
   Suppressing a walk does not touch the walk set, so the key function behaves
   identically (gate §4.1, row "How bad is the `routed` coupling for `E5`?").
-- **✎ 2026-11-23 — UNTOUCHED by this rule: the N-way placement duplication.** A
+- **✎ 2026-11-23 — UNTOUCHED by this rule: the N-way placement duplication.** A **✎ RULED 2026-11-23 (owner):** the N-state multiplicity is **INTENDED** — *"if two nodes share a placement name, they both populate with nodes targeting that placement"* — so it is **not** a duplication class. What fails is the **population**: only the container passed to `placement-attach` is dirtied, so every other offering container keeps its pre-attach `childOrder` and never appends (`docs/defects.md` `PLACEMENT-SECOND-CONTAINER-STALE`, measured).
   node placed by NAME into N offering containers still mints **one placement
   state per container** (`P-EMIT-14` pins two states for two containers, and
   asserts every survivor sits in a distinct offering container with

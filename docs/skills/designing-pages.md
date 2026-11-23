@@ -533,21 +533,16 @@ landing as closing a row it did not close:
    **Design rule:** place into a container that offers the zone by a `content`
    anchor (a placement-routed container), or keep the tree in path mode from the
    first render.
-2. **The token-walk duplicate is FIXED; the N-way placement duplicate is not.**
-   A graft no longer renders twice: a `ROUTED` node's zero-hop token walk is
-   **not minted** (gate §5 **D-2**, remedy `E5`; `docs/defects.md`
-   `GRAFT-RESIDUALS` (b) FIXED), so one node placed into one zone emits **one**
-   element — **one `create`, one serialized document root, its `data:node-id`
-   once in the html** (`tests/e2e/post-bootstrap-emit.test.ts` **PBED-11**;
-   `tests/unit/path-emit.test.ts` **P-EMIT-14**). What survives is
-   **multiplicity by placement**: a node placed by NAME into **N** offering
-   containers mints **one placement state per container** (`P-EMIT-14` pins two
-   for two), and in family mode **none** of them is appended — so it renders N
-   times as a floating set. Whether N presentations is intended or itself a
-   duplication class is **UNRULED** (`docs/defects.md`
-   **PLACEMENT-NAME-DUPLICATION**; gate §4.3 / D-9). **Design rule:** place a
-   node into ONE zone name per document, and do not read a state count as an
-   element count.
+2. **The token-walk duplicate is FIXED; a name offered by SEVERAL containers is only partly populated.**
+   `E5` means a routed graft no longer mints a token-identity state, so it renders **once** (`PBED-11`).
+   The placement model itself is **one state per container that offers the name**, and the owner's ruling
+   is explicit: **if two nodes share a placement name, they both populate with the nodes targeting that
+   placement**. Measured today: with two containers offering `zone`, the node mints **two** states and
+   emits **two** elements, yet only **one** gets appended — the container you passed to
+   `placement-attach`; the other keeps the `childOrder` it minted *before* the attach and never receives
+   it (the op dirties only `[container, node]`). In `family` mode neither is appended (limit 1). Defect
+   `PLACEMENT-SECOND-CONTAINER-STALE`; until it is fixed, **place into ONE container per name** and treat
+   a second offering container as unsupported.
 3. **Path mode never resolves a name provided by a DESCENDANT — and now says
    so.** The two resolvers disagree on the universe: a family compile walks
    self → **descendants** → ancestors (`fitReference`), a path compile walks
