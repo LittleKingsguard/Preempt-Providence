@@ -288,6 +288,7 @@ restores to the anchor).
 | Coalescing | **One microtask per tick.** Everyone dirtied by a batch compiles remote in the same sweep. No synchronous propagation, no mid-op walk, **no whole-tree recompile**. | notes §10.8.4 |
 | Bounded pass 2 (node-local) | Node-local update: pass 2 = ancestor chain only (parent + source/duplex borrow); cheap minimal-element render (notes §10.6). | notes §10.8.4 |
 | Root-out deep compile | Pass 1 over the whole slice, then pass 2 as one coherent walk. Same `compile(slice)` primitive, different entry point. | notes §10.8 |
+| **Compile MODE is per slice member (✎ 2026-11-23)** | Pass 2 compiles each slice member in the tree's COMPILE MODE — not in a mode chosen per dirty node: `family` runs the focused compile exactly as the rows above (byte-identical), `path` re-mints **every** member of the same bounded slice through its own `compilePath()` in the same coalesced tick (**ancestors re-mint, descendants do not**; the tick/slice bound is unchanged). Mode, carrier and pins: `docs/decisions.md` **PATH-DOMAIN-RE-MINT** (dispatch detail `docs/specs/placement-path-spec.md` §6.2). | defect `POST-BOOTSTRAP-EMIT-DROP` (R-1) |
 | **Anchor-adding effects force a new dirty sweep** | ANY effect that adds anchors — **including a new layer** (not just `AnchorLayer`s) — triggers a new post-op dirty sweep; injected anchors are populated by that sweep, never inside the compile pass that created them. | **S-R3.12**, S-R2.9 |
 
 Two-pass shape:

@@ -275,6 +275,25 @@ compilePath(node /* a content node or the root */):
   (bounded O(depth) incremental, render.md §4) and root-out deep stay for
   the non-placement world. §6 surfaces the supervisor slice/compile-mode
   switch (`supervisor.ts:246-258` gains the branch).
+- **✎ AMENDED 2026-11-23 — the mode is a TREE property, not a property of the
+  dirty node** (defect `POST-BOOTSTRAP-EMIT-DROP`; gate record
+  `docs/specs/post-bootstrap-emit-drop-fix-review.md` §4.4 R-1 + §10 ruling Q3).
+  The clause above is **not inverted but re-scoped**: which compile re-derives
+  a state is no longer derivable from the dirty node's own anchors, because a
+  pass-2 slice contains ancestors that were minted by a DIFFERENT compile. As
+  landed, the mode is **carried by the `Supervisor`** as a
+  `compileMode: 'family' | 'path'`, **chosen at bootstrap** — inferred from the
+  states a host records through the documented `recordResolved` seam, or
+  DECLARED through the explicit override (`new Supervisor({ compileMode })` /
+  `setCompileMode()`) — and it is honoured by **every** pass-2 slice member, not
+  only by the node the dispatch runs for: in `path` mode each member is
+  re-minted through its own `compilePath()` under one rule, **ancestors re-mint,
+  descendants do not**. The pre-mode letter survives inside `family` mode: the
+  focused compile remains the non-placement world's compile and `family` output
+  is **byte-identical** to the pre-mode engine (`compileMode` defaults to
+  `'family'`; the inference never fires on a family bootstrap). The invariant,
+  the carrier, the re-specified pins and the residual list are owned by
+  `docs/decisions.md` **PATH-DOMAIN-RE-MINT** — cited here, never restated.
 
 ### 2.2 Per-path keys — pathKey is the state identity, unconditionally
 
@@ -291,6 +310,12 @@ compilePath(node /* a content node or the root */):
   on EVERY path-state and is set unconditionally (node.ts:699-706:
   `cs.forkKey = cs.pathKey`, not only when `arm.keys.length > 0`).
 - **✎ AMENDED 2026-11-23 — the `rootNode`-token key is ONE-PER-DOCUMENT, not per-token.** `pathKeyFor` (`src/core/node.ts:232-241`) now mints `'root'` only for the node that roots THIS document (`familyParentTokenOf(node) === 'rootNode' && walk.hops.length === 0 && !routed`). A node that carries the root token but is **family-parentless** — the translated-tree-root **graft** that `placement-attach` places into a family-routed container — falls through to the hop loop with zero contributed segments and keys **`'root/<nodeId>'`**, precisely so it cannot collide with the document root's wire. Defect `GRAFT-ROOT-PATHKEY-COLLISION` (`docs/defects.md`), gate record `docs/specs/post-bootstrap-emit-drop-fix-review.md`. **Residual, do not read this as complete:** a graft placed into a container that is itself an unparented graft still collapses onto one key (`GRAFT-RESIDUALS` (a) in the defect list), and the graft's token-walk state still emits as a floating top-level element (`GRAFT-RESIDUALS` (b) / `ORPHAN-EMIT-TOP-LEVEL-LEAK`).
+- **✎ CONSISTENCY NOTE 2026-11-23 (read with §2.1's tree-mode amendment):** the
+  compile mode changes WHICH compile re-derives a state, never the KEY function.
+  `pathKeyFor` stays a pure function of the current graph, so a re-mint of an
+  unchanged path yields the same key — which is why sticky wire identity needs
+  no identity carrier and no refusal (§4.1 owns the stability promise; the
+  scheme itself is owned by `docs/decisions.md` **PATH-DOMAIN-RE-MINT**).
 
 **State identity is pathKey ALONE, unconditionally** — there is no `#<i>`
   arm suffix anywhere in the path model (F-2; §10.ab). Component resolution
@@ -491,10 +516,26 @@ R2.3).
   append ops come from the parent PATH-state's `childOrder` (§2.3
   mint-time attach, §4.2); a family-routed container's FAMILY state
   (focused-slice `makeCs`) lists the family children ONLY, so the added
-  node's element is created on its pathKey wire with NO append op — the
-  widget does not render. The E2E-4 render promise ("the container's
+  node's element is created on its pathKey wire with NO append op — and it is
+  therefore **emitted as a detached TOP-LEVEL SIBLING of the document**, never
+  suppressed. The E2E-4 render promise ("the container's
   path-states pick up the added path-child") holds for placement-ROUTED
   containers only.
+- **✎ CORRECTED 2026-11-23 — the observable, stated exactly** (defect row
+  `ORPHAN-EMIT-TOP-LEVEL-LEAK`: the old wording *"the widget does not render"*
+  UNDER-DESCRIBES it). Emit walks every actionable state, so a state that no
+  parent appends still receives a `create` with no `append`, and the adapters'
+  floating-fragment rule (`docs/specs/adapters.md` §4.6) serializes it AFTER the
+  root: the element **is created and emitted** — as the document's sibling. The
+  node renders; it renders in the wrong place, which is strictly worse than
+  "no render" and was previously stated nowhere. The landed graft fix
+  (`GRAFT-ROOT-PATHKEY-COLLISION` — the one-per-document root token, §2.2) gives
+  the unparented graft a DISTINCT wire, so it no longer collides with the root's
+  wire; it does **not** suppress the floating element, so the graft's token-walk
+  state still emits detached and the document carries the graft twice
+  (`GRAFT-RESIDUALS` (b)). That residual overlaps this row's engine half — do
+  not read either row as closing the other. Mode/scheme ownership:
+  `docs/decisions.md` **PATH-DOMAIN-RE-MINT**.
 
 ---
 
@@ -512,6 +553,19 @@ R2.3).
   focus-safety rules (no re-append on unchanged order) are untouched.
 - `minimalFromState`'s existing forkKey forwarding
   (render-helpers.ts:36-38) becomes the canonical path (see 4.3).
+- **✎ AMENDED 2026-11-23 — the stability promise now SURVIVES A COMPILE-MODE
+  SWITCH, and that is the acceptance criterion the defect violated** (row
+  `POST-BOOTSTRAP-EMIT-DROP`; gate record §4.2/§4.4). The promise above is no
+  longer conditional on "no mode change": because `pathKey` is a pure function
+  of the current graph (§2.2), **a re-mint of an unchanged path yields the same
+  wire**, so entering `path` mode on a subsequent render re-creates nothing.
+  The violated reading — the ancestors' wires flipping from `pathKey` to
+  `nodeId` with **zero** topology change, the root leaving the domain the
+  adapter captured at bootstrap — is exactly the state that made wire identity
+  render-dependent. The mode, its carrier and its per-member dispatch rule are
+  owned by `docs/decisions.md` **PATH-DOMAIN-RE-MINT**; this section owns the
+  stability promise only, and `docs/specs/render.md` R-ORD-8's corollary owns
+  the root-wire half (the first-create root detection it feeds).
 
 ### 4.2 Per-path append ops with path-derived owners (chosen: parent-attached children)
 
@@ -708,9 +762,9 @@ the PRE-minting runtime record (annotated).
 | `src/core/translate.ts` | Mint `content` anchors from `targetPlacement: string[]` (per name, in preference order, on the shared per-name placement Link — lines 433-438); `'container'`-role minting from `placementName` (role rename) + §1.3 ancestor-name veto (K4 `placement-name-vetoed`); `#`-validation warn `placement-name-invalid` at the minting site (§1.3) + `#`-check for authored ids (node.ts:143 site); **contentNodes-ownership minting**: each `content` payload root (and `template.children` root) receives the `contentNodes` parent anchor at translate — translate-global (lines 430, 507-521; §10.ad, F-13); `LegacyPlacementConfig` type fix (lines 49-53: `string[]`/`string`); NP13/AP5 warn removal (lines 440-444, 488-491); reverse: `content` anchors → `targetPlacement: string[]` in mint order (nodeToLegacy, lines 557-641 pattern), the minted contentNodes anchor STRIPPED, derived `activePlacement: string` read emission. |
 | `src/core/types.ts` | Role union: + `'content'`, `'placement'` → `'container'` (line 8); `CompiledState.forkKey` present on every path-state = pathKey (lines 126-133); placement-attach op kind + trigger fields `{ kind: 'placement', linkName, direction }` in the op union + wire forms (lines 88, 93, 103, 111 — `AttachOp.zone` superseded by the dedicated kind, §9 Q2/10.ac.2 #7); `LegacyPlacementConfig` lives in translate.ts (fix there). |
 | `src/core/link.ts` | `DEFAULT_PLACEMENT.roles = ['container', 'content']` (lines 23-26). |
-| `src/core/node.ts` | Path-enumeration compile mode (per-node focused + root-out stay; lines 658-663 gain the placement branch); `makeCs` path-derived children attach at mint time (lines 623-638); per-path `pathKey` over placement edges (lines 300-316); `cs.forkKey = cs.pathKey` set UNCONDITIONALLY (lines 699-706); viability rule for placement-routed nodes (lines 564-605, the `selfProviding` branch at 589-603 grows `placementRouted`); chain classification + `findCycle` walk placement edges (lines 512-562, 861-871); per-walk visit set (§1.4); **`component-source-duplicate` guard at `addAnchor` (line 413)**: UNCONDITIONAL warn, keep-first, skip-second — no seed-path opt-out (§10.ab/ad/ae; K8 covers the legacy boundary; seed/hydration is covered by the same guard); `#`-check on authored ids (line 143). |
+| `src/core/node.ts` | Path-enumeration compile mode (per-node focused + root-out stay; lines 658-663 gain the placement branch); `makeCs` path-derived children attach at mint time (lines 623-638); per-path `pathKey` over placement edges (lines 300-316); `cs.forkKey = cs.pathKey` set UNCONDITIONALLY (lines 699-706); viability rule for placement-routed nodes (lines 564-605, the `selfProviding` branch at 589-603 grows `placementRouted`); chain classification + `findCycle` walk placement edges (lines 512-562, 861-871); per-walk visit set (§1.4); **`component-source-duplicate` guard at `addAnchor` (line 413)**: UNCONDITIONAL warn, keep-first, skip-second — no seed-path opt-out (§10.ab/ad/ae; K8 covers the legacy boundary; seed/hydration is covered by the same guard); `#`-check on authored ids (line 143). **✎ 2026-11-23 — the `makeCs`/`mintPathState` DISTINCTION (it is the mode's observable):** `makeCs` (family, the focused-slice construction site, `:1292-1308`) writes `pathKey` but **never `forkKey`** (nor `trace`/`activePlacement`); `mintPathState` (`:1500+`) sets `pathKey = pathKeyFor(...)` and `forkKey = pathKey` unconditionally (§2.2). For a family-parented node the two `pathKey` STRINGS are identical, so the absent `forkKey` is the entire difference — and `isPathState` keys the emitted wire off exactly that field (`render-helpers.ts:131-133`), which is why a family compile of a path-minted node flips its wire. **✎ 2026-11-23 — `pathKeyFor`'s root-token rule (defect `GRAFT-ROOT-PATHKEY-COLLISION`, FIXED):** the `'root'` early return now requires `familyParentTokenOf(node) === 'rootNode' && walk.hops.length === 0 && !routed`, i.e. the token key belongs to the node that roots THIS document; an unparented graft falls through with zero contributed segments and keys `'root/<nodeId>'` (unique per live element, stable across renders, `#`-free so it stays a path state). `compilePath` computes `routed` once and threads it through `mintPathState`. No emit/diff change, no wire-collision guard. Scheme ownership: `docs/decisions.md` PATH-DOMAIN-RE-MINT. |
 | `src/core/resolve.ts` | Placement walk: first-match preference loop over the node's ORDERED `content` anchors + per-name Link membership (lines 205-244; C-3); per-zone fan-out of the chosen name off the Link's `container` anchors; placement hops emit pathKey segments, NEVER `#f:` keys (lines 152-156; the `#f:` arm machinery dies with the forks); `container`/`content` enumeration off the per-name Link (lines 31-40 pattern); hub fallback (lines 96-132) covers placement names. |
-| `src/core/supervisor.ts` | Slice/compile-mode switch for path enumeration (lines 246-258); **relevance pre-check** before `node.compile` (silent abort — §1.2) and **trigger identity through `supervisor.apply`** (lines 307-313; 10.ac.2 #7); affected-set derivation for E2E-2/3/4 (§3 — `markRemote` at node.ts:809-813 + per-name-Link dirty sets); event filter lifted to the affected set (lines 271-278) and the `#f` gate re-expressed to "path-state ⇒ emit `{ forkKey: pathKey, nodeIds: trace }`" (line 275; R2-Q6); placement-attach op executor (lines 351-364 gains the dedicated kind — not attach-with-zone). |
+| `src/core/supervisor.ts` | Slice/compile-mode switch for path enumeration (lines 246-258); **relevance pre-check** before `node.compile` (silent abort — §1.2) and **trigger identity through `supervisor.apply`** (lines 307-313; 10.ac.2 #7); affected-set derivation for E2E-2/3/4 (§3 — `markRemote` at node.ts:809-813 + per-name-Link dirty sets); event filter lifted to the affected set (lines 271-278) and the `#f` gate re-expressed to "path-state ⇒ emit `{ forkKey: pathKey, nodeIds: trace }`" (line 275; R2-Q6); placement-attach op executor (lines 351-364 gains the dedicated kind — not attach-with-zone). **✎ AMENDED 2026-11-23 — the DISPATCH RULE (defect `POST-BOOTSTRAP-EMIT-DROP`, R-1; gate record §4.4(4)):** the slice/compile-mode switch is **per SLICE MEMBER, not per dirty node**. The supervisor carries `compileMode: 'family' \| 'path'` (default `'family'`; the field survives `_restoreBase`, so condense/undo cannot lose it), **infers** `'path'` in `recordResolved` when every recorded state is a path state (`isPathState`) and never infers back, and exposes the **declared** route — `new Supervisor({ compileMode })` / `getCompileMode()` / `setCompileMode()` — which inference can never override. Dispatch: `family` → today's focused-slice `node.compile(...)` **byte-identical**; `path` → for **each** member `m` of the bounded slice, `m.compilePath()`'s actionable set is merged, preserving the per-node overwrite, the relevance pre-check (§1.2 silent abort), `storeResolved` and the event shape. One rule states the affected set: **ancestors re-mint, descendants do not**. `_restoreBase` needs no change; no `CompiledState` field, no `Node` marker, no emit/adapter change, and `Node.compile` stays pure (PASS2-FIT-REFERENCE-SLICE-SCOPE S2 parity is NOT amended). Ownership of the contract: `docs/decisions.md` PATH-DOMAIN-RE-MINT. |
 | `src/core/render-helpers.ts` | Path-state emit (**Unit 7 shipped**): pathKey wires (§2.2/§4.1 — `isPathState` discriminator `forkKey === pathKey` + `#`-free key; `emitElements` groups by WIRE, so every path-state emits at wire = pathKey and can never be armIdx'd; family states keep wire = nodeId; `#f:` component forks keep `nodeId#<i>`); per-path child conversion (§4.2 — trace-indexed child-state lookup rewrites path-state childOrder to the child pathKey wires; leaves-by-fiat removed for path-states, lines 236-240/349-350); def-retyping + `on:*` gates re-expressed as path-state gates (lines 309, 341-347 — path-states are single-wire groups, so the branches flow; the def branch resolves def-covered path children via `pathKey → nodeId`); `minimalFromState` emits the pathKey wire (childOrder as-is — single-state callers); root emits at the conventional wire `root`; **DEFECT #1 fix first** (EmitState/emitElements gain `forkKey`; every `emitOne` branch forwards it — archive/findings/2026-08-15/2026-08-15-test-findings.md:456-460, §6.5). |
 | `src/core/ops.ts` | placement-attach executor (dedicated kind in the `execute` switch, lines 71-108) + veto; `attach` stays family-only (lines 29-56); state-slice block unchanged (lines 21-27). |
 | `src/core/serialize.ts` | `roleOrder` gains `container`/`content` (line 117); **content anchors EXCLUDED from the target-string sort** — `targetPlacement` preference order survives round-trip (lines 115-123; 10.ac.2 #8); contentNodes-anchor round-trip (stripped on reverse at translate). |

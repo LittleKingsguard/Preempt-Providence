@@ -513,6 +513,28 @@ live descriptor only — the dead one stays gone. The dup-create-without-remove
 clobber surface is untouched (FRG-F3/DOM-F4 parity: the clobbered old descriptor
 stays in the root subtree AND the new one floats top-level, mirroring the DOM).
 
+**✎ AMENDED 2026-11-23 — remove-root-then-re-create-under-a-DIFFERENT-wire is
+CLOSED BY CONTRACT as a render-contract violation** (defect
+`POST-BOOTSTRAP-EMIT-DROP`, FIXED in the compile-mode dispatch; the case the
+adapter block above could only describe operationally). The root wire may not
+change between renders while the document is the same document
+(`docs/specs/render.md` **R-ORD-8's corollary**: first-create root detection
+depends on it), and a live document must not end **mixed-domain**
+(`docs/specs/render.md` §3.3's mode clause; scheme owned by `docs/decisions.md`
+**PATH-DOMAIN-RE-MINT**). So:
+
+- **The rule here is unchanged and must stay unchanged: FRG-H24 is NOT
+  relaxed.** `rootKey` is captured on the first `createEl` and never reset
+  (`adapters.ts:463`, `:548`). Re-capturing the root is the REJECTED stance (C)
+  of the RCA — it would turn a loud empty document into a silently WRONG one
+  (root without holder, holder+card floating = `ORPHAN-EMIT-TOP-LEVEL-LEAK`),
+  and it is admissible only as an added safety net, never as the fix.
+- **The empty-document outcome is the SYMPTOM, not the fault.** The adapter is
+  **CONFORMANT**: when the emitted stream removes the captured root wire and
+  re-creates the same element under a different one, "styles prefix only" is the
+  specified FRG-H24 result. The breach is upstream in the wire domain, and an
+  adapter change would only hide it — do not "fix" a zeroed render here.
+
 ### 4.7 `MarkdownAdapter` — the text-only family member (Feature 2, 2026-08-24 — handoffs-review-7.md, rulings 12-16 + D1-D15)
 
 A `RenderAdapter` in the SSR text family: it consumes the SAME `RenderOp[]`

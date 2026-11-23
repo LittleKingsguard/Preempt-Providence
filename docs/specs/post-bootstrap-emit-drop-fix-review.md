@@ -201,7 +201,7 @@ unsupported until a Node-side rule exists.
 | **§4.2 — `childOrder` is path-derived and attached AT MINT TIME** (`:514-530`) | `node.ts:1516`, `:249-267` | Why (A)-refusal cannot work: the spec itself requires a **re-mint** for a structural change. |
 | **§3.3 — `placement-attach` into a family-routed container leaves the added path-state orphaned** (`:485-495`) | `supervisor.ts:1173-1196` | Under path mode the container re-mints, so the orphan may gain its append — a pin that could flip (disposition 8). |
 | **`render.md` — path-states emit on `pathKey`, else `nodeId`; append only for `childOrder ∩ present`** | `render-helpers.ts:325`, `:138-140`; `render.ts:59`, `:115-117` | The wire scheme and append rule are the whole observable surface. |
-| **FRG-H24 — `rootKey` captured on first `createEl`, NEVER reset** (`adapters.md:747`) | `adapters.ts:463`, `:548` | The fix must **not** touch it; the document must return into the captured domain. |
+| **FRG-H24 — `rootKey` captured on first `createEl`, NEVER reset** (`adapters.md FRG-H24`) | `adapters.ts:463`, `:548` | The fix must **not** touch it; the document must return into the captured domain. |
 | **`ops.md` §5 — one coalesced pass-2 tick, bounded slice, no whole-tree recompile; G18** | `supervisor.ts:637`, `:650-665`, `:667-731`, `:51-90` | The mode adds compiles per member — must stay inside the same tick and bounded slice. |
 | **PASS2-FIT-REFERENCE-SLICE-SCOPE — S2 parity** | `resolve.ts:229-248` | **Not amended by R-1** (the mode lives on the supervisor) — but **would be** by a Node-side rule. The decisive argument for the landing site. |
 | **E2E-4 affected set — container + added node, "nothing deeper"** | `supervisor.ts:1194-1196` | Ancestors gain states under path mode; the **descendant** half holds. |
@@ -262,6 +262,12 @@ unsupported until a Node-side rule exists.
 7. **Scope.** Does the row close on R-1 alone, or split into (i) the mode fix and (ii) a public tree-mode API for hosts that bootstrap by a route the supervisor never hears about?
 8. **Does R-1 also close `ORPHAN-EMIT-TOP-LEVEL-LEAK`'s (b) half?** The mechanism says yes; the row must close on P-6's evidence with its wording amended, never by citation.
 9. **Version.** One `0.6.0` release, or the mode in a patch-adjacent release with the spec amendments following? The emitted-wire change must be named in the changelog either way.
+
+---
+
+## 9b. ANCHOR DEBT (recorded, not repaired)
+
+The 2026-11-23 documentation pass inserted text into `placement-path-spec.md` (§2.1/§2.2/§3.3/§4.1/§6.2), `render.md` (§3.3, R-ORD-8), `adapters.md` (§4.6) and `ops.md` (§5), so **line numbers inside those documents moved** (§2.2 279→298, §3.3 436→461, §4.1 503→544, R-ORD-8 171→185, FRG-H24 747→769). Section-level citations all still resolve and were repointed where they were explicit; **bare `:NNN` parenthetical ranges written before the pass now land early** — the repo's own `STALE-RESOLVE-ANCHORS` class. This is a bookkeeping debt for the next housekeeping pass (repoint by symbol). No contract is affected: every one of those citations sits beside a correct §-reference.
 
 ---
 

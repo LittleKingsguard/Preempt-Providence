@@ -156,6 +156,20 @@ DOM; §4.1/§4.3/§4.4 for the SSR) and the data TYPE is specified in
   now applies ONLY to genuine `#f:` component forks, which the
   `component-source-duplicate` guard removes from shipped data entirely
   (P3 §4.2/§10.ab).
+- **✎ AMENDED 2026-11-23 — the wire scheme gains its MODE clause.** Which
+  domain a state's wire comes from is a property of the **tree's compile mode**,
+  not of the state's own shape at the moment it is compiled: a tree bootstrapped
+  through path enumeration is compiled in `path` mode by **every** pass-2 slice
+  member, so every state it emits keeps a `pathKey` wire across renders, while a
+  `family`-mode tree keeps `nodeId` wires **byte-identically** to the pre-mode
+  engine. A DOMAIN FLIP inside one live document is therefore not a legal emit:
+  the mixed-domain document the defect measured (the root removed from wire
+  `root` and the same elements re-created under `node-1`/`node-3`, with zero
+  topology change) is a **contract violation**, not a wire choice. Defect
+  `POST-BOOTSTRAP-EMIT-DROP`; the scheme, its carrier and the per-member
+  dispatch rule are owned by `docs/decisions.md` **PATH-DOMAIN-RE-MINT** (carrier
+  + dispatch narrative: `docs/specs/placement-path-spec.md` §2.1/§6.2) — cited
+  here, never restated.
 
 ### 3.3 Emit ordering vs dirty sweep (D3/S-R2.3/S-R3.12)
 
@@ -168,7 +182,7 @@ DOM; §4.1/§4.3/§4.4 for the SSR) and the data TYPE is specified in
 | R-ORD-5 | Slice stays **locked until final resolution** — every fork emitted **or** dropped; only then `unlock` (S2.3) |
 | R-ORD-6 | Within one emit batch: `create(parent)` precedes `append(parent, child)`; `remove(wire)` precedes any re-`create` of the same wire; at most one `styles` op |
 | R-ORD-7 | Nested emission on an active slice chain is **deferred to the microtask queue** (locking Option B); recursion-depth cap is the loop tripwire |
-| R-ORD-8 | The actionable `next` array is **root-first**: every node's `create` precedes its descendants' `create` (adapters derive the SSR root as the first-created wire, adapters.md §4.6) |
+| R-ORD-8 | The actionable `next` array is **root-first**: every node's `create` precedes its descendants' `create` (adapters derive the SSR root as the first-created wire, adapters.md §4.6). **✎ COROLLARY 2026-11-23 (the FRG-H24 interaction) — the root's WIRE must not change between renders, or first-create root DETECTION breaks:** `SSRFragmentAdapter`/`MarkdownAdapter` capture `rootKey` on the first `createEl` and NEVER reset it (adapters.md §4.6/FRG-H24), so a render that removes the root's wire and re-creates the same element under a different wire serializes the styles prefix only — an empty document. Root-wire stability is therefore a **render-contract requirement on the emitted stream**, not an adapter convenience; the compile-mode dispatch that guarantees it is owned by `docs/decisions.md` PATH-DOMAIN-RE-MINT |
 
 ---
 
