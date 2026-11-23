@@ -538,7 +538,10 @@ landing as closing a row it did not close:
    explicit: **if two nodes share a placement name, they both populate with the nodes targeting that
    placement**. FIXED 2026-11-23 (`PLACEMENT-SECOND-CONTAINER-STALE`): `placement-attach` now
    re-derives **every** owner of the per-name placement Link, so the node is appended inside **each**
-   offering container and the document stays a single tree (`PBED-13`). Two residuals:
+   offering container and the document stays a single tree (`PBED-13`). **Authored placement (a
+   `targetPlacement` in the envelope) has always fanned out this way** — `demo/legacy-shape.js` asserts
+   fan-out into both `side-zone` containers and routes through two different owners — so the gap was
+   **only** the post-bootstrap op, which marked just the container it was given. Two residuals:
    **(a) the op's reported `dirtied` is still only `[container, added]`** — read the pass-2 states if you
    need to know what actually re-rendered; **(b) in `family` mode the extra containers re-derive but
    still append nothing** (limit 1), so multi-container population is a **path-mode** guarantee today.
