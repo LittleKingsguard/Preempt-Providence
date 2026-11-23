@@ -24,6 +24,17 @@ to pick up next.
 > blocker for the downstream's module activation. Probes P-1 (red) + P-2 (the registration counter-probe;
 > if P-2 does not show container+root states, the `H-1b` adjudication reopens).
 > **(2) R-2b** `docs/defects.md` **HANDLER-BODYLESS-SILENT-DEAD** (NEW) — the containment warn; probe P-7.
+> **OWNER RULINGS 2026-11-23 — Q5 and Q6 both answered.** **Q5:** the `attach` fix shape is decided
+> AFTER the P-1/P-2 probes, on evidence, not on argument. **Q6: the re-emit sentence is SPLIT — one owner
+> per truth:** the **description** lands as a clause in `docs/specs/ops.md` §5 (the spec that already owns
+> pass-2 scope and the coalescing table), with both carve-outs **cross-referenced** to
+> `placement-path-spec.md` §3.3 rather than duplicated; the **choice** lands as ONE ACTIVE
+> `docs/decisions.md` row and says only what is genuinely undetermined — which forced-re-emit path is
+> BLESSED (the documented composition, or `invalidate` if R-3's P-5 measurement lands) and whether the
+> empty-`state-slice` escape hatch is blessed or merely documented; the **how-to** lands in
+> `docs/skills/designing-pages.md` and ships WITH the P-4/P-6 probes so it cannot be falsified quietly.
+> (A row that merely restates pass-2 scope would create a second owner of one truth — the corpus's own
+> drift class; a recipe alone is unenforceable.)
 > **(3) R-1** the documentation bundle — the **stated re-emit sentence** (with both carve-outs:
 > placement-routed nodes do not ascend; a `placement-attach` into a family-routed container orphans the
 > path-state), the empty-`state-slice` escape hatch **with its price** (journal entry, `redoStack` cleared,
