@@ -552,6 +552,15 @@ landing as closing a row it did not close:
    self → **path ancestors** only (`resolvePathTargets`). Since 2026-11-23 the
    diagnostic asymmetry is closed — a path-mode unresolved binding now pushes
    `unresolved-reference` into `CompileResult.warnings` **and** `console.warn`s,
+   **THE RULE FOR AUTHORS (settled 2026-11-23 — this is a documented restriction, not a bug that will be
+   fixed):** in `path` mode a consumer **cannot** read a value provided by its own **descendant**. If you need
+   that direction, either **invert it** (place the provider at or above the consumer) or **bootstrap in `family`
+   mode**. The reason is identity: a path-state's `pathKey`, `trace`, `parent` and `children` all come from its
+   path, so letting its `bindings` come from the family relation would make one state two different things
+   (`docs/specs/path-mode-resolution-gate-review.md`, `docs/decisions.md` `PATH-MODE-RESOLUTION-UNIVERSE`).
+   **The diagnostic is per-process deduped** (`console.warn` once per `(code, pathKey, name)`), so a second
+   document in one process can be denied it — `docs/defects.md` `PATH-MODE-DIAGNOSTIC-UNGUARDED`.
+
    the byte-shape of the family channel, deduped per `(code, pathKey,
    referenceName)` (`docs/defects.md` **PATH-MODE-SILENT-UNRESOLVED**, loud half
    LANDED; `tests/e2e/path-mode-unresolved-warning.test.ts`). **The resolution is

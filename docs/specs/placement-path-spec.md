@@ -987,8 +987,31 @@ pass.
   path-state walks the state's OWN single-parent chain to root (the path),
   never the graph node's family anchors beyond it — a multi-path
   prototype's family anchors would lead to a DIFFERENT parent than the
-  path being compiled (cross-path resolution). The family walk remains
-  only for states whose path IS the family chain (non-placement states).
+  path being compiled (cross-path resolution).
+- **✎ AMENDED 2026-11-23 — the carve-out sentence was FALSE as an implementation claim and is replaced**
+  (gate record `docs/specs/path-mode-resolution-gate-review.md`; decision row `docs/decisions.md`
+  `PATH-MODE-RESOLUTION-UNIVERSE`). The struck sentence was: *"The family walk remains only for states whose
+  path IS the family chain (non-placement states)."* **It describes nothing that exists.** `mintPathState` calls
+  `resolvePathTargets` **unconditionally**, with no family-chain branch (`src/core/node.ts:1600`), and that
+  resolver has **no descendant arm** (`src/core/resolve.ts:279-302`); the only family walk in the engine is the
+  family **mode** (`compile()` → `resolveArms`). **The true clause:** *path-only resolution applies to **every**
+  path-state, including one whose walk **is** the family chain; the family walk exists only in the `family`
+  compile mode.* **The price, stated as contract:** a reference whose only provider is a family **descendant** of
+  the consumer does **not** resolve in `path` mode — it records `unresolved-reference` on the state and emits the
+  diagnostic through the family channels (`console.warn` + `CompileResult.warnings`, deduped per
+  `(code, pathKey, referenceName)` **per process**). **Remedy:** invert the provider/consumer direction, or
+  bootstrap in `family` mode. **A path-state is never re-resolved against the family relation** —
+  `identity = pathKey` requires `bindings` to be a function of the path tree alone (§2.2; `resolve.ts:271-274`
+  states the licence verbatim: *"identical ancestor trees ⇒ identical bindings, which is why identity = pathKey
+  alone"*). **Three constructions make a family-universe patch incoherent** (C1 a dirty sibling of the provider
+  strips the binding because the provider falls out of the bounded slice; C2 a family-`term`-dropped descendant
+  would become a cross-path binder; C3 two providers either lose the family arm or `#f:`-arm the key into a
+  wire-domain flip) — see the gate record §1.
+- **✎ RULED 2026-11-23 (the c2 clause):** a **routed graft whose placement walks are ALL non-viable** keeps its
+  zero-hop token walk through `compilePath`'s last-state guard (`node.ts:1537-1544`, pinned by
+  `tests/unit/path-emit.test.ts` **P-EMIT-15**). That state **is a path-state, NOT a family-chain state**, and it
+  resolves path-only (self, then path ancestors). This resolves the conflict between the struck carve-out's
+  operative clause and its `(non-placement states)` parenthetical.
 
 ---
 
