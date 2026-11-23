@@ -620,8 +620,14 @@ landing as closing a row it did not close:
 > objects your live graph holds. If you keep a reference to one across a condense
 > and mutate it in place, you do not "change a value" — you **rewrite recorded
 > history**, and a later `undo`/`replay` past the base returns the mutated state.
-> **That is unsupported behaviour and it is undetected:** no warn, no error, no
-> status (`docs/decisions.md` **`CONDENSE-BASE-IS-A-LIVE-VIEW`**; the owner's
+> **That is unsupported behaviour.** It is not prevented and not repaired — but
+> since 2026-11-23 it is **not silent** either: a restore past a base whose
+> recorded carriers were rewritten emits **exactly ONE** `restore-base-mutated: …`
+> per base marker and then **RESTORES the rewritten state** (`replay().status` is
+> unchanged — branch on the warn, never on the status). Never read a quiet restore
+> as proof that history is intact: the digest covers the snapshot's by-reference
+> carriers only, and a base it cannot digest is silently unchecked
+> (`docs/decisions.md` **`CONDENSE-BASE-IS-A-LIVE-VIEW`** clause (2); the owner's
 > ruling is the sentence "attempts to mutate history are unsupported behaviour").
 > Change state through the managed channel (`apply` / `state-slice` / the ops) and
 > **re-read from the graph after a condense** instead of holding objects across

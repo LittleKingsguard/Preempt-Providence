@@ -73,14 +73,21 @@
  * `'in-tree'` by the consumer's compile) is asserted the same way: a fixture
  * that fails to wire is a loud `FIXTURE:` failure, never a silent green.
  *
- * WHAT THIS FILE ASSERTS:
- *  - **RR-1** (RED today — the measured defect) a restore that cannot complete
+ * WHAT THIS FILE ASSERTS (✎ LANDED 2026-11-23 — every case is GREEN; the
+ * "RED today"/"measured TODAY" markers below are the RED-FIRST INTENT this file
+ * was authored with and are kept as the historical requirement record. The fix
+ * is `RESTORE-REFUSES-NOT-EMPTIES`, gate record
+ * `docs/specs/undo-redo-report.md` U19 + `docs/defects.md`
+ * `RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS` (b)):
+ *  - **RR-1** (was RED at authoring) a restore that cannot complete
  *    keeps the graph it had: (i) `allNodes()` is NOT empty and its sorted id
  *    set equals the pre-replay one, and an authored node is still usable
  *    (`compilePath()` does not throw); (ii) EXACTLY ONE `console.warn` names a
  *    restore failure (`/restore/i` AND `/fail|refus|error|cannot|unable|abort/i`);
- *    (iii) `replay().status` is NOT `'applied'` (the planned word is
- *    `'no-op'`). Measured TODAY: (i) 0 nodes, (ii) 0 warns, (iii) `'applied'`.
+ *    (iii) `replay().status` is NOT `'applied'` — it is `'no-op'`. Measured at
+ *    AUTHORING time: (i) 0 nodes, (ii) 0 warns, (iii) `'applied'`; measured now:
+ *    (i) 5 nodes with the identical id set, (ii) 1 warn
+ *    (`restore-refused-invalid-snapshot:`), (iii) `'no-op'`.
  *  - **RR-2** (CONTROL, GREEN today) the SAME page WITHOUT the seam consumer:
  *    the condense + restore succeed (`status: 'applied'`), the graph is
  *    non-empty, and ZERO warns — proving RR-1's red is caused by the

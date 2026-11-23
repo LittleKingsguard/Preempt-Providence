@@ -56,6 +56,29 @@ zero diagnostics. Measured: 5 nodes in, 0 nodes out, no warn.
 restore is refused until `CONDENSE-CENSUS-NO-DEDUPE` lands. The graph survives; the restore does not happen. That
 is our defect, not your data.
 
+## 2a · DELTA (same day, after our own gate) — §1's "no detection" is SUPERSEDED
+
+The owner reviewed the gate and accepted detection, so the sentence in §1 ("there is **no detection**: no checksum, no
+freeze, no warn, no status") is **no longer true** and is superseded by this section.
+
+There is now **one** detection: `condense()` records a digest of the snapshot and the restore's pre-flight compares it
+**before any eviction**. On a mismatch you get **exactly one** `restore-base-mutated: …` warn **per base marker**
+(re-armed by the next condense, so it does not repeat on a replay loop), and then the recorded-but-rewritten state **IS
+restored** — `replay().status` stays `'applied'`, the post-base entries are re-applied, and **history is not repaired**.
+Nothing else in §1 changes: still no clone, still no prevention, the identity half still holds.
+
+Two consequences for you:
+
+- **Do not branch on `replay().status` for this.** A mutated base restores with `'applied'` and a warn — the warn is the
+  only signal. (This is the opposite of §2, where a *refused* base reports `'no-op'`.)
+- **Do not read a quiet restore as proof that history is intact.** Coverage is the doc's *alias-closure* — the objects the
+  snapshot ships by reference (nested `props` values, `content`, anchor `value`, `derived`, `bodyRuns`, batch `rows`,
+  `css.cssDef`). A base whose digest cannot be computed is silently unchecked; surfaces the serializer *copies* cannot
+  rewrite the base and are correctly not covered.
+
+The cheapest way to stay outside all of it is unchanged: **re-read from the graph after a condense** and never write
+through a reference you held across it.
+
 ## 3 · If you hold no references across a condense and you read `replay().status`
 
 then both items cost you nothing. If you do hold references, item 1 is the one to remove before you take `0.6.0`.

@@ -32,6 +32,52 @@ const MAX_JOURNAL_WINDOW = 1000
 const REDO_PEEK = 50
 
 /**
+ * `RESTORE-BASE-MUTATION-DETECTION` (`P-CBM-1`; gate record
+ * `docs/specs/restore-base-mutation-detection-gate-review.md` §5 item 2) — the
+ * digest of a condensed base, computed so it is **structurally unable to throw**
+ * and unable to influence anything it is attached to.
+ *
+ * WHY A HELPER AND NOT AN INLINE `JSON.stringify`: `condense()` is
+ * failure-contained by a `catch` that warns `condense-aborted` and leaves the
+ * journal UNTOUCHED (D5), so a digest computed inside that `try` would turn any
+ * un-serializable snapshot into a permanently FAILING condense — the journal
+ * would grow without bound (step 2's kill shot 2). `serializeNode` ships
+ * `css.cssDef` and `derived` verbatim with no `assertJsonSafe`, so a CYCLE in a
+ * cssDef condenses fine today and MUST keep doing so: an un-digestible snapshot
+ * is silently UNCHECKED (no digest ⇒ no comparison), never un-condensable, and at
+ * restore a digest failure is likewise "no check", never a refusal. Both call
+ * sites (the `condense()` install and `_restoreBase`'s pre-flight) go through
+ * here, so that containment lives in exactly one place.
+ *
+ * The value is `"<serialized length>:<FNV-1a 32-bit hex>"` over
+ * `JSON.stringify(value)` — a cheap non-cryptographic fingerprint with the
+ * length carried alongside the hash. `Supervisor.estBytes` is deliberately NOT
+ * reused: it is an order-insensitive size SUM that short-circuits revisited
+ * objects to `4` and live nodes to `8`, so it could not see an in-place rewrite
+ * of a shared carrier at all (gate record §2, step 1).
+ */
+function safeDigest(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(value)
+    // `JSON.stringify` returns `undefined` for a non-JSON root (a function, a
+    // symbol, `undefined` itself) rather than throwing — treat it as no digest.
+    if (typeof json !== 'string') return undefined
+    let hash = 0x811c9dc5
+    for (let i = 0; i < json.length; i += 1) {
+      hash ^= json.charCodeAt(i)
+      // FNV-1a prime, kept in uint32 arithmetic.
+      hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return `${json.length}:${hash.toString(16)}`
+  } catch {
+    // A cycle (`TypeError: Converting circular structure to JSON`), a `BigInt`
+    // (`TypeError: Do not know how to serialize a BigInt`), a throwing
+    // `toJSON` — every failure is "no digest", never an exception upward.
+    return undefined
+  }
+}
+
+/**
  * Bounded pass-2 slice for one changed node: the node itself, its ancestor
  * chain and its subtree — the walk path. PLUS, only when the walk path
  * carries a target AND the tree cannot answer from its per-name component
@@ -253,6 +299,31 @@ export class Supervisor {
    *  (D5). Read-only once constructed. */
   private readonly maxJournalLength: number | undefined
   private condenseScheduled = false
+  /**
+   * `RESTORE-BASE-MUTATION-DETECTION` (`P-CBM-1`; gate record
+   * `docs/specs/restore-base-mutation-detection-gate-review.md` §5 items 1/2) —
+   * the digest of the snapshot the CURRENT base marker carries, keyed by that
+   * marker's journal entry id. Held HERE, not on the journal entry: `result` is
+   * pinned exactly (`{status:'base'}` — `tests/unit/journal-condensing.test.ts`)
+   * and `docs/specs/ops.md` pins the marker literally (`op: {kind:'base',
+   * snapshot}`), and the journal is process-local and never serialized, so a
+   * private field costs neither a doc amendment nor a journal-shape change.
+   * `null` = no digest was recordable (an un-serializable snapshot) or no base
+   * has been installed yet — in both cases the restore is SILENTLY UNCHECKED.
+   */
+  private baseDigest: { entryId: string; digest: string } | null = null
+  /**
+   * The base MARKER this supervisor has already warned `restore-base-mutated`
+   * for, or `null`. One warn per MARKER, never per replay: the marker is never
+   * repaired (nothing reverts the shared carrier), so an unchecked comparison
+   * would fire on every subsequent `replay()` of the same base. Cleared by
+   * `condense()` when a NEW marker is installed (that is the re-arm —
+   * `tests/e2e/base-mutation-detection.test.ts` BMD-4). Deliberately NOT a
+   * module-level never-cleared set: entry ids are per-document, so a
+   * process-wide set would silently starve a second document (the `R-W4-5`
+   * starvation hazard, gate record §5 item 3).
+   */
+  private baseMutatedWarnedFor: string | null = null
   /** ENG-SUPERVISOR-HOOK-ACCUMULATION — the module finalize-hook unsubscribe
    *  returned by `onNodeFinalized`; called by `dispose()`. */
   private finalizeUnsub: () => void = () => {}
@@ -977,6 +1048,21 @@ export class Supervisor {
       // entry lingering there would double-apply); undoStack truncates to the
       // post-base entries.
       this.journal.splice(0, preLen, marker)
+      // RESTORE-BASE-MUTATION-DETECTION (`P-CBM-1`; gate record
+      // `docs/specs/restore-base-mutation-detection-gate-review.md` §5 items 1/2
+      // — the DETECTION half of `docs/decisions.md`
+      // `CONDENSE-BASE-IS-A-LIVE-VIEW` clause (2), "no PREVENTION, ONE bounded
+      // DETECTION"). The snapshot just installed ALIASES live graph objects by
+      // design (that decision's own clause (1)), so a host writing through one of
+      // those carriers IN PLACE rewrites recorded history — and until now did so
+      // silently. Record the digest of what was installed so `_restoreBase` can
+      // tell "the state the channel recorded" from "whatever the host rewrote it
+      // into". `safeDigest` CANNOT throw, so it can never reach the `catch` below
+      // and turn every condense into `condense-aborted`; an un-digestible
+      // snapshot simply leaves `baseDigest` null ⇒ unchecked.
+      const digest = safeDigest(snapshot)
+      this.baseDigest = digest === undefined ? null : { entryId: marker.id, digest }
+      this.baseMutatedWarnedFor = null
       const baseIds = new Set(this.journal.slice(1).map((e) => e.id))
       this.undoStack = this.undoStack.filter((e) => baseIds.has(e.id))
       this.redoStack = []
@@ -999,8 +1085,18 @@ export class Supervisor {
    *  restore was REFUSED (the hub-less refusal below and the invalid-snapshot
    *  pre-flight) and the graph is exactly the pre-base graph. `replay()` reads
    *  it — a refusal must never be reported as an applied replay
-   *  (RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS (b)). */
-  private _restoreBase(snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown }): boolean {
+   *  (RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS (b)).
+   *
+   *  `markerId` is the base marker's journal entry id (its only caller is
+   *  `replay()`'s base branch, which holds the `entry` object) — it keys the
+   *  RESTORE-BASE-MUTATION-DETECTION digest comparison in step 0c, which must
+   *  match the marker the digest was RECORDED for (§5 item 7: a digest held for
+   *  a marker that is no longer the one being replayed is "no evidence", i.e.
+   *  skip silently). */
+  private _restoreBase(
+    snapshot: { template: unknown; content: unknown[]; clientConfig?: unknown },
+    markerId?: string,
+  ): boolean {
     // step 0 — RESTORE-INTEGRITY (b): a restore NEEDS this supervisor's hub,
     // and it must refuse BEFORE the eviction below. The seeds are built with
     // `new Node(d, hub, …)`: with no hub their placement/component anchors
@@ -1069,6 +1165,51 @@ export class Supervisor {
         `restore-refused-invalid-snapshot: ${refusal} — seeding would throw after the graph was already EVICTED and left EMPTY. Restore refused — the current graph is kept as-is`,
       )
       return false
+    }
+    // step 0c — RESTORE-BASE-MUTATION-DETECTION (`P-CBM-1`; gate record
+    // `docs/specs/restore-base-mutation-detection-gate-review.md` §5 items 3/4/5
+    // — the DETECTION half of `docs/decisions.md` `CONDENSE-BASE-IS-A-LIVE-VIEW`
+    // clause (2), "no PREVENTION, ONE bounded DETECTION").
+    //
+    // ORDERING IS CONTRACT: this sits AFTER every refusal above and BEFORE the
+    // step-1 eviction. After the refusals, because a REFUSED base is not
+    // restored — claiming "the rewritten recorded state is being restored" would
+    // be false, and `tests/e2e/restore-refusal.test.ts` RR-1 pins exactly ONE
+    // warn on a refused restore (`tests/e2e/base-mutation-detection.test.ts`
+    // BMD-5). Before the eviction, because the eviction is the restore's
+    // irreversible step: the comparison is a pure READ of recorded history and
+    // belongs with the other pre-eviction checks, so the diagnostic is emitted
+    // while the graph being replaced is still intact.
+    //
+    // WHY IT DOES NOT REFUSE (one sentence, so the next reader does not "fix"
+    // the asymmetry with the five sibling refusals): a mutated base is
+    // internally coherent and RE-SEEDABLE — the five refusals answer "can this
+    // doc be re-seeded?", this one answers "is it the doc the channel recorded?"
+    // — so refusing would strand a host at `replay() !== 'applied'` FOREVER over
+    // a state the decision row itself calls correct to restore ("whatever you
+    // rewrote it into"), with no repair path. Warn only; the restore PROCEEDS
+    // unchanged below (`status: 'applied'`, post-base entries re-applied, no new
+    // `UndoRedoReport` value, nothing repaired).
+    //
+    // ONE warn per MARKER: `baseMutatedWarnedFor` holds the marker already
+    // warned for (the mismatch is permanent — nothing reverts the shared
+    // carrier — so an unchecked comparison would warn on every replay).
+    // "No evidence" cases skip SILENTLY: an unknown / foreign marker id (§5 item
+    // 7), no recorded digest (an un-digestible condense, §5 item 2), or a
+    // snapshot that cannot be digested NOW. None of those may refuse or warn.
+    if (
+      markerId !== undefined &&
+      this.baseDigest !== null &&
+      this.baseDigest.entryId === markerId &&
+      this.baseMutatedWarnedFor !== markerId
+    ) {
+      const now = safeDigest(snapshot)
+      if (now !== undefined && now !== this.baseDigest.digest) {
+        this.baseMutatedWarnedFor = markerId
+        console.warn(
+          `restore-base-mutated: the condensed base's bytes changed since condense() recorded them (recorded digest ${this.baseDigest.digest}, now ${now}) — the base SHIPS THE LIVE GRAPH'S OWN OBJECTS BY REFERENCE by design (docs/decisions.md CONDENSE-BASE-IS-A-LIVE-VIEW), so a write made IN PLACE through one of those shared carriers (nested props such as \`props.meta\`, \`content\`, an anchor \`value\`, \`derived\`, \`bodyRuns\`, \`batches[*].rows\` or \`css.cssDef\`) rewrote recorded history. The recorded-but-rewritten state IS BEING RESTORED and the post-base entries are re-applied on top of it; history is NOT repaired (no clone, no revert — mutating a captured carrier is unsupported, not prevented). Replay proceeds normally`,
+        )
+      }
     }
     // step 1 — drain + evict every pre-base node (synchronous critical section).
     // DEFECT-A fix (2026-08-25, X19/X20): drain only THIS scope's pending
@@ -1882,7 +2023,7 @@ export class Supervisor {
         // reaches the catch.
         let restored = false
         try {
-          if (snapshot) restored = this._restoreBase(snapshot)
+          if (snapshot) restored = this._restoreBase(snapshot, entry.id)
         } catch (e) {
           // the swallow must never be the only thing between a host and an empty graph
           console.warn(`restore-failed: ${(e as Error)?.message ?? String(e)} — the graph is left as-is; a condensed-base restore must never empty the graph silently`)

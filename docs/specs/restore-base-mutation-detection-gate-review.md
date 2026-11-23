@@ -1,7 +1,9 @@
 # Gate record — restore-time base-mutation detection (`P-CBM-1`)
 
-**Status:** `PROCEED-AS-RESHAPED` — **step 1 LANDED** (`tests/unit/condense-base-invariance.test.ts`, no
-`src/**`); **step 2 (the warn) AWAITS THE OWNER**, because it amends a decision row made hours earlier.
+**Status:** `PROCEED-AS-RESHAPED` — **BOTH STEPS LANDED.** Step 1: `tests/unit/condense-base-invariance.test.ts`
+(no `src/**`). Step 2: the reshaped warn — the owner reviewed this record and ruled **"detection is acceptable"**
+(2026-11-23), so it landed as specified in §5, with the red set `tests/e2e/base-mutation-detection.test.ts`
+(BMD-1..6) and the contract amendments in §6 item 2.
 **Date:** 2026-11-23 · **Process:** AGENTS.md item 9 (validity → critique independent/read-only, then
 change-analysis) · **Proposal source:** offered to the owner as the "one middle ground" in the commit that recorded
 `CONDENSE-BASE-IS-A-LIVE-VIEW`, accepted here for a gate by the owner's "proceed".
@@ -124,7 +126,7 @@ on a sanctioned host shape (a dev-only divergence, the worst class of guard) or 
    through a captured object. It promotes probes 2–4 and adds the post-restore window (probe 6). **Framing
    constraint:** it pins an **engine property**, not a host-mutation outcome, so it does **not** revive the
    "Red-first" requirement the ruling withdrew.
-2. **AWAITS THE OWNER — the reshaped warn.** It amends `CONDENSE-BASE-IS-A-LIVE-VIEW` clause (2) ("no detection")
+2. **LANDED 2026-11-23 — the reshaped warn** (the owner's "detection is acceptable"). It amends `CONDENSE-BASE-IS-A-LIVE-VIEW` clause (2) ("no detection")
    and requires a **delta notice downstream** (`docs/handoffs-note-condense-base-2026-11-23.md` §1 currently
    promises "no warn, no status"). Amendment set if taken: that decision row's clause (2) + its "not taken" tail,
    `docs/specs/serialize.md`'s base bullet, `docs/skills/designing-pages.md` §5.4, the defect row's evidence cell,

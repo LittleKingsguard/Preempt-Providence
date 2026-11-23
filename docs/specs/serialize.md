@@ -209,7 +209,14 @@ DEFECT #9 semantics, `translateLegacy` uses the same factory internally):
   produces fresh objects" promise), and a host that mutates one of those objects
   **in place** after the base was written REWRITES what a later `undo`/`replay`
   past the base returns. That second one is the unsupported part: the engine
-  does not prevent it, does not deep-copy against it, and does not detect it.
+  does not prevent it and does not deep-copy against it. It DOES now report it
+  once — `condense()` digests the snapshot's by-reference carriers and the
+  restore's pre-flight warns `restore-base-mutated: …` (exactly one line per
+  base marker) and then **RESTORES the rewritten state**. A report is not a
+  repair: the base is never rewritten, the diagnostic never repeats for the same
+  marker, the digest covers only the carriers the serializer ships by reference
+  (a base it cannot digest is silently unchecked), and `replay().status` is
+  unchanged — branch on the warn, never on the status.
   **Supported shape:** change graph state through the managed channel
   (`apply`/`state-slice`/the ops), which journals — never by mutating a node's
   `props`/`content`/anchor `value` object directly, and never by holding a
