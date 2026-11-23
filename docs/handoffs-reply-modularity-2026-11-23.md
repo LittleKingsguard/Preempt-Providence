@@ -76,6 +76,20 @@ and decide — on a cost measurement — whether to admit a dedicated **non-jour
 (`invalidate(nodeRef)`: one id, no journal, no redo clear, no structure event, **no ascent**), in the
 same class as `flush()`/`dispatchAndReport()`/`hasPendingWork()`.
 
+> **⚠ SAFETY CORRECTION 2026-11-23 — do NOT use §1.4's composition on a PLACEMENT-ROUTED tree.** Your re-test 1 exposed a real
+> defect in our own recipe: a plain (family) `Node.compile` of a node whose ancestor chain was bootstrapped by `compilePath`
+> **re-keys the ancestors** from path wires to node-id wires (`makeCs` carries `pathKey` but no `forkKey`, so `isPathState`
+> classifies them as family), and the SSR/Markdown adapters resolve the document through a `rootKey` captured at the first create
+> and never reset — so the page goes **empty** (180 → 0 chars). Recorded as `docs/defects.md` `POST-BOOTSTRAP-EMIT-DROP`,
+> **reproduced by us on your arm**, RCA in `archive/reviews/2026-11-23/2026-11-23-post-bootstrap-emit-drop-rca.md`. **Until it is
+> fixed:** on a placement-routed tree do not force a re-emit by plain-compiling an ancestor — and note the class is **also
+> reachable through the sanctioned API alone** (`attach`/`detach`/`move`/`destroy`/`state-slice` on a family node whose slice
+> includes the root), so a path-bootstrapped tree must today be treated as unsafe for family-mode pass-2 on any ancestor. The fix
+> is a contract decision (compile-mode ownership), not a patch.
+>
+> **✎ ALSO CORRECTED 2026-11-23:** the §1.3 re-emit sentence must be read together with that mode constraint, and the
+> "register-then-attach" recipe needed the `detach` step (see the correction above §1.2).
+
 ### 1.5 The replace half
 
 Removal currently leaves a stale parent until the next ancestor compile — the known residual
