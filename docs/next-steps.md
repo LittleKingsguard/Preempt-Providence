@@ -28,6 +28,22 @@ to pick up next.
 > Our reply's §1.1 recipe was also corrected — **a freshly translated node needs detach-then-attach**, it rejects
 > `single-parent` otherwise. **The owner owes: the queue order, and a request for their probe arm** (offered in §4).
 > **✎✎✎ THE ARM LANDED AND THE CASE IS RED IN OUR TREE (2026-11-23).** `docs/probes/post-bootstrap-emit-drop.mjs` (self-contained, read-only, runs against our own `dist/`) + `docs/handoffs-arm-modularity-2026-11-23.md`. Re-run by the supervisor: **identical readings — html 180 chars at bootstrap, 0 chars after the first post-bootstrap change.** The arm **answered our either/or with NEITHER**: the ancestors' **wire identity flips domain** (path keys `root`/`root/node-3` at bootstrap → node ids `node-1`/`node-3` after), leaving a MIXED-DOMAIN document whose root has left the domain the SSR adapter captured at bootstrap (`rootKey` is set on the first `addFragment` and never recomputed). **Not a stale map** (the same states against an empty map are still 0 chars). **The blocking condition is CLEARED; the next act is the DIAGNOSIS (read-only, running), then a red test, then a gated fix** — the fix touches the fragment/wire contract, so it does not ride a patch. Candidate sites under examination: the family compile not carrying `forkKey`, `isPathState`'s predicate, the flush's mode switch, the adapter's never-reset `rootKey` — and **whether OUR OWN documented forced-re-emit recipe is the trigger**, which would make this a self-inflicted page-zeroing.
+> **✎✎✎ LANDED 2026-11-23 — THE WHOLE CHAIN IS GREEN IN TREE (uncommitted-version → committed).** The chain that started
+> from a downstream handoff is now: `POST-BOOTSTRAP-EMIT-DROP` **FIXED** (R-1 tree compile mode, `src/core/supervisor.ts`),
+> `GRAFT-ROOT-PATHKEY-COLLISION` **FIXED** (`src/core/node.ts`, the root token is one-per-document),
+> the red set `tests/e2e/post-bootstrap-emit.test.ts` **10/10**, three pins **re-specified** under *ancestors re-mint,
+> descendants do not* (pass-2 key count unchanged at 13), the documentation pass done (`placement-path-spec` §2.1/§2.2/§3.3/§4.1/§6.2,
+> `render.md`, `adapters.md` §4.6, `ops.md` §5) + the new ACTIVE decisions row **`PATH-DOMAIN-RE-MINT`**, and
+> **P-7 measured** (Q4 has its evidence). **TRIO GREEN: build OK, typecheck OK, `npm test` 1452/1452 + 14/14, `demo:smoke`
+> SMOKE OK (pass2-ratio 6.3× vs bound 10×).**
+> **WHAT IS OWED NOW, in order:** **(1) Q9 packaging** — three fixes/shapes are in tree at version `0.5.2`; R-1 is `X.Y.X`
+> (`0.6.0`), so the version bump + tag + publish is the owner's act (AGENTS item 12's release-provenance duty applies when it
+> happens). **(2) Q4's stance** on `PATH-MODE-SILENT-UNRESOLVED` — keep path-only resolution (and reconcile the Q8 carve-out,
+> with at minimum a loud diagnostic on BOTH resolvers) **or** widen `resolvePathTargets` with a slice-bounded descendant arm
+> (which re-opens S2 parity); either way a gate, and the diagnostic half is the stance-neutral minimum. **(3) the OPEN rows
+> that are NOT closed by any of this:** `GRAFT-RESIDUALS` (a) graft-into-graft collapse and (b) the floating token-walk
+> element, `ORPHAN-EMIT-TOP-LEVEL-LEAK`, `R-VPD-2`. **(4) Q7 scope** (does a public tree-mode API ship beyond the option), **Q6**
+> (whether a Node-side re-emit net is ever added, knowing it breaks S2 parity).
 > **QUEUE ORDERED BY THE OWNER 2026-11-23 — the head changed:** **`POST-BOOTSTRAP-EMIT-DROP` is now FIRST** (a zeroed render outranks a silent no-op), and it is **BLOCKED on the consumer's probe arm**, formally requested in `docs/handoffs-request-arm-modularity-2026-11-23.md`. The `attach` fix stays booked and second; **do not re-derive the envelope shape while the arm is in flight**. When the arm lands: red case first, then diagnose; a non-reproduction is itself a finding and goes back with the diff.
 > **THE QUEUE, in order (each red-first, no implementation in the same pass):**
 > **(1) R-2a** `docs/defects.md` **ATTACH-UNREGISTERED-SILENT-NOOP** — the gate's **head item**; the real
