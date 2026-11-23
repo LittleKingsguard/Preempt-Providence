@@ -92,8 +92,7 @@ to pick up next.
 
 ## ✎✎ OPEN RESIDUALS, in value order
 
-> 1. **`CONDENSE-BASE-ALIASES-LIVE-GRAPH`** — contract decision (JSON round-trip of the base vs targeted deep copy); has an
->    undo-history consequence and a JSON caveat to verify against value-provider/handler-seam cases.
+> 1. **`CONDENSE-BASE-ALIASES-LIVE-GRAPH`** — ✎ **CLOSED 2026-11-23 BY OWNER RULING, not by code:** *"attempts to mutate history are unsupported behaviour."* The aliasing is INTENDED, both clones (JSON round-trip / targeted deep copy) are **declined and unqueued**, and there is no detection either — so **do NOT schedule this**. Contract `docs/decisions.md` `CONDENSE-BASE-IS-A-LIVE-VIEW`; the spec clause is `docs/specs/serialize.md`'s AMENDED "Feature 3 base" bullet; the author rule is `docs/skills/designing-pages.md` §5.4. **The one option left on the table if the silence ever bites:** a snapshot checksum verified at restore (one `restore-base-mutated` warn, no clone) — a separate proposal, never a silent add-on.
 > 2. **`RESTORE-SEAM-STRIP-MISS-TOTAL-LOSS`'s (a) half** — ✎ **CLOSED 2026-11-23, WITHDRAWN AS FALSE:** "key the seam strip on `options.seam` instead of the derived `state`" described a keying the code never had (`serialize.ts` strips by **registry-census membership**), so `serialize.ts` needs no change and `docs/specs/serialize.md` now says so. The **swallow** half LANDED 2026-11-23; the REAL producer item (the undeduped `condense()` census) is the CURRENT UNIT above.
 > 3. **`PATH-MODE-DIAGNOSTIC-UNGUARDED`** + **`COMPILE-MODE-OVERRIDE-ORDERING`** — both small, both gate-free.
 > 4. **`ORPHAN-EMIT-TOP-LEVEL-LEAK`** (family-mode limit; `E4` parked behind a family-state child-wire contract),

@@ -412,8 +412,10 @@ describe('DR-1 DESTROY-SHARED-LINK-RESIDUE — a restore must leave no pre-base 
     //      `condense()` stores `serializeSlice(...)` verbatim and
     //      `parseNodeState` keeps anchor `value`s BY REFERENCE, so the
     //      condensed base is a LIVE VIEW of the graph, not a document
-    //      (`docs/defects.md` `CONDENSE-BASE-ALIASES-LIVE-GRAPH` — OPEN, filed
-    //      separately, and the actual source of the old RED). Measured on this
+    //      (`docs/defects.md` `CONDENSE-BASE-ALIASES-LIVE-GRAPH` — ✎ CLOSED BY
+    //      DESIGN 2026-11-23: the aliasing is INTENDED and no clone is queued,
+    //      `docs/decisions.md` `CONDENSE-BASE-IS-A-LIVE-VIEW` — and the actual
+    //      source of the old RED). Measured on this
     //      fixture: `postRead[0] === preRead` is TRUE even though the read is
     //      served by the RESTORED provider.
     // So the case is re-pointed at what the fix establishes — anchor ownership
@@ -527,12 +529,13 @@ describe('DR-1 DESTROY-SHARED-LINK-RESIDUE — a restore must leave no pre-base 
     // ⚠ THIS IS A STRUCTURAL CONTROL ON PURPOSE. Today the very same OBJECT
     // comes back, because `condense()` stores `serializeSlice(...)` and
     // `parseNodeState` keeps anchor `value`s BY REFERENCE — the base aliases
-    // live state (`docs/defects.md` `CONDENSE-BASE-ALIASES-LIVE-GRAPH`, OPEN and
-    // filed separately). A future fix of THAT row (a real document ⇒ fresh
-    // objects per restore) legitimately changes the measured IDENTITY and
-    // leaves this control green: that is not a regression in this case, and
-    // this case must never be re-tightened into demanding — or forbidding —
-    // object freshness.
+    // live state (`docs/defects.md` `CONDENSE-BASE-ALIASES-LIVE-GRAPH` — ✎
+    // CLOSED BY DESIGN 2026-11-23, "attempts to mutate history are unsupported
+    // behaviour", `docs/decisions.md` `CONDENSE-BASE-IS-A-LIVE-VIEW`: the
+    // aliasing is INTENDED and no clone lands, so the identity is a permanent
+    // property here, not a pending change). This control stays structural: it
+    // must never be re-tightened into demanding — or forbidding — object
+    // freshness, because freshness is not a promised outcome either way.
     expect(
       postRead,
       `DR-1b (value control): the value the seam read delivers must be UNCHANGED by the restore (measured pre-restore ${JSON.stringify(preRead)}; measured post-restore ${JSON.stringify(postRead)}). Compared structurally — see the note above: object identity here is \`CONDENSE-BASE-ALIASES-LIVE-GRAPH\`, not a provider fact`,

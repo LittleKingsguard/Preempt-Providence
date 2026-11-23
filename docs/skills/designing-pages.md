@@ -614,6 +614,21 @@ landing as closing a row it did not close:
 > `ref`-only entry stays admitted silently, and an **unknown-phase + no-body**
 > entry gets only `handler-phase-unknown` (the branch skips it).
 
+> **And one trap that stays SILENT — writing through an object the condensed base
+> captured.** The journal base is written **without a clone**, so its `content`
+> entries, nested `props`, anchor `value`, `derived` and `bodyRuns` are the very
+> objects your live graph holds. If you keep a reference to one across a condense
+> and mutate it in place, you do not "change a value" — you **rewrite recorded
+> history**, and a later `undo`/`replay` past the base returns the mutated state.
+> **That is unsupported behaviour and it is undetected:** no warn, no error, no
+> status (`docs/decisions.md` **`CONDENSE-BASE-IS-A-LIVE-VIEW`**; the owner's
+> ruling is the sentence "attempts to mutate history are unsupported behaviour").
+> Change state through the managed channel (`apply` / `state-slice` / the ops) and
+> **re-read from the graph after a condense** instead of holding objects across
+> it. The identity half is intended too: an untouched restore hands back the
+> **same** objects, so never test for freshness — `docs/specs/serialize.md`'s
+> "Feature 3 base" clause is the contract, and no clone is queued.
+
 ## 6. Handlers & phases
 
 - Handlers live on nodes (`handlers: HandlerDef[]`); a component may provide

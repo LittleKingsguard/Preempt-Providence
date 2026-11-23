@@ -197,6 +197,25 @@ DEFECT #9 semantics, `translateLegacy` uses the same factory internally):
   SER-R1 render-relevant state + the post-base no-journal re-apply. A base
   marker written by an older engine fails `NodeSchema-shape-mismatch` at the
   restore's `loadState` (the existing schema boundary — contained).
+- **✎ The base is a LIVE VIEW, not a detached document — and mutating recorded
+  history is UNSUPPORTED BEHAVIOUR (OWNER RULING 2026-11-23; `docs/decisions.md`
+  `CONDENSE-BASE-IS-A-LIVE-VIEW`; the measurement is `docs/defects.md`
+  `CONDENSE-BASE-ALIASES-LIVE-GRAPH`, closed BY DESIGN).** `condense()` stores
+  `serializeSlice(...)` **without cloning it**, so the base's `content` entries,
+  nested `props`, anchor `value`, `derived` and `bodyRuns` are the SAME objects
+  the live graph holds; `parseNodeState` likewise keeps `anchors` by reference.
+  Two consequences, both intended: a restore of an untouched graph returns
+  state whose objects are `===` the pre-base ones (there is no "a fresh parse
+  produces fresh objects" promise), and a host that mutates one of those objects
+  **in place** after the base was written REWRITES what a later `undo`/`replay`
+  past the base returns. That second one is the unsupported part: the engine
+  does not prevent it, does not deep-copy against it, and does not detect it.
+  **Supported shape:** change graph state through the managed channel
+  (`apply`/`state-slice`/the ops), which journals — never by mutating a node's
+  `props`/`content`/anchor `value` object directly, and never by holding a
+  reference to one across a condense. Both declined remedies (a `JSON`
+  round-trip of the snapshot, a targeted deep copy of the mutable carriers) and
+  their costs are recorded in the decision row; neither is queued.
 
 ## 5. Round-trip guarantees
 
